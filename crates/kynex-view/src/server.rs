@@ -234,7 +234,12 @@ impl Gate {
     fn enter(gate: &Mutex<Gate>, peer: IpAddr) -> bool {
         let mut g = gate.lock().expect("connection gate");
         let mine = g.by_peer.get(&peer).copied().unwrap_or(0);
-        if g.total >= MAX_CONNECTIONS || mine >= MAX_PER_PEER {
+        // This machine's own tabs all come from the loopback address: a
+        // person with a few viewers open, each loading its page over several
+        // connections, is not a peer hogging the server. The total still
+        // holds for them.
+        let shared = !peer.is_loopback();
+        if g.total >= MAX_CONNECTIONS || (shared && mine >= MAX_PER_PEER) {
             return false;
         }
         g.total += 1;
@@ -518,20 +523,44 @@ mod tests {
 
     #[test]
     fn one_machine_cannot_hold_every_connection() {
+        let gate = Mutex::new(Gate::default());
+        let other: IpAddr = "192.168.0.20".parse().unwrap();
+        let near: IpAddr = "192.168.0.21".parse().unwrap();
+        for _ in 0..MAX_PER_PEER {
+            assert!(Gate::enter(&gate, other));
+        }
+        // Its share is used up; someone else's is not.
+        assert!(!Gate::enter(&gate, other));
+        assert!(Gate::enter(&gate, near));
+        // Letting one go frees one.
+        Gate::leave(&gate, other);
+        assert!(Gate::enter(&gate, other));
+    }
+
+    #[test]
+    fn this_machine_shares_only_the_total() {
+        let gate = Mutex::new(Gate::default());
+        let here: IpAddr = "127.0.0.1".parse().unwrap();
+        for _ in 0..MAX_CONNECTIONS {
+            assert!(Gate::enter(&gate, here), "past its share, within the total");
+        }
+        assert!(!Gate::enter(&gate, here), "but not past the total");
+    }
+
+    #[test]
+    fn a_full_server_closes_the_door() {
         let server = Server::start("127.0.0.1:0").unwrap();
-        // Its share, held open and silent.
-        let held: Vec<TcpStream> = (0..MAX_PER_PEER)
+        // Every connection it will serve, held open and silent.
+        let held: Vec<TcpStream> = (0..MAX_CONNECTIONS)
             .map(|_| TcpStream::connect(server.addr()).unwrap())
             .collect();
-        thread::sleep(Duration::from_millis(200));
-        // One more is closed at the door, unanswered.
+        thread::sleep(Duration::from_millis(300));
         let mut s = TcpStream::connect(server.addr()).unwrap();
         let _ = write!(s, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
         s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         let mut out = Vec::new();
         let _ = s.read_to_end(&mut out);
-        assert!(out.is_empty());
-        // Letting go frees the share.
+        assert!(out.is_empty(), "closed unanswered");
         drop(held);
         thread::sleep(Duration::from_millis(300));
         assert!(get(server.addr(), "/").starts_with("HTTP/1.1 200"));

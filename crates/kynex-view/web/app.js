@@ -470,8 +470,18 @@ const GLYPH = {
 };
 const CHEVRON = '<svg viewBox="0 0 10 10"><path d="M2 3.5l3 3 3-3"/></svg>';
 
+// Only the rows in view are in the page. A factory's tree is tens of
+// thousands of rows, and laying every one of them out cost seconds before
+// the first frame could be drawn.
+const ROW = 26; // .node's height in app.css
+let treeRows = []; // { rec, depth, kids }, in the order shown
+let treeRowIndex = new Map(); // uid -> its row
+let foldedLargeScene = false;
+const treeList = document.getElementById('tree');
+const treeSpacer = document.getElementById('tree-spacer');
+const treeWindow = document.getElementById('tree-window');
+
 function renderTree() {
-  const list = document.getElementById('tree');
   const query = document.getElementById('search').value.trim().toLowerCase();
   const children = new Map();
   for (const rec of records.values()) {
@@ -480,33 +490,96 @@ function renderTree() {
     children.get(p).push(rec);
   }
   for (const arr of children.values()) arr.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  const html = [];
-  const matches = (rec) => !query || rec.name.toLowerCase().includes(query);
-  const subtreeMatches = (rec) => matches(rec) || (children.get(rec.uid) || []).some(subtreeMatches);
+
+  // A large scene opens with its groups folded: the first look at a factory
+  // is its stations, not its bolts.
+  if (!foldedLargeScene && records.size > 1000) {
+    for (const p of children.keys()) if (p != null) collapsed.add(p);
+    foldedLargeScene = true;
+  }
+
+  // What matches the search, or holds something that does: once, from the
+  // leaves up, rather than asked again at every level.
+  let keep = null;
+  if (query) {
+    keep = new Set();
+    const mark = (rec) => {
+      let any = rec.name.toLowerCase().includes(query);
+      for (const kid of children.get(rec.uid) || []) any = mark(kid) || any;
+      if (any) keep.add(rec.uid);
+      return any;
+    };
+    for (const rec of children.get(null) || []) mark(rec);
+  }
+
+  const rows = [];
   const walk = (parent, depth) => {
     for (const rec of children.get(parent) || []) {
-      if (query && !subtreeMatches(rec)) continue;
-      const kids = children.get(rec.uid) || [];
-      const isCollapsed = !query && collapsed.has(rec.uid);
-      const glyph = GLYPH[rec.role === 'joint' ? 'joint' : rec.role === 'link' ? 'link' : rec.kind] || GLYPH.empty;
-      const cls = ['node'];
-      if (rec.uid === selected) cls.push('selected');
-      if (!rec.visible || rec.role === 'collision') cls.push('hidden-obj');
-      if (isCollapsed) cls.push('collapsed');
-      html.push(
-        `<li class="${cls.join(' ')}" role="treeitem" data-uid="${rec.uid}" style="padding-left:${4 + depth * 10}px">` +
-          `<span class="twist" data-twist="${kids.length ? rec.uid : ''}">${kids.length ? CHEVRON : ''}</span>` +
-          glyph +
-          `<span class="label">${escapeHtml(rec.name)}</span>` +
-          (rec.role ? `<span class="tag">${rec.role}</span>` : '') +
-          `</li>`,
-      );
-      if (!isCollapsed) walk(rec.uid, depth + 1);
+      if (keep && !keep.has(rec.uid)) continue;
+      const kids = (children.get(rec.uid) || []).length;
+      rows.push({ rec, depth, kids });
+      // A search shows what it found wherever it is folded away.
+      if (kids && (query || !collapsed.has(rec.uid))) walk(rec.uid, depth + 1);
     }
   };
   walk(null, 0);
-  list.innerHTML = html.join('');
+  treeRows = rows;
+  treeRowIndex = new Map(rows.map((r, i) => [r.rec.uid, i]));
+  treeSpacer.style.height = `${rows.length * ROW}px`;
+  drawTreeWindow();
   document.getElementById('object-count').textContent = records.size;
+}
+
+function drawTreeWindow() {
+  const query = document.getElementById('search').value.trim();
+  const first = Math.max(0, Math.floor(treeList.scrollTop / ROW) - 10);
+  const last = Math.min(treeRows.length, Math.ceil((treeList.scrollTop + treeList.clientHeight) / ROW) + 10);
+  const html = [];
+  for (let i = first; i < last; i++) {
+    const { rec, depth, kids } = treeRows[i];
+    const folded = !query && collapsed.has(rec.uid);
+    const glyph = GLYPH[rec.role === 'joint' ? 'joint' : rec.role === 'link' ? 'link' : rec.kind] || GLYPH.empty;
+    const cls = ['node'];
+    if (rec.uid === selected) cls.push('selected');
+    if (!rec.visible || rec.role === 'collision') cls.push('hidden-obj');
+    if (folded) cls.push('collapsed');
+    html.push(
+      `<li class="${cls.join(' ')}" role="treeitem" data-uid="${escapeHtml(rec.uid)}" style="padding-left:${4 + depth * 10}px">` +
+        `<span class="twist" data-twist="${kids ? escapeHtml(rec.uid) : ''}">${kids ? CHEVRON : ''}</span>` +
+        glyph +
+        `<span class="label">${escapeHtml(rec.name)}</span>` +
+        (rec.role ? `<span class="tag">${rec.role}</span>` : kids && folded ? `<span class="tag">${kids}</span>` : '') +
+        `</li>`,
+    );
+  }
+  treeWindow.style.transform = `translateY(${first * ROW}px)`;
+  treeWindow.innerHTML = html.join('');
+}
+
+let treeScrollQueued = false;
+treeList.addEventListener('scroll', () => {
+  if (treeScrollQueued) return;
+  treeScrollQueued = true;
+  requestAnimationFrame(() => {
+    treeScrollQueued = false;
+    drawTreeWindow();
+  });
+});
+
+// Unfolds what holds `uid` and scrolls its row into view.
+function revealInTree(uid) {
+  let unfolded = false;
+  for (let p = records.get(uid)?.parent; p != null && records.has(p); p = records.get(p).parent) {
+    unfolded = collapsed.delete(p) || unfolded;
+  }
+  if (unfolded) renderTree();
+  const i = treeRowIndex.get(uid);
+  if (i !== undefined) {
+    const top = i * ROW;
+    if (top < treeList.scrollTop) treeList.scrollTop = top;
+    else if (top + ROW > treeList.scrollTop + treeList.clientHeight) treeList.scrollTop = top + ROW - treeList.clientHeight;
+  }
+  drawTreeWindow();
 }
 
 document.getElementById('tree').addEventListener('click', (e) => {
@@ -559,7 +632,7 @@ function renderRobots() {
           ${r.joints
             .map(
               (j) => `
-            <li class="joint" data-uid="${j.uid}">
+            <li class="joint" data-uid="${escapeHtml(j.uid)}">
               <span class="kind ${j.kind === 'fixed' ? 'fixed' : ''}" title="${j.kind}">${KIND_CHIP[j.kind] || '?'}</span>
               <span class="jname">${escapeHtml(j.name)}</span>
               <span class="jval"></span>
@@ -632,8 +705,7 @@ function select(uid, { frame: andFrame = false } = {}) {
   if (selected != null) highlight(selected, true);
   document.querySelectorAll('.node.selected, .joint.selected').forEach((n) => n.classList.remove('selected'));
   if (selected != null) {
-    document.querySelector(`.node[data-uid="${selected}"]`)?.classList.add('selected');
-    document.querySelector(`.node[data-uid="${selected}"]`)?.scrollIntoView({ block: 'nearest' });
+    revealInTree(selected);
     document.querySelector(`.joint[data-uid="${selected}"]`)?.classList.add('selected');
     showInspector(selected);
     if (andFrame) frame(selected);

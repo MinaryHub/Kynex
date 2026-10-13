@@ -67,6 +67,10 @@ const ground = new THREE.Mesh(
   new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.28 }),
 );
 ground.receiveShadow = true;
+// It darkens what is behind it and is not a surface of its own: no depth, so
+// the composite leaves the background as chosen and finds no edge at the
+// horizon.
+ground.material.depthWrite = false;
 ground.position.z = -0.0005;
 scene.add(ground);
 
@@ -106,8 +110,6 @@ const surface = new THREE.MeshStandardMaterial({
   flatShading: true,
 });
 
-// The layer the parts are on: what the outline pass looks at.
-const PARTS = 1;
 const batch = new Batch(surface);
 const outline = new Outline();
 
@@ -126,11 +128,22 @@ function bytes(b64) {
   return out.buffer;
 }
 
+// A mesh's levels of detail, finest first: one geometry each, all over the
+// same vertices.
+function levelsOf(positions, indexLists) {
+  const position = new THREE.BufferAttribute(positions, 3);
+  return indexLists.map((indices) => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', position);
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    return geometry;
+  });
+}
+
+// A mesh as an update carries it: base64 inside the JSON.
 function buildGeometry(mesh) {
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bytes(mesh.positions)), 3));
-  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(mesh.indices)), 1));
-  return geometry;
+  const lists = [mesh.indices, ...(mesh.lods || [])].map((b) => new Uint32Array(bytes(b)));
+  return levelsOf(new Float32Array(bytes(mesh.positions)), lists);
 }
 
 // ---- gizmos -----------------------------------------------------------------
@@ -290,7 +303,7 @@ function afterScene() {
 function readScene(buffer) {
   const view = new DataView(buffer);
   const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
-  if (magic !== 'KYNX' || view.getUint32(4, true) !== 1) throw new Error('not a KYNEX scene');
+  if (magic !== 'KYNX' || view.getUint32(4, true) !== 2) throw new Error('not a scene this viewer reads');
   const version = Number(view.getBigUint64(8, true));
   const length = view.getUint32(16, true);
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, length)));
@@ -303,13 +316,13 @@ function readScene(buffer) {
   for (const m of header.meshes) {
     const positions = new Float32Array(buffer, at, m.vertices * 3);
     at += positions.byteLength;
-    const indices = new Uint32Array(buffer, at, m.indices);
-    at += indices.byteLength;
+    const lists = [];
+    for (const count of [m.indices, ...m.lods]) {
+      lists.push(new Uint32Array(buffer, at, count));
+      at += count * 4;
+    }
     if (!m.indices) continue;
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-    meshes.set(m.uid, geometry);
+    meshes.set(m.uid, levelsOf(positions, lists));
   }
   return { version, objects: header.objects, robots: header.robots, meshes };
 }
@@ -343,8 +356,7 @@ function onScene(data) {
   for (const r of data.robots) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
   batch.reset(data.meshes, data.objects.length);
   // The batch has its own copy of every vertex now.
-  for (const g of data.meshes.values()) g.dispose();
-  batch.mesh.layers.enable(PARTS);
+  for (const levels of data.meshes.values()) for (const g of levels) g.dispose();
   content.add(batch.mesh);
   for (const rec of data.objects) applyObject(rec);
   setRobots(data.robots);
@@ -364,10 +376,10 @@ function onUpdate(data) {
   if (!batch.mesh || data.v <= heldVersion) return;
   heldVersion = data.v;
   for (const [id, mesh] of Object.entries(data.meshes)) {
-    const geometry = buildGeometry(mesh);
-    if (batch.hasGeometry(id)) batch.replaceGeometry(id, geometry);
-    else batch.addGeometry(id, geometry);
-    geometry.dispose();
+    const levels = buildGeometry(mesh);
+    if (batch.hasGeometry(id)) batch.replaceGeometry(id, levels);
+    else batch.addGeometry(id, levels);
+    for (const g of levels) g.dispose();
   }
   let treeChanged = data.removed.length > 0;
   if (data.robots) {
@@ -701,6 +713,8 @@ function highlight(uid, on) {
 function select(uid, { frame: andFrame = false } = {}) {
   const was = selected;
   selected = uid != null && records.has(uid) ? uid : null;
+  // The selected part is kept whole and in view: see Batch.updateLevels.
+  levelsDirty = true;
   if (was != null) highlight(was, false);
   if (selected != null) highlight(selected, true);
   document.querySelectorAll('.node.selected, .joint.selected').forEach((n) => n.classList.remove('selected'));
@@ -879,8 +893,15 @@ const pulse = document.getElementById('pulse');
 // every frame's triangles.
 let shadowsDirty = true;
 
+// Each part's level of detail follows its size on screen: worked out again
+// when the camera or the scene moved, at most ten times a second.
+let levelsDirty = true;
+let levelsAt = 0;
+controls.addEventListener('change', () => (levelsDirty = true));
+
 function touched() {
   shadowsDirty = true;
+  levelsDirty = true;
   lastUpdate = performance.now();
   pulse.classList.add('hot');
   requestAnimationFrame(() => requestAnimationFrame(() => pulse.classList.remove('hot')));
@@ -907,6 +928,10 @@ new ResizeObserver(resize).observe(host);
 resize();
 
 const ease = (t) => 1 - Math.pow(1 - t, 3);
+const _size = new THREE.Vector2();
+// Where each frame's time goes on this side, for the benchmark: what the
+// browser spends preparing and submitting, not what the GPU spends drawing.
+const cpu = { levels: 0, scene: 0, frames: 0, shadowFrames: 0 };
 renderer.setAnimationLoop(() => {
   if (flight) {
     const t = Math.min((performance.now() - flight.t0) / 420, 1);
@@ -916,19 +941,27 @@ renderer.setAnimationLoop(() => {
     if (t >= 1) flight = null;
   }
   controls.update();
-  // Counted over the whole frame — outline, shadows, scene and overlay —
-  // not just its last pass.
-  renderer.info.reset();
-  if (batch.mesh) {
-    // The shadow map once a frame, with the scene, not again for the
-    // outline's pass.
-    renderer.shadowMap.needsUpdate = false;
-    outline.prepare(renderer, scene, camera, PARTS);
+  let t = performance.now();
+  const lap = (name) => {
+    const now = performance.now();
+    cpu[name] += now - t;
+    t = now;
+  };
+  if (batch.mesh && levelsDirty && t - levelsAt > 100) {
+    batch.updateLevels(camera, renderer.getDrawingBufferSize(_size).y, selected);
+    levelsDirty = false;
+    levelsAt = t;
   }
+  lap('levels');
+  // Counted over the whole frame — shadows, scene and composite — not just
+  // its last pass.
+  renderer.info.reset();
   renderer.shadowMap.needsUpdate = shadowsDirty;
+  if (shadowsDirty) cpu.shadowFrames++;
   shadowsDirty = false;
-  renderer.render(scene, camera);
-  if (batch.mesh) outline.draw(renderer);
+  outline.render(renderer, scene, camera);
+  lap('scene');
+  cpu.frames++;
 });
 
 fitShadows();
@@ -939,6 +972,10 @@ function gpuName() {
   const ext = gl.getExtension('WEBGL_debug_renderer_info');
   return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
 }
+
+// In benchmark mode the pieces are reachable from the console, for
+// measuring what each costs.
+if (BENCH) window.__kynex = { renderer, batch, outline, sun, controls, camera };
 
 async function runBench(t) {
   // A tab in the background draws no frames: say so rather than measure
@@ -959,24 +996,36 @@ async function runBench(t) {
   const radius = camera.position.distanceTo(target);
   const height = camera.position.z - target.z;
   const updatesBefore = benchUpdates;
-  const times = [];
-  let last = performance.now();
-  const start = last;
-  const DURATION = 8000;
   // Orbit the camera all the way round: every part of the scene comes into
-  // view, as a person looking around it would bring it.
-  while (performance.now() - start < DURATION) {
-    await nextFrame();
-    const now = performance.now();
-    times.push(now - last);
-    last = now;
-    const a = ((now - start) / DURATION) * Math.PI * 2;
-    camera.position.set(target.x + Math.cos(a) * radius, target.y + Math.sin(a) * radius, target.z + height);
-    camera.lookAt(target);
-  }
-  times.sort((x, y) => x - y);
-  const elapsed = performance.now() - start;
-  const pct = (p) => times[Math.min(times.length - 1, Math.floor(times.length * p))];
+  // view, as a person looking around it would bring it. Once from where the
+  // whole scene is seen, where most parts are small and drawn coarse, and
+  // once from six times closer, where the near ones are drawn whole.
+  const orbit = async (scale, duration) => {
+    for (const k of Object.keys(cpu)) cpu[k] = 0;
+    const times = [];
+    let last = performance.now();
+    const start = last;
+    let triangles = 0;
+    while (performance.now() - start < duration) {
+      await nextFrame();
+      const now = performance.now();
+      times.push(now - last);
+      last = now;
+      triangles = Math.max(triangles, renderer.info.render.triangles);
+      const a = ((now - start) / duration) * Math.PI * 2;
+      camera.position.set(target.x + Math.cos(a) * radius * scale, target.y + Math.sin(a) * radius * scale, target.z + height * scale);
+      camera.lookAt(target);
+      levelsDirty = true;
+    }
+    const elapsed = performance.now() - start;
+    times.sort((x, y) => x - y);
+    const pct = (p) => times[Math.min(times.length - 1, Math.floor(times.length * p))];
+    const per = (k) => cpu[k] / Math.max(cpu.frames, 1);
+    const cpuMs = { levels: per('levels'), scene: per('scene'), shadow_share: cpu.shadowFrames / Math.max(cpu.frames, 1) };
+    return { fps: (times.length / elapsed) * 1000, median: pct(0.5), p95: pct(0.95), worst: times[times.length - 1], frames: times.length, triangles, cpuMs };
+  };
+  const near = await orbit(1 / 6, 5000);
+  const far = await orbit(1, 6000);
   const triangles = batch.triangles();
   const report = {
     gpu: gpuName(),
@@ -989,13 +1038,20 @@ async function runBench(t) {
     first_frame_ms: firstFrame - t.arrived,
     // From the page being asked for to the scene first drawn.
     load_total_ms: firstFrame,
-    frames: times.length,
-    fps: (times.length / elapsed) * 1000,
-    frame_ms_median: pct(0.5),
-    frame_ms_p95: pct(0.95),
-    frame_ms_worst: times[times.length - 1],
+    frames: far.frames,
+    fps: far.fps,
+    frame_ms_median: far.median,
+    frame_ms_p95: far.p95,
+    frame_ms_worst: far.worst,
+    // From six times closer: parts near the camera at full detail.
+    close_fps: near.fps,
+    close_frame_ms_median: near.median,
+    close_frame_ms_p95: near.p95,
+    close_triangles_drawn: near.triangles,
+    cpu_ms_per_frame: far.cpuMs,
+    close_cpu_ms_per_frame: near.cpuMs,
     draw_calls: renderer.info.render.calls,
-    triangles_drawn: renderer.info.render.triangles,
+    triangles_drawn: far.triangles,
     triangles_in_scene: triangles,
     objects: records.size,
     geometries: renderer.info.memory.geometries,

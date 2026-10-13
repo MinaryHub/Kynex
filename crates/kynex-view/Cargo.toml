@@ -12,3 +12,5 @@ kreate-math.workspace = true
 kreate-mesh.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+meshopt.workspace = true
+rayon.workspace = true

@@ -37,10 +37,22 @@ any browser with WebGL, and there is nothing to install. The page and
 three.js are built into the `kynex` binary, so the viewer also works on a
 network with no internet.
 
-- Updates are pushed to the browser over Server-Sent Events (`/events`).
-  KYNEX sends a full scene when a viewer connects, then only what changed:
-  world matrices of objects that moved, meshes only when their geometry
-  changes.
+- When a viewer connects, the stream (`/events`, Server-Sent Events) tells
+  it a scene exists. The page then fetches `/scene.bin`: a JSON header
+  followed by f32 matrices and vertices and u32 indices, read straight into
+  typed arrays. After that, only changes travel, as JSON on the stream:
+  matrices of moved objects, and meshes only when their geometry changes.
+  Each change is derived only from the objects the session patch names,
+  plus everything below them.
+- Drawing: every part lives in one `THREE.BatchedMesh`, with three levels
+  of detail per mesh (full, 25%, 6%, made with meshoptimizer). Each part is
+  drawn at the level its size on screen calls for. The scene is rendered
+  once into a target; edges come from that pass's depth in the composite.
+  The shadow map is redrawn only when the scene changes.
+- The scene tree is virtualized: only the rows in view are in the page.
+- Coordinates stay in f32 world space. At 500 m from the origin, f32 still
+  resolves about 0.03 mm, which is enough for a factory. Camera-relative
+  rendering is left until a site is kilometres across.
 - Panels: scene tree with search, a joint panel per robot (value, limits,
   out-of-limit warning), an inspector for the selected object, and a view
   toolbar (fit, ISO / top / front / side, joint gizmos, wireframe, grid).
@@ -75,7 +87,22 @@ The benchmark builds synthetic factories in four tiers: `cell` (500 parts),
 rebuilds, the viewer's scene and updates, and the shared session's snapshot
 and patches. With `--browser`, the viewer opens in the default browser and
 reports its load time, frame rate and draw calls while it orbits the scene.
-Results are written to `bench-results/`.
+Results are written to `bench-results/`. Use `--no-open` to serve the
+page without opening it, for example to drive it from another browser.
+
+Measured on 2026-10-13 with an RTX 4060 Ti, Chromium on Direct3D 11, a
+release build, 1% of parts moving 20 times a second:
+
+| Parts | Overview fps | Close-up fps | First frame | Server update, 1 part moved |
+|---|---|---|---|---|
+| 500 | 129 | 130 | 0.16 s | 0.2 ms |
+| 5,000 | 130 | 130 | 0.22 s | 0.8 ms |
+| 20,000 | 117 | 109 | 0.67 s | 4.3 ms |
+| 50,000 | 63 | 42 | 1.5 s | 11 ms |
+
+129-130 fps is the display's refresh limit. Kreate's own collab session
+does not keep up past a few thousand objects. See K6 in
+docs/kreate-change-requests.md.
 
 ## Kreate dependency
 

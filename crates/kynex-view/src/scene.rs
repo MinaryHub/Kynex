@@ -30,6 +30,7 @@ use kreate_math::DMat4;
 use kreate_mesh::MeshData;
 use kreate_scene::robot::RobotPart;
 use kreate_scene::{Changes, DatablockKind, Document, MeshId, ObjectData, ObjectId};
+use rayon::prelude::*;
 use serde::{Serialize, Serializer};
 use serde_json::{json, Value};
 
@@ -87,23 +88,61 @@ struct MeshBytes {
     positions: Vec<u8>,
     /// u32 per corner, three per triangle, little endian.
     indices: Vec<u8>,
+    /// Coarser index lists over the same vertices, finest first: what the
+    /// viewer draws a part with when it is small on screen.
+    lods: Vec<Vec<u8>>,
+}
+
+/// Each coarser level: the share of the triangles it aims for, and how far
+/// it may stray from the mesh, as a share of the mesh's size. The viewer
+/// picks the first when a part is tens of pixels across and the second
+/// when it is a few: a tenth of a few pixels is nothing to see.
+const LODS: [(f32, f32); 2] = [(0.25, 0.02), (0.06, 0.10)];
+
+/// Below this many triangles a mesh is drawn whole however far away: there
+/// is nothing worth taking away.
+const LOD_MIN_TRIANGLES: usize = 64;
+
+fn le_bytes(values: &[u32]) -> Vec<u8> {
+    values.iter().flat_map(|i| i.to_le_bytes()).collect()
 }
 
 impl MeshBytes {
     fn of(mesh: &MeshData) -> Self {
+        let positions: Vec<u8> = mesh
+            .positions()
+            .iter()
+            .flat_map(|p| [p.x, p.y, p.z])
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        let indices = mesh.triangulate().indices;
+        let mut lods = Vec::new();
+        if indices.len() / 3 >= LOD_MIN_TRIANGLES {
+            if let Ok(vertices) = meshopt::VertexDataAdapter::new(&positions, 12, 0) {
+                let mut previous = indices.len();
+                for (share, error) in LODS {
+                    let target = ((indices.len() as f32 * share) as usize / 3 * 3).max(3);
+                    let lod = meshopt::simplify(
+                        &indices,
+                        &vertices,
+                        target,
+                        error,
+                        meshopt::SimplifyOptions::empty(),
+                        None,
+                    );
+                    // A level no smaller than the one before it saves nothing.
+                    if lod.is_empty() || lod.len() * 10 > previous * 9 {
+                        break;
+                    }
+                    previous = lod.len();
+                    lods.push(le_bytes(&lod));
+                }
+            }
+        }
         Self {
-            positions: mesh
-                .positions()
-                .iter()
-                .flat_map(|p| [p.x, p.y, p.z])
-                .flat_map(f32::to_le_bytes)
-                .collect(),
-            indices: mesh
-                .triangulate()
-                .indices
-                .iter()
-                .flat_map(|i| i.to_le_bytes())
-                .collect(),
+            positions,
+            indices: le_bytes(&indices),
+            lods,
         }
     }
 
@@ -112,6 +151,7 @@ impl MeshBytes {
         json!({
             "positions": base64::encode(&self.positions),
             "indices": base64::encode(&self.indices),
+            "lods": self.lods.iter().map(|l| base64::encode(l)).collect::<Vec<_>>(),
         })
         .to_string()
     }
@@ -120,7 +160,7 @@ impl MeshBytes {
 /// The binary scene's first four bytes.
 pub const SCENE_MAGIC: &[u8; 4] = b"KYNX";
 /// Its layout's version, after the magic.
-pub const SCENE_FORMAT: u32 = 1;
+pub const SCENE_FORMAT: u32 = 2;
 
 /// What the viewers have been sent, so the next edit can be sent as a
 /// difference.
@@ -153,13 +193,18 @@ impl ViewState {
                 Some((uid, drawn(doc, id, uid)))
             })
             .collect();
-        self.meshes.clear();
+        // Every mesh at once, across the cores: simplifying a factory's ten
+        // thousand meshes for their levels of detail took most of a second
+        // on one.
         let index = mesh_index(doc);
-        for uid in referenced(&self.objects) {
-            if let Some(mesh) = index.get(&uid).and_then(|id| doc.mesh(*id)) {
-                self.meshes.insert(uid, MeshBytes::of(mesh));
-            }
-        }
+        let shown: Vec<(u64, &MeshData)> = referenced(&self.objects)
+            .into_iter()
+            .filter_map(|uid| Some((uid, doc.mesh(*index.get(&uid)?)?)))
+            .collect();
+        self.meshes = shown
+            .par_iter()
+            .map(|(uid, mesh)| (*uid, MeshBytes::of(mesh)))
+            .collect();
         self.robots = robots(doc);
         self.version += 1;
     }
@@ -194,12 +239,13 @@ impl ViewState {
     /// "KYNX" · u32 format · u64 version · u32 header length · header JSON
     /// · zero padding to a multiple of 4
     /// · f32 × 16 per object: its world matrix, column major, in header order
-    /// · per mesh, in header order: f32 × 3 per vertex, then u32 per index
+    /// · per mesh, in header order: f32 × 3 per vertex, then u32 per index,
+    ///   then u32 per index of each coarser level
     /// ```
     ///
     /// The header is `{"objects": [...], "robots": [...], "meshes":
-    /// [{"uid", "vertices", "indices"}]}`, the objects without their
-    /// matrices.
+    /// [{"uid", "vertices", "indices", "lods": [index count, ...]}]}`, the
+    /// objects without their matrices.
     pub fn scene_bin(&self) -> Vec<u8> {
         let objects: Vec<&Drawn> = self.objects.values().collect();
         let meshes: Vec<Value> = self
@@ -210,6 +256,7 @@ impl ViewState {
                     "uid": uid.to_string(),
                     "vertices": m.positions.len() / 12,
                     "indices": m.indices.len() / 4,
+                    "lods": m.lods.iter().map(|l| l.len() / 4).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -226,7 +273,9 @@ impl ViewState {
             + self
                 .meshes
                 .values()
-                .map(|m| m.positions.len() + m.indices.len())
+                .map(|m| {
+                    m.positions.len() + m.indices.len() + m.lods.iter().map(Vec::len).sum::<usize>()
+                })
                 .sum::<usize>();
         let mut out = Vec::with_capacity(24 + header.len() + body);
         out.extend_from_slice(SCENE_MAGIC);
@@ -245,6 +294,9 @@ impl ViewState {
         for m in self.meshes.values() {
             out.extend_from_slice(&m.positions);
             out.extend_from_slice(&m.indices);
+            for lod in &m.lods {
+                out.extend_from_slice(lod);
+            }
         }
         out
     }
@@ -593,9 +645,32 @@ mod tests {
             mesh["indices"].as_u64().unwrap(),
         );
         assert_eq!((verts, indices), (8, 36));
+        assert_eq!(
+            mesh["lods"].as_array().unwrap().len(),
+            0,
+            "a cube is too small to thin"
+        );
         assert_eq!(bin.len(), at + verts as usize * 12 + indices as usize * 4);
         // And a matrix comes back in the JSON form, for the updates.
         assert!(parse(&view.scene())["objects"][0].get("matrix").is_some());
+    }
+
+    #[test]
+    fn a_fine_mesh_gets_coarser_levels() {
+        let sphere = kreate_mesh::primitives::uv_sphere(1.0, 48, 24);
+        let m = MeshBytes::of(&sphere);
+        let full = m.indices.len();
+        assert_eq!(m.lods.len(), 2);
+        assert!(m.lods[0].len() < full / 2, "{} of {full}", m.lods[0].len());
+        assert!(m.lods[1].len() < m.lods[0].len());
+        // Every level is whole triangles over the same vertices.
+        let vertices = (m.positions.len() / 12) as u32;
+        for lod in &m.lods {
+            assert_eq!(lod.len() % 12, 0);
+            for i in lod.chunks(4) {
+                assert!(u32::from_le_bytes(i.try_into().unwrap()) < vertices);
+            }
+        }
     }
 
     #[test]

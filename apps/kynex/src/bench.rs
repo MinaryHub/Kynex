@@ -445,16 +445,19 @@ fn run_browser(docs: &[(Tier, Document)], port: u16, open: bool) -> Result<Vec<V
         r["server_update_ms_median"] =
             json!(update_ms.get(update_ms.len() / 2).copied().unwrap_or(0.0));
         r["moving_objects"] = json!(moving);
+        let f = |k: &str| r[k].as_f64().unwrap_or(0.0);
         println!(
-            "{:<11} {:>6.1} fps (중앙 {:.1} ms, p95 {:.1} ms) · 첫 화면 {:.0} ms · 드로우 콜 {} · 삼각형 {:.2}M · 서버 갱신 {:.0} ms",
+            "{:<11} 전체 {:>5.1} fps (p95 {:>5.1} ms, {:.2}M △) · 가까이 {:>5.1} fps (p95 {:>5.1} ms, {:.2}M △) · 첫 화면 {:.0} ms · 드로우 콜 {} · 서버 갱신 {:.0} ms",
             tier.name,
-            r["fps"].as_f64().unwrap_or(0.0),
-            r["frame_ms_median"].as_f64().unwrap_or(0.0),
-            r["frame_ms_p95"].as_f64().unwrap_or(0.0),
-            r["first_frame_ms"].as_f64().unwrap_or(0.0),
+            f("fps"),
+            f("frame_ms_p95"),
+            f("triangles_drawn") / 1e6,
+            f("close_fps"),
+            f("close_frame_ms_p95"),
+            f("close_triangles_drawn") / 1e6,
+            f("first_frame_ms"),
             r["draw_calls"],
-            r["triangles_drawn"].as_f64().unwrap_or(0.0) / 1e6,
-            r["server_update_ms_median"].as_f64().unwrap_or(0.0),
+            f("server_update_ms_median"),
         );
         out.push(r);
     }

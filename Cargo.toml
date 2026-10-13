@@ -32,6 +32,10 @@ kreate-mesh   = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" 
 kreate-collab = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
 
 serde      = { version = "1", features = ["derive"] }
+# Mesh simplification for the viewer's levels of detail. The same version
+# Kreate builds with, through `cc`: no cmake.
+meshopt    = "=0.6.2"
+rayon      = "1.10"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [profile.dev]

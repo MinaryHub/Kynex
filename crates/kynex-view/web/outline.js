@@ -1,10 +1,12 @@
-// Edges drawn from the picture rather than from geometry: one pass renders
-// the parts' normals and depth, and a full-screen pass darkens the pixels
-// where either jumps — a silhouette, a crease, one part in front of another.
+// The scene is drawn once into a target, and then onto the screen with its
+// edges darkened: wherever the depth jumps — a silhouette, one part in
+// front of another, a part on the floor.
 //
-// Edge lines per part were one draw call each, half of every frame's
-// calls; this is two calls whatever the scene holds. It also finds edges
-// the geometry never had, where two parts meet.
+// Edges used to come from a second pass that drew every part's normals.
+// With 50,000 parts that pass cost more than the scene itself (RTX 4060 Ti,
+// Chrome on Direct3D 11: 43 fps with it, 84 without), because a pass over a
+// BatchedMesh there costs by the part, not by the triangle. Depth from the
+// one pass finds the same silhouettes; creases show in the flat shading.
 
 import * as THREE from 'three';
 
@@ -16,12 +18,12 @@ void main() {
 }`;
 
 const FRAGMENT = /* glsl */ `
-uniform sampler2D tNormal;
+uniform sampler2D tColor;
 uniform sampler2D tDepth;
 uniform vec2 texel;
 uniform float near;
 uniform float far;
-uniform vec3 color;
+uniform vec3 edgeColor;
 uniform float strength;
 varying vec2 vUv;
 
@@ -32,54 +34,52 @@ float distanceAt(vec2 uv) {
 }
 
 void main() {
+  vec3 color = texture2D(tColor, vUv).rgb;
   float d0 = texture2D(tDepth, vUv).x;
-  vec3 n0 = texture2D(tNormal, vUv).xyz * 2.0 - 1.0;
+  // The background is the clear colour as it was chosen: tone mapping is for
+  // the lit scene, and turned the grey to navy.
+  #ifdef TONE_MAPPING
+  if (d0 < 1.0) color = toneMapping(color);
+  #endif
   float z0 = distanceAt(vUv);
   float edge = 0.0;
-  bool anything = d0 < 1.0;
-  vec2 offsets[4];
-  offsets[0] = vec2(texel.x, 0.0);
-  offsets[1] = vec2(-texel.x, 0.0);
-  offsets[2] = vec2(0.0, texel.y);
-  offsets[3] = vec2(0.0, -texel.y);
-  for (int i = 0; i < 4; i++) {
-    vec2 uv = vUv + offsets[i];
-    float d = texture2D(tDepth, uv).x;
-    anything = anything || d < 1.0;
-    float z = distanceAt(uv);
-    // Depth: a step large for how far away it is.
-    edge = max(edge, smoothstep(0.015, 0.05, abs(z - z0) / min(z, z0)));
-    // Normals: a crease, on the same surface depth.
-    if (d0 < 1.0 && d < 1.0) {
-      vec3 n = texture2D(tNormal, uv).xyz * 2.0 - 1.0;
-      edge = max(edge, smoothstep(0.2, 0.5, 1.0 - dot(n0, n)));
-    }
+  if (strength > 0.0) {
+    float zl = distanceAt(vUv - vec2(texel.x, 0.0));
+    float zr = distanceAt(vUv + vec2(texel.x, 0.0));
+    float zd = distanceAt(vUv - vec2(0.0, texel.y));
+    float zu = distanceAt(vUv + vec2(0.0, texel.y));
+    // A step large for how far away it is, and not the steady slope of a
+    // surface seen at a glancing angle: the two sides disagree.
+    float dx = abs(zl + zr - 2.0 * z0);
+    float dy = abs(zd + zu - 2.0 * z0);
+    edge = smoothstep(0.004, 0.02, max(dx, dy) / z0);
   }
-  if (!anything || edge < 0.01) discard;
-  gl_FragColor = vec4(color, edge * strength);
+  gl_FragColor = vec4(mix(color, edgeColor, edge * strength), 1.0);
+  #include <colorspace_fragment>
 }`;
 
 export class Outline {
   constructor() {
     this.target = new THREE.WebGLRenderTarget(1, 1, {
+      // Light before tone mapping, which the composite applies.
+      type: THREE.HalfFloatType,
+      samples: 4,
       depthTexture: new THREE.DepthTexture(1, 1),
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
     });
-    this.normals = new THREE.MeshNormalMaterial({ flatShading: true });
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERTEX,
       fragmentShader: FRAGMENT,
       uniforms: {
-        tNormal: { value: this.target.texture },
+        tColor: { value: this.target.texture },
         tDepth: { value: this.target.depthTexture },
         texel: { value: new THREE.Vector2(1, 1) },
         near: { value: 0.01 },
         far: { value: 2000 },
-        color: { value: new THREE.Color(0x0b0d10) },
+        // A hex colour is taken as sRGB and kept linear, as the scene is
+        // before its colour space is applied.
+        edgeColor: { value: new THREE.Color(0x0b0d10) },
         strength: { value: 0.55 },
       },
-      transparent: true,
       depthTest: false,
       depthWrite: false,
     });
@@ -96,36 +96,14 @@ export class Outline {
     this.material.uniforms.texel.value.set(1 / width, 1 / height);
   }
 
-  // Renders the normals and depth of what `layer` holds. Call before the
-  // scene itself is drawn.
-  prepare(renderer, scene, camera, layer) {
-    if (!this.enabled) return;
-    const mask = camera.layers.mask;
-    const background = scene.background;
-    camera.layers.set(layer);
-    scene.overrideMaterial = this.normals;
-    scene.background = null;
-    const clear = renderer.getClearColor(new THREE.Color());
-    const alpha = renderer.getClearAlpha();
-    renderer.setClearColor(0x808080, 0);
-    renderer.setRenderTarget(this.target);
-    renderer.clear();
-    renderer.render(scene, camera);
-    renderer.setRenderTarget(null);
-    renderer.setClearColor(clear, alpha);
-    scene.overrideMaterial = null;
-    scene.background = background;
-    camera.layers.mask = mask;
+  // Draws `scene` once, and onto the screen with its edges.
+  render(renderer, scene, camera) {
     this.material.uniforms.near.value = camera.near;
     this.material.uniforms.far.value = camera.far;
-  }
-
-  // Lays the edges over what was drawn.
-  draw(renderer) {
-    if (!this.enabled) return;
-    const auto = renderer.autoClear;
-    renderer.autoClear = false;
+    this.material.uniforms.strength.value = this.enabled ? 0.55 : 0;
+    renderer.setRenderTarget(this.target);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
     renderer.render(this.quadScene, this.quadCamera);
-    renderer.autoClear = auto;
   }
 }

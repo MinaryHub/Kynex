@@ -8,6 +8,7 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -23,6 +24,13 @@ use crate::scene::ViewState;
 /// How often an idle stream says something, so a closed tab is noticed and
 /// a proxy does not time the stream out.
 const KEEPALIVE: Duration = Duration::from_secs(15);
+
+/// The most bytes a request line and its headers may take.
+const HEAD_LIMIT: u64 = 16 * 1024;
+
+/// The most connections served at once: open viewer tabs, each holding its
+/// stream, and the page loads beside them.
+const MAX_CONNECTIONS: usize = 64;
 
 /// Where the scene the viewer shows comes from, and how that is going.
 #[derive(Clone, Debug, PartialEq)]
@@ -99,13 +107,26 @@ impl Server {
             thread::Builder::new()
                 .name("kynex-view".into())
                 .spawn(move || {
+                    let open = Arc::new(AtomicUsize::new(0));
                     for stream in listener.incoming().flatten() {
+                        // A thread per connection, so a bounded number of
+                        // them: past it a connection is closed at the door.
+                        if open.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
+                            drop(stream);
+                            continue;
+                        }
+                        open.fetch_add(1, Ordering::Relaxed);
                         let hub = hub.clone();
-                        let _ = thread::Builder::new()
+                        let done = open.clone();
+                        let spawned = thread::Builder::new()
                             .name("kynex-view-client".into())
                             .spawn(move || {
                                 let _ = serve(stream, &hub);
+                                done.fetch_sub(1, Ordering::Relaxed);
                             });
+                        if spawned.is_err() {
+                            open.fetch_sub(1, Ordering::Relaxed);
+                        }
                     }
                 })?;
         }
@@ -165,22 +186,28 @@ impl Server {
 fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
+    // The request line and headers together, at most HEAD_LIMIT bytes: a
+    // line with no end cannot make this read forever or hold memory.
     let mut request = String::new();
-    reader.read_line(&mut request)?;
-    // The headers: only a post's length matters here.
-    let mut line = String::new();
-    let mut read = 0usize;
     let mut length = 0usize;
-    loop {
-        line.clear();
-        let n = reader.read_line(&mut line)?;
-        read += n;
-        if n == 0 || line == "\r\n" || line == "\n" || read > 64 * 1024 {
-            break;
-        }
-        if let Some((name, value)) = line.split_once(':') {
-            if name.trim().eq_ignore_ascii_case("content-length") {
-                length = value.trim().parse().unwrap_or(0);
+    let mut host = None;
+    {
+        let mut head = (&mut reader).take(HEAD_LIMIT);
+        head.read_line(&mut request)?;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = head.read_line(&mut line)?;
+            if n == 0 || line == "\r\n" || line == "\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                let name = name.trim();
+                if name.eq_ignore_ascii_case("content-length") {
+                    length = value.trim().parse().unwrap_or(0);
+                } else if name.eq_ignore_ascii_case("host") {
+                    host = Some(value.trim().to_string());
+                }
             }
         }
     }
@@ -189,6 +216,9 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let path = parts.next().unwrap_or("/");
     let path = path.split('?').next().unwrap_or("/");
     let mut out = stream;
+    if !host_allowed(host.as_deref()) {
+        return respond(&mut out, "403 Forbidden", "text/plain", b"unknown host");
+    }
     if method == "POST" && path == "/bench" {
         let Some(bench) = hub.lock().expect("viewer hub").bench.clone() else {
             return respond(&mut out, "404 Not Found", "text/plain", b"not benchmarking");
@@ -221,6 +251,28 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         Some((mime, body)) => respond(&mut out, "200 OK", mime, body),
         None => respond(&mut out, "404 Not Found", "text/plain", b"not found"),
     }
+}
+
+/// Whether a request named a host this server answers to: `localhost`, or
+/// an address by its number.
+///
+/// A web page elsewhere can point a name it owns at 127.0.0.1 (DNS
+/// rebinding) and then read this server as if it were its own origin; its
+/// requests still carry its own name in `Host`. So a name other than
+/// `localhost` is turned away, and numbers — which no outside page can
+/// claim — are let in, which keeps `--lan` working by IP.
+fn host_allowed(host: Option<&str>) -> bool {
+    let Some(host) = host else { return false };
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        // [v6]:port
+        return rest
+            .split(']')
+            .next()
+            .is_some_and(|ip| ip.parse::<std::net::Ipv6Addr>().is_ok());
+    } else {
+        host.rsplit_once(':').map_or(host, |(name, _)| name)
+    };
+    name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
 fn respond(out: &mut TcpStream, status: &str, mime: &str, body: &[u8]) -> io::Result<()> {
@@ -270,7 +322,7 @@ mod tests {
 
     fn get(addr: SocketAddr, path: &str) -> String {
         let mut s = TcpStream::connect(addr).unwrap();
-        write!(s, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        write!(s, "GET {path} HTTP/1.1\r\nHost: localhost:8090\r\n\r\n").unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).unwrap();
         out
@@ -287,6 +339,55 @@ mod tests {
     }
 
     #[test]
+    fn a_page_from_another_name_is_turned_away() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        let ask = |host: &str| {
+            let mut s = TcpStream::connect(server.addr()).unwrap();
+            write!(s, "GET /events HTTP/1.1\r\n{host}\r\n").unwrap();
+            let mut out = String::new();
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let _ = s.read_to_string(&mut out);
+            out
+        };
+        // A rebound name: the page's own, pointing here.
+        assert!(ask("Host: evil.example:8090\r\n").starts_with("HTTP/1.1 403"));
+        assert!(ask("").starts_with("HTTP/1.1 403"), "no Host at all");
+    }
+
+    #[test]
+    fn hosts_by_name_and_by_number() {
+        assert!(host_allowed(Some("localhost:8090")));
+        assert!(host_allowed(Some("LOCALHOST")));
+        assert!(host_allowed(Some("127.0.0.1:8090")));
+        assert!(host_allowed(Some("192.168.0.12:8090")));
+        assert!(host_allowed(Some("[::1]:8090")));
+        assert!(!host_allowed(Some("localhost.evil.example")));
+        assert!(!host_allowed(Some("evil.example:8090")));
+        assert!(!host_allowed(Some("[not-an-ip]:1")));
+        assert!(!host_allowed(None));
+    }
+
+    #[test]
+    fn a_header_with_no_end_is_cut_off() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        let mut s = TcpStream::connect(server.addr()).unwrap();
+        // Far past the limit, never ending the line.
+        let junk = vec![b'a'; 200 * 1024];
+        let started = std::time::Instant::now();
+        let _ = s.write_all(b"GET / HTTP/1.1\r\nX: ");
+        let _ = s.write_all(&junk);
+        let mut out = Vec::new();
+        s.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+        // The server answers and closes rather than reading for ever. Its
+        // close may arrive as a reset, with the rest of ours unread: either
+        // way the read ends well before the timeout.
+        let _ = s.read_to_end(&mut out);
+        assert!(started.elapsed() < Duration::from_secs(6));
+        // And it still serves.
+        assert!(get(server.addr(), "/").starts_with("HTTP/1.1 200"));
+    }
+
+    #[test]
     fn a_viewer_gets_the_scene_then_each_edit() {
         let server = Server::start("127.0.0.1:0").unwrap();
         let mut doc = Document::new();
@@ -294,7 +395,7 @@ mod tests {
         server.reset(&doc, &Model::from_document(&doc));
 
         let mut s = TcpStream::connect(server.addr()).unwrap();
-        write!(s, "GET /events HTTP/1.1\r\n\r\n").unwrap();
+        write!(s, "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut reader = BufReader::new(s);
         let mut seen = String::new();

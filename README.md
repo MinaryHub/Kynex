@@ -48,6 +48,10 @@ network with no internet.
 - `--lan` lets other devices on the network open the viewer. The viewer
   shows the whole scene to anyone who can reach the port, so the default is
   this machine only.
+- The server only answers requests addressed to `localhost` or to an IP
+  address. This blocks DNS rebinding, where a web page elsewhere points its
+  own name at this machine to read the scene. On the LAN, open the viewer by
+  IP (`http://192.168.0.12:8090`), not by machine name.
 - `--file model.kreate` shows a saved file instead of a session.
 - On screens narrower than 960 px, the side panels become drawers.
 

@@ -6,13 +6,13 @@
 //! standard library to serve. One thread per open browser tab; a studio or a
 //! cell has a handful.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kreate_scene::{Changes, Document};
 use kynex_model::Model;
@@ -31,6 +31,15 @@ const HEAD_LIMIT: u64 = 16 * 1024;
 /// The most connections served at once: open viewer tabs, each holding its
 /// stream, and the page loads beside them.
 const MAX_CONNECTIONS: usize = 64;
+
+/// The most of those one machine may hold: a few tabs and their page loads.
+const MAX_PER_PEER: usize = 16;
+
+/// How long a request, headers and body, may take to arrive.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long a write may wait on a peer that is not reading.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Where the scene the viewer shows comes from, and how that is going.
 #[derive(Clone, Debug, PartialEq)]
@@ -107,25 +116,28 @@ impl Server {
             thread::Builder::new()
                 .name("kynex-view".into())
                 .spawn(move || {
-                    let open = Arc::new(AtomicUsize::new(0));
+                    let gate = Arc::new(Mutex::new(Gate::default()));
                     for stream in listener.incoming().flatten() {
                         // A thread per connection, so a bounded number of
-                        // them: past it a connection is closed at the door.
-                        if open.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
+                        // them, and a share of those per peer: past either,
+                        // a connection is closed at the door.
+                        let Ok(peer) = stream.peer_addr().map(|a| a.ip()) else {
+                            continue;
+                        };
+                        if !Gate::enter(&gate, peer) {
                             drop(stream);
                             continue;
                         }
-                        open.fetch_add(1, Ordering::Relaxed);
                         let hub = hub.clone();
-                        let done = open.clone();
+                        let done = gate.clone();
                         let spawned = thread::Builder::new()
                             .name("kynex-view-client".into())
                             .spawn(move || {
                                 let _ = serve(stream, &hub);
-                                done.fetch_sub(1, Ordering::Relaxed);
+                                Gate::leave(&done, peer);
                             });
                         if spawned.is_err() {
-                            open.fetch_sub(1, Ordering::Relaxed);
+                            Gate::leave(&gate, peer);
                         }
                     }
                 })?;
@@ -182,10 +194,66 @@ impl Server {
     }
 }
 
+/// A reader that gives up at a point in time rather than after a quiet
+/// spell: each read waits only for what is left until `until`.
+struct Deadline {
+    stream: TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "request too slow"));
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+/// Who holds how many connections, so that one peer cannot hold them all.
+#[derive(Default)]
+struct Gate {
+    total: usize,
+    by_peer: HashMap<IpAddr, usize>,
+}
+
+impl Gate {
+    fn enter(gate: &Mutex<Gate>, peer: IpAddr) -> bool {
+        let mut g = gate.lock().expect("connection gate");
+        let mine = g.by_peer.get(&peer).copied().unwrap_or(0);
+        if g.total >= MAX_CONNECTIONS || mine >= MAX_PER_PEER {
+            return false;
+        }
+        g.total += 1;
+        *g.by_peer.entry(peer).or_default() += 1;
+        true
+    }
+
+    fn leave(gate: &Mutex<Gate>, peer: IpAddr) {
+        let mut g = gate.lock().expect("connection gate");
+        g.total = g.total.saturating_sub(1);
+        if let Some(n) = g.by_peer.get_mut(&peer) {
+            *n -= 1;
+            if *n == 0 {
+                g.by_peer.remove(&peer);
+            }
+        }
+    }
+}
+
 /// One connection: a file, or the stream.
 fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let mut reader = BufReader::new(stream.try_clone()?);
+    // A peer that stops reading is let go after this long, and its thread
+    // and connection slot with it.
+    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+    // The whole request, headers and body, within one deadline: a byte
+    // every few seconds does not keep a connection alive.
+    let mut reader = BufReader::new(Deadline {
+        stream: stream.try_clone()?,
+        until: Instant::now() + REQUEST_DEADLINE,
+    });
     // The request line and headers together, at most HEAD_LIMIT bytes: a
     // line with no end cannot make this read forever or hold memory.
     let mut request = String::new();
@@ -293,18 +361,22 @@ fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\
           Connection: keep-alive\r\n\r\n",
     )?;
-    // What there is now, then everything from here on — under the one lock,
-    // so no edit falls between the two.
+    // What there is now, then everything from here on. Taking the one and
+    // joining the other under the same lock means no edit falls between the
+    // two; the writing happens after it is let go, so a viewer that reads
+    // slowly — or not at all — holds up only its own thread, never the hub.
     let (tx, rx): (Sender<Arc<str>>, Receiver<Arc<str>>) = mpsc::channel();
-    {
+    let opening = {
         let mut hub = hub.lock().expect("viewer hub");
-        out.write_all(frame("status", &hub.status).as_bytes())?;
+        let mut opening = frame("status", &hub.status);
         if hub.has_scene {
-            out.write_all(frame("scene", &hub.view.scene()).as_bytes())?;
+            opening.push_str(&frame("scene", &hub.view.scene()));
         }
-        out.flush()?;
         hub.viewers.push(tx);
-    }
+        opening
+    };
+    out.write_all(opening.as_bytes())?;
+    out.flush()?;
     loop {
         match rx.recv_timeout(KEEPALIVE) {
             Ok(message) => out.write_all(message.as_bytes())?,
@@ -352,6 +424,66 @@ mod tests {
         // A rebound name: the page's own, pointing here.
         assert!(ask("Host: evil.example:8090\r\n").starts_with("HTTP/1.1 403"));
         assert!(ask("").starts_with("HTTP/1.1 403"), "no Host at all");
+    }
+
+    #[test]
+    fn a_viewer_that_never_reads_holds_up_nobody() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        // A scene of some megabytes: more than any socket buffer holds.
+        let mut doc = Document::new();
+        for i in 0..400 {
+            doc.add_mesh_object(
+                format!("Ball{i}"),
+                kreate_mesh::primitives::uv_sphere(1.0, 48, 24),
+            );
+        }
+        server.reset(&doc, &Model::from_document(&doc));
+
+        // Asks for the stream and then reads nothing, ever.
+        let mut stuck = TcpStream::connect(server.addr()).unwrap();
+        write!(stuck, "GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        while server.viewers() == 0 {
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        // Edits keep flowing to everyone else without waiting on it.
+        let started = std::time::Instant::now();
+        let first = doc.objects().next().unwrap().0;
+        for k in 0..20 {
+            doc.object_mut(first).unwrap().transform.translation.z = k as f64;
+            server.update(&doc, &Model::from_document(&doc), None);
+        }
+        server.status(&Status::Waiting {
+            address: "x".into(),
+        });
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(get(server.addr(), "/").starts_with("HTTP/1.1 200"));
+        drop(stuck);
+    }
+
+    #[test]
+    fn one_machine_cannot_hold_every_connection() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        // Its share, held open and silent.
+        let held: Vec<TcpStream> = (0..MAX_PER_PEER)
+            .map(|_| TcpStream::connect(server.addr()).unwrap())
+            .collect();
+        thread::sleep(Duration::from_millis(200));
+        // One more is closed at the door, unanswered.
+        let mut s = TcpStream::connect(server.addr()).unwrap();
+        let _ = write!(s, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        assert!(out.is_empty());
+        // Letting go frees the share.
+        drop(held);
+        thread::sleep(Duration::from_millis(300));
+        assert!(get(server.addr(), "/").starts_with("HTTP/1.1 200"));
     }
 
     #[test]

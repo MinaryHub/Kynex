@@ -1,6 +1,20 @@
 //! The viewer's files, built into the binary: one executable carries the
 //! whole viewer, and a machine with no internet draws the same page.
 
+/// Names this build of the viewer's files: a page that reconnects and is
+/// told another name was served by an older KYNEX, and reloads itself.
+pub fn build_id() -> String {
+    // FNV-1a over every file the page runs: a page differs when they do.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for path in ["/", "/app.js", "/batch.js", "/outline.js", "/app.css"] {
+        for b in get(path).map(|(_, body)| body).unwrap_or_default() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    format!("{h:016x}")
+}
+
 pub fn get(path: &str) -> Option<(&'static str, &'static [u8])> {
     const JS: &str = "text/javascript; charset=utf-8";
     Some(match path {

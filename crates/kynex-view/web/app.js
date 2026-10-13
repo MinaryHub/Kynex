@@ -261,6 +261,79 @@ function setRobots(list) {
 
 // ---- the stream -------------------------------------------------------------
 
+// The build of KYNEX that served this page, as its stream first said.
+let servedBy = null;
+
+// The version of the scene this page holds: the scene file's, then each
+// update's after it.
+let heldVersion = -1;
+// The latest scene the server has said exists.
+let wantedVersion = -1;
+// Updates that came while a scene was on its way. They may be newer than the
+// scene file will be — it is made when asked for, not when announced — or
+// older; either way they wait for it, and the newer ones are applied after.
+let fetching = false;
+const waiting = [];
+
+function takeUpdate(data) {
+  if (fetching) waiting.push(data);
+  else onUpdate(data);
+}
+
+function afterScene() {
+  fetching = heldVersion < wantedVersion;
+  if (fetching) return;
+  for (const data of waiting.splice(0)) onUpdate(data);
+}
+
+// The scene file: see `ViewState::scene_bin` on the server for its layout.
+function readScene(buffer) {
+  const view = new DataView(buffer);
+  const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
+  if (magic !== 'KYNX' || view.getUint32(4, true) !== 1) throw new Error('not a KYNEX scene');
+  const version = Number(view.getBigUint64(8, true));
+  const length = view.getUint32(16, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, length)));
+  let at = Math.ceil((20 + length) / 4) * 4;
+  // Copied out, so that holding the matrices does not hold the whole file.
+  const matrices = new Float32Array(buffer.slice(at, at + header.objects.length * 64));
+  at += matrices.byteLength;
+  header.objects.forEach((o, i) => (o.matrix = matrices.subarray(i * 16, i * 16 + 16)));
+  const meshes = new Map();
+  for (const m of header.meshes) {
+    const positions = new Float32Array(buffer, at, m.vertices * 3);
+    at += positions.byteLength;
+    const indices = new Uint32Array(buffer, at, m.indices);
+    at += indices.byteLength;
+    if (!m.indices) continue;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    meshes.set(m.uid, geometry);
+  }
+  return { version, objects: header.objects, robots: header.robots, meshes };
+}
+
+async function fetchScene(version, noticed) {
+  const response = await fetch(`/scene.bin?v=${version}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  // A later scene was announced while this one came: that one wins.
+  if (version < wantedVersion) return;
+  const fetched = performance.now();
+  const data = readScene(buffer);
+  heldVersion = data.version;
+  const parsed = performance.now();
+  onScene(data);
+  // The scene file may be newer than its notice: it says what it holds.
+  wantedVersion = Math.max(wantedVersion, data.version);
+  afterScene();
+  if (BENCH && !benchStarted) {
+    benchStarted = true;
+    runBench({ arrived: noticed, fetched, parsed, built: performance.now(), bytes: buffer.byteLength });
+  }
+}
+
 function onScene(data) {
   setStale(false);
   for (const uid of [...gizmos.keys()]) removeGizmo(uid);
@@ -268,11 +341,9 @@ function onScene(data) {
   records.clear();
   jointKinds.clear();
   for (const r of data.robots) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
-  const meshes = new Map();
-  for (const [uid, mesh] of Object.entries(data.meshes)) meshes.set(Number(uid), buildGeometry(mesh));
-  batch.reset(meshes, data.objects.length);
+  batch.reset(data.meshes, data.objects.length);
   // The batch has its own copy of every vertex now.
-  for (const g of meshes.values()) g.dispose();
+  for (const g of data.meshes.values()) g.dispose();
   batch.mesh.layers.enable(PARTS);
   content.add(batch.mesh);
   for (const rec of data.objects) applyObject(rec);
@@ -289,9 +360,10 @@ function onScene(data) {
 }
 
 function onUpdate(data) {
-  if (!batch.mesh) return;
-  for (const [uid, mesh] of Object.entries(data.meshes)) {
-    const id = Number(uid);
+  // Already in the scene that was fetched, or older than it.
+  if (!batch.mesh || data.v <= heldVersion) return;
+  heldVersion = data.v;
+  for (const [id, mesh] of Object.entries(data.meshes)) {
     const geometry = buildGeometry(mesh);
     if (batch.hasGeometry(id)) batch.replaceGeometry(id, geometry);
     else batch.addGeometry(id, geometry);
@@ -356,18 +428,27 @@ function onStatus(s) {
 function connect() {
   const source = new EventSource('/events');
   source.addEventListener('scene', (e) => {
-    const arrived = performance.now();
-    const data = JSON.parse(e.data);
-    const parsed = performance.now();
-    onScene(data);
-    if (BENCH && !benchStarted) {
-      benchStarted = true;
-      runBench({ arrived, parsed, built: performance.now(), bytes: e.data.length });
-    }
+    const { v } = JSON.parse(e.data);
+    wantedVersion = Math.max(wantedVersion, v);
+    fetching = true;
+    fetchScene(v, performance.now()).catch((err) => {
+      console.error('scene', v, err);
+      toast(`장면을 읽지 못했습니다: ${err.message}`);
+      // Nothing to apply the waiting updates to: the next notice starts over.
+      fetching = false;
+      waiting.length = 0;
+    });
   });
   source.addEventListener('update', () => benchUpdates++);
-  source.addEventListener('update', (e) => onUpdate(JSON.parse(e.data)));
+  source.addEventListener('update', (e) => takeUpdate(JSON.parse(e.data)));
   source.addEventListener('status', (e) => onStatus(JSON.parse(e.data)));
+  // A page served by one KYNEX that reconnects to a newer one would read
+  // its stream wrongly: it reloads instead.
+  source.addEventListener('hello', (e) => {
+    const { build } = JSON.parse(e.data);
+    if (servedBy && servedBy !== build) location.reload();
+    servedBy = build;
+  });
   source.onerror = () => {
     const el = document.getElementById('status');
     el.dataset.state = 'lost';
@@ -431,17 +512,17 @@ function renderTree() {
 document.getElementById('tree').addEventListener('click', (e) => {
   const twist = e.target.closest('[data-twist]');
   if (twist && twist.dataset.twist) {
-    const uid = Number(twist.dataset.twist);
+    const uid = twist.dataset.twist;
     collapsed.has(uid) ? collapsed.delete(uid) : collapsed.add(uid);
     renderTree();
     return;
   }
   const item = e.target.closest('.node');
-  if (item) select(Number(item.dataset.uid), { frame: e.detail === 2 });
+  if (item) select(item.dataset.uid, { frame: e.detail === 2 });
 });
 document.getElementById('tree').addEventListener('dblclick', (e) => {
   const item = e.target.closest('.node');
-  if (item) frame(Number(item.dataset.uid));
+  if (item) frame(item.dataset.uid);
 });
 document.getElementById('search').addEventListener('input', renderTree);
 
@@ -528,11 +609,11 @@ function renderRobots() {
 
 document.getElementById('robots').addEventListener('click', (e) => {
   const row = e.target.closest('.joint');
-  if (row) select(Number(row.dataset.uid));
+  if (row) select(row.dataset.uid);
 });
 document.getElementById('robots').addEventListener('dblclick', (e) => {
   const row = e.target.closest('.joint');
-  if (row) frame(Number(row.dataset.uid));
+  if (row) frame(row.dataset.uid);
 });
 
 // ---- selection --------------------------------------------------------------
@@ -649,6 +730,7 @@ function fitShadows() {
   sun.target.position.copy(sphere.center);
   sun.position.copy(sphere.center).add(new THREE.Vector3(0.45, -0.6, 0.9).normalize().multiplyScalar(r * 3));
   cam.updateProjectionMatrix();
+  shadowsDirty = true;
 }
 
 // ---- toolbar and keys -------------------------------------------------------
@@ -720,7 +802,13 @@ function toast(text) {
 }
 
 const pulse = document.getElementById('pulse');
+// The shadow map only changes when the scene or the light does: a camera
+// moving round it needs no new one. Redrawing it every frame was a third of
+// every frame's triangles.
+let shadowsDirty = true;
+
 function touched() {
+  shadowsDirty = true;
   lastUpdate = performance.now();
   pulse.classList.add('hot');
   requestAnimationFrame(() => requestAnimationFrame(() => pulse.classList.remove('hot')));
@@ -765,7 +853,8 @@ renderer.setAnimationLoop(() => {
     renderer.shadowMap.needsUpdate = false;
     outline.prepare(renderer, scene, camera, PARTS);
   }
-  renderer.shadowMap.needsUpdate = true;
+  renderer.shadowMap.needsUpdate = shadowsDirty;
+  shadowsDirty = false;
   renderer.render(scene, camera);
   if (batch.mesh) outline.draw(renderer);
 });
@@ -780,6 +869,14 @@ function gpuName() {
 }
 
 async function runBench(t) {
+  // A tab in the background draws no frames: say so rather than measure
+  // nothing until the benchmark gives up.
+  if (document.hidden) {
+    await fetch('/bench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'hidden' }) });
+    toast('벤치마크: 이 탭이 화면에 보여야 측정할 수 있습니다');
+    benchStarted = false;
+    return;
+  }
   const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
   // The first frame drawn with the scene in it: shaders compiled, buffers up.
   await nextFrame();
@@ -814,7 +911,8 @@ async function runBench(t) {
     user_agent: navigator.userAgent,
     pixels: [renderer.domElement.width, renderer.domElement.height],
     scene_bytes: t.bytes,
-    parse_ms: t.parsed - t.arrived,
+    fetch_ms: t.fetched - t.arrived,
+    parse_ms: t.parsed - t.fetched,
     build_ms: t.built - t.parsed,
     first_frame_ms: firstFrame - t.arrived,
     // From the page being asked for to the scene first drawn.
@@ -832,10 +930,12 @@ async function runBench(t) {
     updates_during_run: benchUpdates - updatesBefore,
     js_heap_mb: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null,
   };
+  // The next tier arrives as a new scene the moment the server has this
+  // report — possibly before the post below has finished — and is measured
+  // the same way.
+  benchStarted = false;
   await fetch('/bench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(report) });
   toast(`벤치마크 완료 · ${report.fps.toFixed(1)} fps`);
-  // The next tier arrives as a new scene, and is measured the same way.
-  benchStarted = false;
 }
 
 connect();

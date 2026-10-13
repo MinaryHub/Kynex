@@ -64,12 +64,16 @@ pub const TIERS: [Tier; 4] = [
 pub fn run(args: Vec<String>) -> Result<(), String> {
     let mut tier = "all".to_string();
     let mut browser = false;
+    let mut open = true;
     let mut port = 8091u16;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--tier" => tier = it.next().ok_or("--tier needs a name")?,
             "--browser" => browser = true,
+            // Serve the benchmark page without opening it: for driving it
+            // from another browser or a test harness.
+            "--no-open" => open = false,
             "--port" => {
                 port = it
                     .next()
@@ -140,7 +144,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
 
     let mut browser_results = Vec::new();
     if browser {
-        browser_results = run_browser(&docs, port)?;
+        browser_results = run_browser(&docs, port, open)?;
     }
 
     let stamp = SystemTime::now()
@@ -258,7 +262,7 @@ fn measure(tier: &Tier, doc: &Document) -> Value {
         let t = Instant::now();
         let mut view = ViewState::new();
         view.reset(doc);
-        scene_len = view.scene().len();
+        scene_len = view.scene_bin().len();
         ms(t.elapsed())
     });
 
@@ -371,7 +375,7 @@ fn named<'a>(doc: &Document, parts: impl Iterator<Item = &'a ObjectId>) -> Chang
 
 // --- the browser ------------------------------------------------------------
 
-fn run_browser(docs: &[(Tier, Document)], port: u16) -> Result<Vec<Value>, String> {
+fn run_browser(docs: &[(Tier, Document)], port: u16, open: bool) -> Result<Vec<Value>, String> {
     let server = Server::start(&format!("127.0.0.1:{port}"))
         .map_err(|e| format!("could not listen on port {port}: {e}"))?;
     let reports = server.bench_reports();
@@ -386,7 +390,7 @@ fn run_browser(docs: &[(Tier, Document)], port: u16) -> Result<Vec<Value>, Strin
     let mut opened = false;
     for (tier, doc) in docs {
         server.reset(doc);
-        if !opened {
+        if !opened && open {
             crate::view::open_browser(&url);
             opened = true;
         }
@@ -429,6 +433,13 @@ fn run_browser(docs: &[(Tier, Document)], port: u16) -> Result<Vec<Value>, Strin
             break;
         };
         let mut r: Value = serde_json::from_str(&report).map_err(|e| e.to_string())?;
+        if r["error"] == "hidden" {
+            println!(
+                "{:<11} 측정 못 함: 브라우저 탭이 화면 뒤에 있습니다. 탭을 앞으로 가져오고 다시 실행하세요.",
+                tier.name
+            );
+            break;
+        }
         update_ms.sort_by(f64::total_cmp);
         r["tier"] = json!(tier.name);
         r["server_update_ms_median"] =

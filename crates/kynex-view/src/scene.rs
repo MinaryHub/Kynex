@@ -14,6 +14,15 @@
 //!
 //! Positions are in metres with Z up, as Kreate keeps them; the viewer sets
 //! its camera up that way rather than turning the scene.
+//!
+//! A whole scene goes as one binary file (see [`ViewState::scene_bin`]):
+//! vertices and matrices as the arrays the GPU takes, not as text. The same
+//! factory was 64 MB of JSON and base64, and its first frame took eleven
+//! seconds to parse its way to.
+//!
+//! Identities travel as strings. Kreate numbers a participant's datablocks
+//! from `site << 48`, and from the 32nd participant on that is past 2^53,
+//! where a JavaScript number stops being exact.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -21,7 +30,7 @@ use kreate_math::DMat4;
 use kreate_mesh::MeshData;
 use kreate_scene::robot::RobotPart;
 use kreate_scene::{Changes, DatablockKind, Document, MeshId, ObjectData, ObjectId};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::{json, Value};
 
 use crate::base64;
@@ -29,14 +38,19 @@ use crate::base64;
 /// One object, as drawn.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Drawn {
+    #[serde(serialize_with = "as_text")]
     pub uid: u64,
     pub name: String,
+    #[serde(serialize_with = "maybe_as_text")]
     pub parent: Option<u64>,
     /// empty, mesh, camera, light or armature.
     pub kind: &'static str,
     /// The mesh it shows, by identity.
+    #[serde(serialize_with = "maybe_as_text")]
     pub mesh: Option<u64>,
     /// World matrix, column major: what three.js's `Matrix4.fromArray` reads.
+    /// Left out of the binary scene's header, which carries it as floats.
+    #[serde(skip_serializing_if = "skip_matrix")]
     pub matrix: [f64; 16],
     /// Its first material's base colour, linear; none for the default surface.
     pub color: Option<[f32; 3]>,
@@ -45,15 +59,81 @@ pub struct Drawn {
     pub role: Option<&'static str>,
 }
 
+fn as_text<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_str(v)
+}
+
+fn maybe_as_text<S: Serializer>(v: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(v) => s.collect_str(v),
+        None => s.serialize_none(),
+    }
+}
+
+thread_local! {
+    /// Set while the binary scene's header is written: the matrices go after
+    /// it as floats.
+    static HEADER_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn skip_matrix(_: &[f64; 16]) -> bool {
+    HEADER_ONLY.with(|h| h.get())
+}
+
+/// A mesh's triangles, as the GPU takes them.
+#[derive(Debug, Clone)]
+struct MeshBytes {
+    /// f32 x, y, z per vertex, little endian.
+    positions: Vec<u8>,
+    /// u32 per corner, three per triangle, little endian.
+    indices: Vec<u8>,
+}
+
+impl MeshBytes {
+    fn of(mesh: &MeshData) -> Self {
+        Self {
+            positions: mesh
+                .positions()
+                .iter()
+                .flat_map(|p| [p.x, p.y, p.z])
+                .flat_map(f32::to_le_bytes)
+                .collect(),
+            indices: mesh
+                .triangulate()
+                .indices
+                .iter()
+                .flat_map(|i| i.to_le_bytes())
+                .collect(),
+        }
+    }
+
+    /// For an update, inside JSON.
+    fn to_json(&self) -> String {
+        json!({
+            "positions": base64::encode(&self.positions),
+            "indices": base64::encode(&self.indices),
+        })
+        .to_string()
+    }
+}
+
+/// The binary scene's first four bytes.
+pub const SCENE_MAGIC: &[u8; 4] = b"KYNX";
+/// Its layout's version, after the magic.
+pub const SCENE_FORMAT: u32 = 1;
+
 /// What the viewers have been sent, so the next edit can be sent as a
 /// difference.
 #[derive(Debug, Default)]
 pub struct ViewState {
     objects: BTreeMap<u64, Drawn>,
-    /// Each mesh's JSON, by identity: kept so a viewer that opens later gets
-    /// the scene without anything being encoded again.
-    meshes: BTreeMap<u64, String>,
+    /// Each mesh's triangles, by identity: kept so a viewer that opens later
+    /// gets the scene without anything being encoded again.
+    meshes: BTreeMap<u64, MeshBytes>,
     robots: Value,
+    /// Counts every scene and every update, so a viewer that has a scene can
+    /// tell an update it already holds from one it does not.
+    version: u64,
 }
 
 impl ViewState {
@@ -77,21 +157,95 @@ impl ViewState {
         let index = mesh_index(doc);
         for uid in referenced(&self.objects) {
             if let Some(mesh) = index.get(&uid).and_then(|id| doc.mesh(*id)) {
-                self.meshes.insert(uid, mesh_json(mesh));
+                self.meshes.insert(uid, MeshBytes::of(mesh));
             }
         }
         self.robots = robots(doc);
+        self.version += 1;
     }
 
-    /// Everything, for a viewer that has just opened.
+    /// The version the viewers' copy is at.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Everything, as JSON: for tests and for looking at by eye. Viewers
+    /// take [`ViewState::scene_bin`].
     pub fn scene(&self) -> String {
-        let mut out = String::from("{\"meshes\":");
-        push_meshes(&mut out, self.meshes.iter());
-        out.push_str(",\"objects\":");
+        let mut out = String::from("{\"meshes\":{");
+        for (i, (uid, mesh)) in self.meshes.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!("\"{uid}\":{}", mesh.to_json()));
+        }
+        out.push_str("},\"objects\":");
         out.push_str(&serde_json::to_string(&self.objects.values().collect::<Vec<_>>()).unwrap());
         out.push_str(",\"robots\":");
         out.push_str(&self.robots.to_string());
         out.push('}');
+        out
+    }
+
+    /// Everything, for a viewer that has just opened, as one binary file.
+    /// Little endian throughout:
+    ///
+    /// ```text
+    /// "KYNX" · u32 format · u64 version · u32 header length · header JSON
+    /// · zero padding to a multiple of 4
+    /// · f32 × 16 per object: its world matrix, column major, in header order
+    /// · per mesh, in header order: f32 × 3 per vertex, then u32 per index
+    /// ```
+    ///
+    /// The header is `{"objects": [...], "robots": [...], "meshes":
+    /// [{"uid", "vertices", "indices"}]}`, the objects without their
+    /// matrices.
+    pub fn scene_bin(&self) -> Vec<u8> {
+        let objects: Vec<&Drawn> = self.objects.values().collect();
+        let meshes: Vec<Value> = self
+            .meshes
+            .iter()
+            .map(|(uid, m)| {
+                json!({
+                    "uid": uid.to_string(),
+                    "vertices": m.positions.len() / 12,
+                    "indices": m.indices.len() / 4,
+                })
+            })
+            .collect();
+        HEADER_ONLY.with(|h| h.set(true));
+        let header = serde_json::to_vec(&json!({
+            "objects": objects,
+            "robots": self.robots,
+            "meshes": meshes,
+        }));
+        HEADER_ONLY.with(|h| h.set(false));
+        let header = header.expect("a header always serialises");
+
+        let body: usize = objects.len() * 64
+            + self
+                .meshes
+                .values()
+                .map(|m| m.positions.len() + m.indices.len())
+                .sum::<usize>();
+        let mut out = Vec::with_capacity(24 + header.len() + body);
+        out.extend_from_slice(SCENE_MAGIC);
+        out.extend_from_slice(&SCENE_FORMAT.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        out.extend_from_slice(&header);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        for d in &objects {
+            for v in d.matrix {
+                out.extend_from_slice(&(v as f32).to_le_bytes());
+            }
+        }
+        for m in self.meshes.values() {
+            out.extend_from_slice(&m.positions);
+            out.extend_from_slice(&m.indices);
+        }
         out
     }
 
@@ -187,9 +341,9 @@ impl ViewState {
             let index = mesh_index(doc);
             for uid in wanted {
                 if let Some(mesh) = index.get(&uid).and_then(|id| doc.mesh(*id)) {
-                    let encoded = mesh_json(mesh);
-                    meshes.insert(uid, encoded.clone());
-                    self.meshes.insert(uid, encoded);
+                    let bytes = MeshBytes::of(mesh);
+                    meshes.insert(uid, bytes.to_json());
+                    self.meshes.insert(uid, bytes);
                 }
             }
         }
@@ -210,11 +364,13 @@ impl ViewState {
             return None;
         }
 
-        let mut out = String::from("{\"meshes\":");
+        self.version += 1;
+        let mut out = format!("{{\"v\":{},\"meshes\":", self.version);
         push_meshes(&mut out, meshes.iter());
         out.push_str(",\"objects\":");
         out.push_str(&serde_json::to_string(&changed).unwrap());
         out.push_str(",\"removed\":");
+        let removed: Vec<String> = removed.iter().map(u64::to_string).collect();
         out.push_str(&serde_json::to_string(&removed).unwrap());
         if robots_changed {
             out.push_str(",\"robots\":");
@@ -318,28 +474,6 @@ fn mesh_index(doc: &Document) -> BTreeMap<u64, MeshId> {
         .collect()
 }
 
-/// A mesh's triangles: positions as little-endian f32, indices as u32, both
-/// base64.
-fn mesh_json(mesh: &MeshData) -> String {
-    let positions: Vec<u8> = mesh
-        .positions()
-        .iter()
-        .flat_map(|p| [p.x, p.y, p.z])
-        .flat_map(f32::to_le_bytes)
-        .collect();
-    let indices: Vec<u8> = mesh
-        .triangulate()
-        .indices
-        .iter()
-        .flat_map(|i| i.to_le_bytes())
-        .collect();
-    json!({
-        "positions": base64::encode(&positions),
-        "indices": base64::encode(&indices),
-    })
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,7 +524,7 @@ mod tests {
         let mut gone = Changes::default();
         gone.removed.insert(uid);
         let update = parse(&view.update(&doc, Some(&gone)).unwrap());
-        assert_eq!(update["removed"][0], uid.raw());
+        assert_eq!(update["removed"][0], uid.raw().to_string());
         assert_eq!(parse(&view.scene())["meshes"].as_object().unwrap().len(), 0);
     }
 
@@ -426,8 +560,47 @@ mod tests {
     }
 
     #[test]
+    fn the_binary_scene_reads_back() {
+        let mut doc = Document::new();
+        let cube = doc.add_mesh_object("Cube", kreate_mesh::primitives::cube(2.0));
+        doc.object_mut(cube).unwrap().transform.translation.z = 1.5;
+        doc.add_object(kreate_scene::Object::new("Pivot", ObjectData::Empty));
+        let mut view = ViewState::new();
+        view.reset(&doc);
+        let bin = view.scene_bin();
+
+        let u32_at = |at: usize| u32::from_le_bytes(bin[at..at + 4].try_into().unwrap());
+        let f32_at = |at: usize| f32::from_le_bytes(bin[at..at + 4].try_into().unwrap());
+        assert_eq!(&bin[..4], SCENE_MAGIC);
+        assert_eq!(u32_at(4), SCENE_FORMAT);
+        assert_eq!(
+            u64::from_le_bytes(bin[8..16].try_into().unwrap()),
+            view.version()
+        );
+        let len = u32_at(16) as usize;
+        let header: Value = serde_json::from_slice(&bin[20..20 + len]).unwrap();
+        let mut at = (20 + len).div_ceil(4) * 4;
+        let objects = header["objects"].as_array().unwrap();
+        assert_eq!(objects.len(), 2);
+        assert!(objects[0].get("matrix").is_none(), "matrices go as floats");
+        assert!(objects[0]["uid"].is_string(), "identities go as text");
+        let cube_at = objects.iter().position(|o| o["name"] == "Cube").unwrap();
+        assert_eq!(f32_at(at + cube_at * 64 + 14 * 4), 1.5, "its z");
+        at += objects.len() * 64;
+        let mesh = &header["meshes"][0];
+        let (verts, indices) = (
+            mesh["vertices"].as_u64().unwrap(),
+            mesh["indices"].as_u64().unwrap(),
+        );
+        assert_eq!((verts, indices), (8, 36));
+        assert_eq!(bin.len(), at + verts as usize * 12 + indices as usize * 4);
+        // And a matrix comes back in the JSON form, for the updates.
+        assert!(parse(&view.scene())["objects"][0].get("matrix").is_some());
+    }
+
+    #[test]
     fn a_cube_is_twelve_triangles_of_eight_points() {
-        let json = parse(&mesh_json(&kreate_mesh::primitives::cube(1.0)));
+        let json = parse(&MeshBytes::of(&kreate_mesh::primitives::cube(1.0)).to_json());
         // 8 points × 12 bytes, 36 indices × 4 bytes, as base64.
         assert_eq!(
             json["positions"].as_str().unwrap().len(),

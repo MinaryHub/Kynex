@@ -1,5 +1,8 @@
 //! A model's bodies and robots as JSON: what `kynex link --json` prints and
 //! what the viewer's joint panel reads.
+//!
+//! Identities are strings: past the 31st session participant they exceed
+//! 2^53, which a JavaScript number cannot hold exactly.
 
 use kynex_model::{Body, Model, Robot};
 use serde_json::{json, Value};
@@ -19,9 +22,9 @@ pub fn body(body: &Body) -> Value {
     let t = body.world.translation;
     let r = body.world.rotation;
     json!({
-        "uid": body.uid,
+        "uid": body.uid.to_string(),
         "name": body.name,
-        "parent": body.parent,
+        "parent": body.parent.map(|p| p.to_string()),
         "position": [t.x, t.y, t.z],
         "rotation_xyzw": [r.x, r.y, r.z, r.w],
         "role": body.role.map(|r| format!("{r:?}").to_lowercase()),
@@ -31,11 +34,11 @@ pub fn body(body: &Body) -> Value {
 
 pub fn robot(robot: &Robot) -> Value {
     json!({
-        "root": robot.root,
+        "root": robot.root.to_string(),
         "name": robot.name,
         "mass": robot.mass,
         "joints": robot.joints.iter().map(|j| json!({
-            "uid": j.uid,
+            "uid": j.uid.to_string(),
             "name": j.name,
             "kind": j.kind.tag(),
             "position": j.position,

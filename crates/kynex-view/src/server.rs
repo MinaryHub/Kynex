@@ -82,6 +82,9 @@ struct Hub {
     viewers: Vec<Sender<Arc<str>>>,
     /// Where a benchmark page's report goes, when one was asked for.
     bench: Option<Sender<String>>,
+    /// The scene as `/scene.bin` serves it, made when first asked for after
+    /// a change and shared by every viewer that asks before the next.
+    bin: Option<Arc<Vec<u8>>>,
 }
 
 impl Hub {
@@ -89,6 +92,12 @@ impl Hub {
         let message: Arc<str> = frame(event, data).into();
         self.viewers.retain(|v| v.send(message.clone()).is_ok());
     }
+}
+
+/// What tells a viewer there is a scene to fetch: its version, so a viewer
+/// that is already fetching a later one can let this one go.
+fn scene_notice(view: &ViewState) -> String {
+    format!("{{\"v\":{}}}", view.version())
 }
 
 fn frame(event: &str, data: &str) -> String {
@@ -109,6 +118,7 @@ impl Server {
             .to_json(),
             viewers: Vec::new(),
             bench: None,
+            bin: None,
         }));
         {
             let hub = hub.clone();
@@ -158,8 +168,9 @@ impl Server {
         let mut hub = self.hub.lock().expect("viewer hub");
         hub.view.reset(doc);
         hub.has_scene = true;
-        let scene = hub.view.scene();
-        hub.broadcast("scene", &scene);
+        hub.bin = None;
+        let notice = scene_notice(&hub.view);
+        hub.broadcast("scene", &notice);
     }
 
     /// An edit to the scene the viewers have. See [`ViewState::update`].
@@ -170,6 +181,7 @@ impl Server {
             return self.reset(doc);
         }
         if let Some(update) = hub.view.update(doc, changes) {
+            hub.bin = None;
             hub.broadcast("update", &update);
         }
     }
@@ -311,6 +323,21 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             b"GET only",
         );
     }
+    if path == "/scene.bin" {
+        // Made under the lock, written after it, as the stream's opening is.
+        let bin = {
+            let mut hub = hub.lock().expect("viewer hub");
+            if !hub.has_scene {
+                drop(hub);
+                return respond(&mut out, "404 Not Found", "text/plain", b"no scene yet");
+            }
+            if hub.bin.is_none() {
+                hub.bin = Some(Arc::new(hub.view.scene_bin()));
+            }
+            hub.bin.clone().unwrap()
+        };
+        return respond(&mut out, "200 OK", "application/octet-stream", &bin);
+    }
     if path == "/events" {
         return stream_events(out, hub);
     }
@@ -367,9 +394,13 @@ fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let (tx, rx): (Sender<Arc<str>>, Receiver<Arc<str>>) = mpsc::channel();
     let opening = {
         let mut hub = hub.lock().expect("viewer hub");
-        let mut opening = frame("status", &hub.status);
+        let mut opening = frame(
+            "hello",
+            &format!("{{\"build\":\"{}\"}}", assets::build_id()),
+        );
+        opening.push_str(&frame("status", &hub.status));
         if hub.has_scene {
-            opening.push_str(&frame("scene", &hub.view.scene()));
+            opening.push_str(&frame("scene", &scene_notice(&hub.view)));
         }
         hub.viewers.push(tx);
         opening
@@ -407,6 +438,27 @@ mod tests {
         assert!(page.contains("text/html"));
         assert!(get(server.addr(), "/vendor/three.module.min.js").contains("javascript"));
         assert!(get(server.addr(), "/nope").starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
+    fn the_scene_is_fetched_whole_and_as_bytes() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        let fetch = || {
+            let mut s = TcpStream::connect(server.addr()).unwrap();
+            write!(s, "GET /scene.bin HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+            let mut out = Vec::new();
+            s.read_to_end(&mut out).unwrap();
+            out
+        };
+        assert!(fetch().starts_with(b"HTTP/1.1 404"), "nothing to fetch yet");
+        let mut doc = Document::new();
+        doc.add_mesh_object("Cube", kreate_mesh::primitives::cube(1.0));
+        server.reset(&doc);
+        let out = fetch();
+        assert!(out.starts_with(b"HTTP/1.1 200"));
+        assert!(out.windows(4).any(|w| w == crate::scene::SCENE_MAGIC));
+        // The same bytes for the next viewer, until the scene changes.
+        assert_eq!(fetch(), out);
     }
 
     #[test]

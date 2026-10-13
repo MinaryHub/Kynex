@@ -15,7 +15,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kreate_scene::{Changes, Document};
-use kynex_model::Model;
 use serde_json::json;
 
 use crate::assets;
@@ -155,22 +154,22 @@ impl Server {
     }
 
     /// A whole new scene: every viewer starts again from it.
-    pub fn reset(&self, doc: &Document, model: &Model) {
+    pub fn reset(&self, doc: &Document) {
         let mut hub = self.hub.lock().expect("viewer hub");
-        hub.view.reset(doc, model);
+        hub.view.reset(doc);
         hub.has_scene = true;
         let scene = hub.view.scene();
         hub.broadcast("scene", &scene);
     }
 
     /// An edit to the scene the viewers have. See [`ViewState::update`].
-    pub fn update(&self, doc: &Document, model: &Model, changes: Option<&Changes>) {
+    pub fn update(&self, doc: &Document, changes: Option<&Changes>) {
         let mut hub = self.hub.lock().expect("viewer hub");
         if !hub.has_scene {
             drop(hub);
-            return self.reset(doc, model);
+            return self.reset(doc);
         }
-        if let Some(update) = hub.view.update(doc, model, changes) {
+        if let Some(update) = hub.view.update(doc, changes) {
             hub.broadcast("update", &update);
         }
     }
@@ -437,7 +436,7 @@ mod tests {
                 kreate_mesh::primitives::uv_sphere(1.0, 48, 24),
             );
         }
-        server.reset(&doc, &Model::from_document(&doc));
+        server.reset(&doc);
 
         // Asks for the stream and then reads nothing, ever.
         let mut stuck = TcpStream::connect(server.addr()).unwrap();
@@ -451,7 +450,7 @@ mod tests {
         let first = doc.objects().next().unwrap().0;
         for k in 0..20 {
             doc.object_mut(first).unwrap().transform.translation.z = k as f64;
-            server.update(&doc, &Model::from_document(&doc), None);
+            server.update(&doc, None);
         }
         server.status(&Status::Waiting {
             address: "x".into(),
@@ -524,7 +523,7 @@ mod tests {
         let server = Server::start("127.0.0.1:0").unwrap();
         let mut doc = Document::new();
         let cube = doc.add_mesh_object("Cube", kreate_mesh::primitives::cube(1.0));
-        server.reset(&doc, &Model::from_document(&doc));
+        server.reset(&doc);
 
         let mut s = TcpStream::connect(server.addr()).unwrap();
         write!(s, "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
@@ -542,7 +541,7 @@ mod tests {
         }
 
         doc.object_mut(cube).unwrap().transform.translation.z = 1.5;
-        server.update(&doc, &Model::from_document(&doc), None);
+        server.update(&doc, None);
         loop {
             line.clear();
             reader.read_line(&mut line).unwrap();

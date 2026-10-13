@@ -5,12 +5,12 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
+import { Batch } from '/batch.js';
+import { Outline } from '/outline.js';
 
 // ---- state ------------------------------------------------------------------
 
 const records = new Map();    // uid -> object record from KYNEX
-const nodes = new Map();      // uid -> THREE.Object3D
-const geometries = new Map(); // mesh uid -> { geometry, edges }
 let robots = [];
 const jointKinds = new Map(); // joint uid -> kind
 let selected = null;
@@ -35,6 +35,8 @@ renderer.toneMapping = THREE.NeutralToneMapping;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setClearColor(0x1a1d22);
+renderer.shadowMap.autoUpdate = false;
+renderer.info.autoReset = false;
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const scene = new THREE.Scene();
@@ -95,19 +97,24 @@ scene.add(content);
 
 const DEFAULT_COLOR = new THREE.Color().setRGB(0.62, 0.64, 0.67, THREE.LinearSRGBColorSpace);
 const ACCENT = new THREE.Color(0xff8a3d);
-const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x0b0d10, transparent: true, opacity: 0.45 });
+// The parts' one material: each part's own colour is its instance colour.
+const surface = new THREE.MeshStandardMaterial({
+  color: 0xffffff,
+  roughness: 0.58,
+  metalness: 0.08,
+  side: THREE.DoubleSide,
+  flatShading: true,
+});
 
-function surface(color) {
-  const c = color
-    ? new THREE.Color().setRGB(color[0], color[1], color[2], THREE.LinearSRGBColorSpace)
+// The layer the parts are on: what the outline pass looks at.
+const PARTS = 1;
+const batch = new Batch(surface);
+const outline = new Outline();
+
+function colorOf(rec) {
+  return rec.color
+    ? new THREE.Color().setRGB(rec.color[0], rec.color[1], rec.color[2], THREE.LinearSRGBColorSpace)
     : DEFAULT_COLOR.clone();
-  return new THREE.MeshStandardMaterial({
-    color: c,
-    roughness: 0.58,
-    metalness: 0.08,
-    side: THREE.DoubleSide,
-    wireframe: view.wire,
-  });
 }
 
 // ---- geometry ---------------------------------------------------------------
@@ -120,34 +127,17 @@ function bytes(b64) {
 }
 
 function buildGeometry(mesh) {
-  const positions = new Float32Array(bytes(mesh.positions));
-  const indices = new Uint32Array(bytes(mesh.indices));
-  const indexed = new THREE.BufferGeometry();
-  indexed.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  indexed.setIndex(new THREE.BufferAttribute(indices, 1));
-  // Faceted, as a CAD part reads: each triangle its own normal.
-  const geometry = indices.length ? indexed.toNonIndexed() : indexed;
-  geometry.computeVertexNormals();
-  geometry.computeBoundingSphere();
-  const edges = indices.length ? new THREE.EdgesGeometry(indexed, 28) : null;
-  indexed.dispose();
-  return { geometry, edges };
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bytes(mesh.positions)), 3));
+  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(mesh.indices)), 1));
+  return geometry;
 }
 
-function setMesh(uid, mesh) {
-  const old = geometries.get(uid);
-  const fresh = buildGeometry(mesh);
-  geometries.set(uid, fresh);
-  for (const [objUid, rec] of records) {
-    if (rec.mesh === uid) rebuildNode(objUid);
-  }
-  if (old) {
-    old.geometry.dispose();
-    old.edges?.dispose();
-  }
-}
+// ---- gizmos -----------------------------------------------------------------
 
-// ---- nodes ------------------------------------------------------------------
+// Joints and links are few — a robot's dozen, not a factory's thousands — so
+// each keeps an object of its own, drawn over the parts.
+const gizmos = new Map(); // object uid -> THREE.Group
 
 function makeJointGizmo(kind) {
   const g = new THREE.Group();
@@ -160,11 +150,8 @@ function makeJointGizmo(kind) {
   tip.position.z = 0.17;
   g.add(shaft, tip);
   if (kind !== 'prismatic' && kind !== 'fixed') {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.004, 8, 48, Math.PI * 1.6), mat);
-    g.add(ring);
+    g.add(new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.004, 8, 48, Math.PI * 1.6), mat));
   }
-  g.renderOrder = 10;
-  g.userData.gizmo = true;
   return g;
 }
 
@@ -173,94 +160,101 @@ function makeLinkGizmo() {
   a.material.depthTest = false;
   a.material.transparent = true;
   a.material.opacity = 0.7;
-  a.renderOrder = 9;
-  a.userData.gizmo = true;
   return a;
 }
 
-function rebuildNode(uid) {
-  const rec = records.get(uid);
-  const old = nodes.get(uid);
-  if (old) {
-    content.remove(old);
-    old.traverse((o) => {
-      if (o.isMesh && o.userData.ownMaterial) o.material.dispose();
-    });
-  }
-  const node = new THREE.Group();
-  node.matrixAutoUpdate = false;
-  node.userData.uid = uid;
+const _axis = new THREE.Vector3();
 
-  if (rec.kind === 'mesh' && rec.mesh != null && geometries.has(rec.mesh)) {
-    const { geometry, edges } = geometries.get(rec.mesh);
-    const mesh = new THREE.Mesh(geometry, surface(rec.color));
-    mesh.userData.ownMaterial = true;
-    mesh.userData.uid = uid;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    node.add(mesh);
-    if (edges) {
-      const lines = new THREE.LineSegments(edges, edgeMaterial);
-      lines.visible = !view.wire;
-      lines.userData.edges = true;
-      node.add(lines);
-    }
+function setGizmo(rec) {
+  const want = rec.role === 'joint' ? 'joint:' + jointKinds.get(rec.uid) : rec.role === 'link' ? 'link' : null;
+  let node = gizmos.get(rec.uid);
+  if (node && node.userData.kind !== want) {
+    removeGizmo(rec.uid);
+    node = null;
   }
-  if (rec.role === 'joint') {
-    const gizmo = makeJointGizmo(jointKinds.get(uid));
-    gizmo.visible = view.joints;
-    node.add(gizmo);
-  } else if (rec.role === 'link') {
-    const gizmo = makeLinkGizmo();
-    gizmo.visible = view.joints;
-    node.add(gizmo);
+  if (!want) return;
+  if (!node) {
+    node = new THREE.Group();
+    node.matrixAutoUpdate = false;
+    node.userData.kind = want;
+    node.userData.uid = rec.uid;
+    const inner = rec.role === 'joint' ? makeJointGizmo(jointKinds.get(rec.uid)) : makeLinkGizmo();
+    inner.traverse((o) => {
+      o.renderOrder = 10;
+      o.userData.uid = rec.uid;
+    });
+    node.add(inner);
+    gizmos.set(rec.uid, node);
+    content.add(node);
   }
-  placeNode(node, rec);
-  nodes.set(uid, node);
-  content.add(node);
-  if (selected === uid) highlight(uid, true);
+  node.matrix.fromArray(rec.matrix);
+  // The gizmo keeps its size whatever the object's scale.
+  const m = node.matrix;
+  const sx = _axis.setFromMatrixColumn(m, 0).length() || 1;
+  const sy = _axis.setFromMatrixColumn(m, 1).length() || 1;
+  const sz = _axis.setFromMatrixColumn(m, 2).length() || 1;
+  const grow = selected === rec.uid ? 1.5 : 1;
+  node.children[0].scale.set(grow / sx, grow / sy, grow / sz);
+  node.children[0].updateMatrix();
+  node.matrixWorldNeedsUpdate = true;
+  node.visible = view.joints && rec.visible;
 }
 
-function placeNode(node, rec) {
-  node.matrix.fromArray(rec.matrix);
-  node.matrixWorldNeedsUpdate = true;
-  // Collision shapes are hidden in Kreate too; the gizmos keep their size
-  // whatever the object's scale.
-  node.visible = rec.visible && rec.role !== 'collision';
+function removeGizmo(uid) {
+  const node = gizmos.get(uid);
+  if (!node) return;
+  node.removeFromParent();
+  node.traverse((o) => {
+    o.geometry?.dispose();
+    o.material?.dispose();
+  });
+  gizmos.delete(uid);
+}
+
+// ---- objects ----------------------------------------------------------------
+
+function place(rec) {
+  // Collision shapes are hidden in Kreate too.
+  const visible = rec.visible && rec.role !== 'collision';
+  if (rec.kind === 'mesh' && rec.mesh != null && batch.hasGeometry(rec.mesh)) {
+    batch.set(rec.uid, rec.mesh, rec.matrix, colorOf(rec), visible);
+    if (selected === rec.uid) batch.tint(rec.uid, colorOf(rec).lerp(ACCENT, 0.55));
+  } else {
+    batch.remove(rec.uid);
+  }
+  setGizmo(rec);
 }
 
 function applyObject(rec) {
   const old = records.get(rec.uid);
   records.set(rec.uid, rec);
-  const structural =
-    !old || old.mesh !== rec.mesh || old.kind !== rec.kind || old.role !== rec.role ||
-    JSON.stringify(old.color) !== JSON.stringify(rec.color);
-  if (structural) rebuildNode(rec.uid);
-  else placeNode(nodes.get(rec.uid), rec);
+  const same = old && old.mesh === rec.mesh && old.kind === rec.kind && old.role === rec.role &&
+    old.visible === rec.visible && String(old.color) === String(rec.color);
+  if (same && (batch.has(rec.uid) || rec.kind !== 'mesh')) {
+    // Moved, nothing else: the common case, sixteen numbers.
+    batch.move(rec.uid, rec.matrix);
+    if (gizmos.has(rec.uid)) setGizmo(rec);
+  } else {
+    place(rec);
+  }
   return !old || old.name !== rec.name || old.parent !== rec.parent || old.visible !== rec.visible;
 }
 
 function removeObject(uid) {
-  const node = nodes.get(uid);
-  if (node) {
-    content.remove(node);
-    node.traverse((o) => {
-      if (o.isMesh && o.userData.ownMaterial) o.material.dispose();
-    });
-  }
-  nodes.delete(uid);
+  batch.remove(uid);
+  removeGizmo(uid);
   records.delete(uid);
   if (selected === uid) select(null);
 }
 
 function setRobots(list) {
   robots = list;
-  const before = new Map(jointKinds);
   jointKinds.clear();
   for (const r of list) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
   // A joint whose kind changed draws a different gizmo.
-  for (const [uid, kind] of jointKinds) {
-    if (before.get(uid) !== kind && records.has(uid)) rebuildNode(uid);
+  for (const uid of jointKinds.keys()) {
+    const rec = records.get(uid);
+    if (rec) setGizmo(rec);
   }
   renderRobots();
 }
@@ -269,15 +263,18 @@ function setRobots(list) {
 
 function onScene(data) {
   setStale(false);
-  for (const uid of [...records.keys()]) removeObject(uid);
-  for (const g of geometries.values()) {
-    g.geometry.dispose();
-    g.edges?.dispose();
-  }
-  geometries.clear();
+  for (const uid of [...gizmos.keys()]) removeGizmo(uid);
+  if (selected != null) select(null);
+  records.clear();
   jointKinds.clear();
   for (const r of data.robots) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
-  for (const [uid, mesh] of Object.entries(data.meshes)) geometries.set(Number(uid), buildGeometry(mesh));
+  const meshes = new Map();
+  for (const [uid, mesh] of Object.entries(data.meshes)) meshes.set(Number(uid), buildGeometry(mesh));
+  batch.reset(meshes, data.objects.length);
+  // The batch has its own copy of every vertex now.
+  for (const g of meshes.values()) g.dispose();
+  batch.mesh.layers.enable(PARTS);
+  content.add(batch.mesh);
   for (const rec of data.objects) applyObject(rec);
   setRobots(data.robots);
   renderTree();
@@ -287,20 +284,28 @@ function onScene(data) {
     framedOnce = true;
     requestAnimationFrame(() => frame(null, 'iso', false));
   }
+  fitShadows();
   toast(`장면을 받았습니다 · 물체 ${data.objects.length}개 · 로봇 ${data.robots.length}대`);
 }
 
 function onUpdate(data) {
+  if (!batch.mesh) return;
   for (const [uid, mesh] of Object.entries(data.meshes)) {
     const id = Number(uid);
-    if (geometries.has(id)) setMesh(id, mesh);
-    else geometries.set(id, buildGeometry(mesh));
+    const geometry = buildGeometry(mesh);
+    if (batch.hasGeometry(id)) batch.replaceGeometry(id, geometry);
+    else batch.addGeometry(id, geometry);
+    geometry.dispose();
   }
   let treeChanged = data.removed.length > 0;
   if (data.robots) {
     for (const r of data.robots) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
   }
-  for (const rec of data.objects) treeChanged = applyObject(rec) || treeChanged;
+  for (const rec of data.objects) {
+    // A part whose mesh just arrived is placed anew, not merely moved.
+    if (data.meshes[rec.mesh] !== undefined) batch.remove(rec.uid);
+    treeChanged = applyObject(rec) || treeChanged;
+  }
   for (const uid of data.removed) removeObject(uid);
   if (data.robots) setRobots(data.robots);
   if (treeChanged) renderTree();
@@ -533,20 +538,16 @@ document.getElementById('robots').addEventListener('dblclick', (e) => {
 // ---- selection --------------------------------------------------------------
 
 function highlight(uid, on) {
-  const node = nodes.get(uid);
-  if (!node) return;
-  node.traverse((o) => {
-    if (o.isMesh && o.userData.ownMaterial) {
-      o.material.emissive.copy(on ? ACCENT : new THREE.Color(0x000000));
-      o.material.emissiveIntensity = on ? 0.35 : 0;
-    }
-    if (o.userData.gizmo) o.scale.setScalar(on ? 1.5 : 1);
-  });
+  const rec = records.get(uid);
+  if (!rec) return;
+  batch.tint(uid, on ? colorOf(rec).lerp(ACCENT, 0.55) : null);
+  if (gizmos.has(uid)) setGizmo(rec);
 }
 
 function select(uid, { frame: andFrame = false } = {}) {
-  if (selected != null) highlight(selected, false);
+  const was = selected;
   selected = uid != null && records.has(uid) ? uid : null;
+  if (was != null) highlight(was, false);
   if (selected != null) highlight(selected, true);
   document.querySelectorAll('.node.selected, .joint.selected').forEach((n) => n.classList.remove('selected'));
   if (selected != null) {
@@ -588,8 +589,11 @@ canvas.addEventListener('pointerup', (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4 || e.button !== 0) return;
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-  const hits = ray.intersectObjects(content.children, true).filter((h) => h.object.isMesh && h.object.visible && h.object.userData.uid != null);
-  select(hits.length ? hits[0].object.userData.uid : null);
+  const targets = [...gizmos.values()].filter((g) => g.visible);
+  if (batch.mesh) targets.push(batch.mesh);
+  const uidOf = (h) => (h.batchId !== undefined ? batch.uidAt(h.batchId) : h.object.userData.uid);
+  const hit = ray.intersectObjects(targets, true).find((h) => uidOf(h) != null);
+  select(hit ? uidOf(hit) : null);
 });
 
 // ---- camera -----------------------------------------------------------------
@@ -602,19 +606,16 @@ const VIEWS = {
 };
 
 function bounds(uid) {
-  content.updateMatrixWorld(true);
   const box = new THREE.Box3();
-  const add = (node) => node.traverse((o) => {
-    if (o.isMesh && !o.userData.gizmo && o.parent?.visible !== false && o.parent?.parent?.visible !== false) box.expandByObject(o);
-  });
-  if (uid != null && nodes.has(uid)) {
-    add(nodes.get(uid));
-    if (box.isEmpty()) {
-      const p = new THREE.Vector3().setFromMatrixPosition(nodes.get(uid).matrixWorld);
+  if (uid != null && records.has(uid)) {
+    if (!batch.boxOf(uid, box)) {
+      // No geometry: a joint, a link, an empty — a small box where it is.
+      const p = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(records.get(uid).matrix));
       box.setFromCenterAndSize(p, new THREE.Vector3(0.3, 0.3, 0.3));
     }
   } else {
-    for (const n of nodes.values()) if (n.visible) add(n);
+    batch.boxAll(box);
+    for (const g of gizmos.values()) box.expandByPoint(new THREE.Vector3().setFromMatrixPosition(g.matrix));
   }
   if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(0, 0, 0.5), new THREE.Vector3(2, 2, 1));
   return box;
@@ -656,14 +657,10 @@ function setToggle(name, on) {
   view[name] = on;
   document.querySelector(`[data-toggle="${name}"]`)?.classList.toggle('on', on);
   if (name === 'grid') grid.visible = on;
-  for (const node of nodes.values()) {
-    node.traverse((o) => {
-      if (name === 'joints' && o.userData.gizmo) o.visible = on;
-      if (name === 'wire') {
-        if (o.isMesh && o.userData.ownMaterial) o.material.wireframe = on;
-        if (o.userData.edges) o.visible = !on;
-      }
-    });
+  if (name === 'joints') for (const [uid, g] of gizmos) g.visible = on && records.get(uid)?.visible !== false;
+  if (name === 'wire') {
+    surface.wireframe = on;
+    outline.enabled = !on;
   }
 }
 
@@ -741,6 +738,8 @@ function resize() {
   const w = host.clientWidth, h = host.clientHeight;
   if (!w || !h) return;
   renderer.setSize(w, h, false);
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  outline.setSize(size.x, size.y);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
@@ -757,7 +756,18 @@ renderer.setAnimationLoop(() => {
     if (t >= 1) flight = null;
   }
   controls.update();
+  // Counted over the whole frame — outline, shadows, scene and overlay —
+  // not just its last pass.
+  renderer.info.reset();
+  if (batch.mesh) {
+    // The shadow map once a frame, with the scene, not again for the
+    // outline's pass.
+    renderer.shadowMap.needsUpdate = false;
+    outline.prepare(renderer, scene, camera, PARTS);
+  }
+  renderer.shadowMap.needsUpdate = true;
   renderer.render(scene, camera);
+  if (batch.mesh) outline.draw(renderer);
 });
 
 fitShadows();
@@ -798,10 +808,7 @@ async function runBench(t) {
   times.sort((x, y) => x - y);
   const elapsed = performance.now() - start;
   const pct = (p) => times[Math.min(times.length - 1, Math.floor(times.length * p))];
-  let triangles = 0;
-  content.traverse((o) => {
-    if (o.isMesh && o.visible) triangles += o.geometry.attributes.position.count / 3;
-  });
+  const triangles = batch.triangles();
   const report = {
     gpu: gpuName(),
     user_agent: navigator.userAgent,

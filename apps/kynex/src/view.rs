@@ -121,7 +121,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
         if replaced {
             let model = Model::from_document(link.document());
-            server.reset(link.document(), &model);
+            server.reset(link.document());
             println!(
                 "장면을 받았습니다: 물체 {}개, 로봇 {}대",
                 model.bodies.len(),
@@ -129,8 +129,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             );
         }
         if let Some(changes) = changes {
-            let model = Model::from_document(link.document());
-            server.update(link.document(), &model, Some(&changes));
+            server.update(link.document(), Some(&changes));
         }
     }
 }
@@ -140,7 +139,7 @@ fn show_file(server: &Server, path: &str) -> Result<(), String> {
     let loaded = kreate_io::container::read(std::io::BufReader::new(file))
         .map_err(|e| format!("{path}: {e}"))?;
     let model = Model::from_document(&loaded.document);
-    server.reset(&loaded.document, &model);
+    server.reset(&loaded.document);
     server.status(&Status::File { path: path.into() });
     println!(
         "{path}: 물체 {}개, 로봇 {}대. Ctrl+C로 끝냅니다.",

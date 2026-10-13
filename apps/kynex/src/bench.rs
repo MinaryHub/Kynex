@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kreate_math::{DQuat, DVec3};
-use kreate_scene::{Document, Object, ObjectData, ObjectId};
+use kreate_scene::{Changes, DatablockKind, Document, Object, ObjectData, ObjectId};
 use kynex_model::Model;
 use kynex_view::{Server, Status, ViewState};
 use serde_json::{json, Value};
@@ -134,7 +134,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     }
     println!(
         "\n  model: 모델 재구성 · view: 뷰어 장면 구성 · scene: 첫 전송량 · update: 물체 1/100개 이동 시 뷰어 갱신 \
-         (모델 재구성 포함)\n  snapshot: 세션 참가 스냅샷 · idle tick: 협업 세션의 50ms 주기 비교 비용 · \
+         (세션 패치가 알려 준 물체만)\n  snapshot: 세션 참가 스냅샷 · idle tick: 협업 세션의 50ms 주기 비교 비용 · \
          patch×1: 물체 1개 이동 패치"
     );
 
@@ -253,19 +253,17 @@ fn measure(tier: &Tier, doc: &Document) -> Value {
         std::hint::black_box(Model::from_document(doc));
         ms(t.elapsed())
     });
-    let model = Model::from_document(doc);
-
     let mut scene_len = 0;
     let view_reset_ms = median(|| {
         let t = Instant::now();
         let mut view = ViewState::new();
-        view.reset(doc, &model);
+        view.reset(doc);
         scene_len = view.scene().len();
         ms(t.elapsed())
     });
 
-    // An update as the live link makes one: the model rebuilt, then the
-    // difference found and encoded.
+    // An update as the live link makes one: from what the session patch
+    // names, the parts it moved.
     let parts: Vec<ObjectId> = doc
         .objects()
         .filter(|(_, o)| o.mesh().is_some())
@@ -280,13 +278,13 @@ fn measure(tier: &Tier, doc: &Document) -> Value {
     };
     let update = |n: usize| -> (f64, u64) {
         let after = moved(n);
+        let named = named(doc, parts.iter().take(n));
         let mut size = 0u64;
         let t = median(|| {
             let mut view = ViewState::new();
-            view.reset(doc, &model);
+            view.reset(doc);
             let t = Instant::now();
-            let m = Model::from_document(&after);
-            let out = view.update(&after, &m, None).unwrap_or_default();
+            let out = view.update(&after, Some(&named)).unwrap_or_default();
             size = out.len() as u64;
             ms(t.elapsed())
         });
@@ -360,6 +358,17 @@ fn measure(tier: &Tier, doc: &Document) -> Value {
     })
 }
 
+/// What a session patch moving `parts` names.
+fn named<'a>(doc: &Document, parts: impl Iterator<Item = &'a ObjectId>) -> Changes {
+    let mut changes = Changes::default();
+    for id in parts {
+        if let Some(uid) = doc.object_uid(*id) {
+            changes.changed.insert((DatablockKind::Object, uid));
+        }
+    }
+    changes
+}
+
 // --- the browser ------------------------------------------------------------
 
 fn run_browser(docs: &[(Tier, Document)], port: u16) -> Result<Vec<Value>, String> {
@@ -376,8 +385,7 @@ fn run_browser(docs: &[(Tier, Document)], port: u16) -> Result<Vec<Value>, Strin
     let mut out = Vec::new();
     let mut opened = false;
     for (tier, doc) in docs {
-        let model = Model::from_document(doc);
-        server.reset(doc, &model);
+        server.reset(doc);
         if !opened {
             crate::view::open_browser(&url);
             opened = true;
@@ -391,6 +399,7 @@ fn run_browser(docs: &[(Tier, Document)], port: u16) -> Result<Vec<Value>, Strin
             .map(|(id, _)| id)
             .collect();
         let moving = (parts.len() / 100).clamp(1, 500);
+        let named = named(&live, parts.iter().take(moving));
         let started = Instant::now();
         let mut update_ms = Vec::new();
         let report = loop {
@@ -407,8 +416,7 @@ fn run_browser(docs: &[(Tier, Document)], port: u16) -> Result<Vec<Value>, Strin
                     o.transform.translation.z = 0.5 + 0.3 * (t * 2.0 + k as f64).sin();
                 }
                 let tick = Instant::now();
-                let m = Model::from_document(&live);
-                server.update(&live, &m, None);
+                server.update(&live, Some(&named));
                 update_ms.push(ms(tick.elapsed()));
             }
             std::thread::sleep(Duration::from_millis(50));

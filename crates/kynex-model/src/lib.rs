@@ -220,7 +220,7 @@ impl Model {
 }
 
 /// Every robot in `doc`: each link with no link above it is a root.
-fn robots(doc: &Document) -> Vec<Robot> {
+pub fn robots(doc: &Document) -> Vec<Robot> {
     let uid = |id: ObjectId| doc.object_uid(id).map(|u| u.raw());
     let mut children: BTreeMap<ObjectId, Vec<ObjectId>> = BTreeMap::new();
     for (id, object) in doc.objects() {

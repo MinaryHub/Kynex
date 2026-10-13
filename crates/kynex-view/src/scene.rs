@@ -6,16 +6,21 @@
 //! only when one changes — an arm being posed sends sixteen numbers per part,
 //! not its triangles.
 //!
+//! An edit is taken in by what it changed, not by looking at everything: the
+//! objects the session names and whatever hangs below them, since a parent's
+//! move moves them all. Looking at everything cost 80 ms an edit in a
+//! factory of 50,000 parts — a world transform, a matrix and a colour for
+//! each — when one part had moved.
+//!
 //! Positions are in metres with Z up, as Kreate keeps them; the viewer sets
 //! its camera up that way rather than turning the scene.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use kreate_math::DMat4;
 use kreate_mesh::MeshData;
 use kreate_scene::robot::RobotPart;
-use kreate_scene::{Changes, DatablockKind, Document, MeshId, ObjectData};
-use kynex_model::Model;
+use kreate_scene::{Changes, DatablockKind, Document, MeshId, ObjectData, ObjectId};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -60,8 +65,14 @@ impl ViewState {
     }
 
     /// Takes in a whole scene and forgets the old one.
-    pub fn reset(&mut self, doc: &Document, model: &Model) {
-        self.objects = drawn(doc);
+    pub fn reset(&mut self, doc: &Document) {
+        self.objects = doc
+            .objects()
+            .filter_map(|(id, _)| {
+                let uid = doc.object_uid(id)?.raw();
+                Some((uid, drawn(doc, id, uid)))
+            })
+            .collect();
         self.meshes.clear();
         let index = mesh_index(doc);
         for uid in referenced(&self.objects) {
@@ -69,19 +80,14 @@ impl ViewState {
                 self.meshes.insert(uid, mesh_json(mesh));
             }
         }
-        self.robots = crate::json::robots(model);
+        self.robots = robots(doc);
     }
 
     /// Everything, for a viewer that has just opened.
     pub fn scene(&self) -> String {
-        let mut out = String::from("{\"meshes\":{");
-        for (i, (uid, mesh)) in self.meshes.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&format!("\"{uid}\":{mesh}"));
-        }
-        out.push_str("},\"objects\":");
+        let mut out = String::from("{\"meshes\":");
+        push_meshes(&mut out, self.meshes.iter());
+        out.push_str(",\"objects\":");
         out.push_str(&serde_json::to_string(&self.objects.values().collect::<Vec<_>>()).unwrap());
         out.push_str(",\"robots\":");
         out.push_str(&self.robots.to_string());
@@ -90,25 +96,15 @@ impl ViewState {
     }
 
     /// Takes in an edit and returns what the viewers need to show it, or
-    /// `None` when nothing they draw changed. `changes` names the meshes
-    /// whose geometry was edited; without it, only new meshes are sent.
-    pub fn update(
-        &mut self,
-        doc: &Document,
-        model: &Model,
-        changes: Option<&Changes>,
-    ) -> Option<String> {
-        let now = drawn(doc);
-        let changed: Vec<&Drawn> = now
-            .iter()
-            .filter(|(uid, d)| self.objects.get(uid) != Some(*d))
-            .map(|(_, d)| d)
-            .collect();
-        let removed: Vec<u64> = self
-            .objects
-            .keys()
-            .filter(|uid| !now.contains_key(uid))
-            .copied()
+    /// `None` when nothing they draw changed.
+    ///
+    /// With `changes` — what a session patch names — only those objects and
+    /// what hangs below them are looked at. Without, everything is, which is
+    /// right but slow in a large scene.
+    pub fn update(&mut self, doc: &Document, changes: Option<&Changes>) -> Option<String> {
+        let index: HashMap<u64, ObjectId> = doc
+            .objects()
+            .filter_map(|(id, _)| Some((doc.object_uid(id)?.raw(), id)))
             .collect();
 
         let edited: BTreeSet<u64> = changes
@@ -120,96 +116,197 @@ impl ViewState {
                     .collect()
             })
             .unwrap_or_default();
-        let wanted = referenced(&now);
+
+        // A material can colour any object, and the settings anything: those
+        // are looked at whole. They are rare beside moves.
+        let whole = changes.is_none_or(|c| {
+            c.settings
+                || c.changed
+                    .iter()
+                    .any(|(kind, _)| !matches!(kind, DatablockKind::Object | DatablockKind::Mesh))
+        });
+        let mut removed: BTreeSet<u64> = BTreeSet::new();
+        let candidates: Vec<u64> = if whole {
+            removed.extend(self.objects.keys().filter(|u| !index.contains_key(u)));
+            index.keys().copied().collect()
+        } else {
+            let c = changes.unwrap();
+            removed.extend(c.removed.iter().map(|u| u.raw()));
+            let named: Vec<u64> = c
+                .changed
+                .iter()
+                .filter(|(kind, _)| *kind == DatablockKind::Object)
+                .map(|(_, uid)| uid.raw())
+                // Objects showing an edited mesh: their slots may colour them.
+                .chain(
+                    self.objects
+                        .values()
+                        .filter(|d| d.mesh.is_some_and(|m| edited.contains(&m)))
+                        .map(|d| d.uid),
+                )
+                .collect();
+            below(doc, &index, &named)
+        };
+
+        let mut changed = Vec::new();
+        let mut robots_touched = whole;
+        for uid in candidates {
+            let Some(&id) = index.get(&uid) else {
+                removed.insert(uid);
+                continue;
+            };
+            robots_touched |= doc.object(id).is_some_and(|o| o.robot.is_some());
+            let now = drawn(doc, id, uid);
+            if self.objects.get(&uid) != Some(&now) {
+                self.objects.insert(uid, now.clone());
+                changed.push(now);
+            }
+        }
+        removed.retain(|uid| !index.contains_key(uid));
+        for uid in &removed {
+            if let Some(gone) = self.objects.remove(uid) {
+                robots_touched |= gone.role.is_some();
+            }
+        }
+
+        // Meshes: an edited one again, a newly shown one for the first time,
+        // and one nothing shows any more let go.
         let mut meshes = BTreeMap::new();
-        let mut index = None;
-        for uid in &wanted {
-            if edited.contains(uid) || !self.meshes.contains_key(uid) {
-                let index = index.get_or_insert_with(|| mesh_index(doc));
-                if let Some(mesh) = index.get(uid).and_then(|id| doc.mesh(*id)) {
+        let wanted: BTreeSet<u64> = changed
+            .iter()
+            .filter_map(|d| d.mesh)
+            .filter(|m| edited.contains(m) || !self.meshes.contains_key(m))
+            .chain(
+                edited
+                    .iter()
+                    .copied()
+                    .filter(|m| self.meshes.contains_key(m)),
+            )
+            .collect();
+        if !wanted.is_empty() {
+            let index = mesh_index(doc);
+            for uid in wanted {
+                if let Some(mesh) = index.get(&uid).and_then(|id| doc.mesh(*id)) {
                     let encoded = mesh_json(mesh);
-                    meshes.insert(*uid, encoded.clone());
-                    self.meshes.insert(*uid, encoded);
+                    meshes.insert(uid, encoded.clone());
+                    self.meshes.insert(uid, encoded);
                 }
             }
         }
-        self.meshes.retain(|uid, _| wanted.contains(uid));
+        if !removed.is_empty() || changed.iter().any(|d| d.mesh.is_some()) {
+            let shown = referenced(&self.objects);
+            self.meshes.retain(|uid, _| shown.contains(uid));
+        }
 
-        let robots = crate::json::robots(model);
-        let robots_changed = robots != self.robots;
+        let mut robots_changed = false;
+        if robots_touched {
+            let now = robots(doc);
+            if now != self.robots {
+                self.robots = now;
+                robots_changed = true;
+            }
+        }
         if changed.is_empty() && removed.is_empty() && meshes.is_empty() && !robots_changed {
             return None;
         }
 
-        let mut out = String::from("{\"meshes\":{");
-        for (i, (uid, mesh)) in meshes.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&format!("\"{uid}\":{mesh}"));
-        }
-        out.push_str("},\"objects\":");
+        let mut out = String::from("{\"meshes\":");
+        push_meshes(&mut out, meshes.iter());
+        out.push_str(",\"objects\":");
         out.push_str(&serde_json::to_string(&changed).unwrap());
         out.push_str(",\"removed\":");
         out.push_str(&serde_json::to_string(&removed).unwrap());
         if robots_changed {
             out.push_str(",\"robots\":");
-            out.push_str(&robots.to_string());
+            out.push_str(&self.robots.to_string());
         }
         out.push('}');
-
-        self.objects = now;
-        self.robots = robots;
         Some(out)
     }
 }
 
-fn drawn(doc: &Document) -> BTreeMap<u64, Drawn> {
-    let mut out = BTreeMap::new();
+/// `named` and everything below them in the hierarchy, each once.
+fn below(doc: &Document, index: &HashMap<u64, ObjectId>, named: &[u64]) -> Vec<u64> {
+    let mut children: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
     for (id, object) in doc.objects() {
-        let Some(uid) = doc.object_uid(id).map(|u| u.raw()) else {
-            continue;
-        };
-        let (kind, mesh) = match object.data {
-            ObjectData::Empty => ("empty", None),
-            ObjectData::Mesh(m) => ("mesh", doc.mesh_uid(m).map(|u| u.raw())),
-            ObjectData::Camera(_) => ("camera", None),
-            ObjectData::Light(_) => ("light", None),
-            ObjectData::Armature(_) => ("armature", None),
-        };
-        let color = doc.material_at(id, 0).map(|m| {
-            let c = m.base_color;
-            [c.r, c.g, c.b]
-        });
-        let role = object.robot.as_ref().map(|part| match part {
-            RobotPart::Link { .. } => "link",
-            RobotPart::Joint(_) => "joint",
-            RobotPart::Collision => "collision",
-            RobotPart::Rig { .. } => "rig",
-        });
-        out.insert(
-            uid,
-            Drawn {
-                uid,
-                name: object.name.clone(),
-                parent: object
-                    .parent
-                    .and_then(|p| doc.object_uid(p))
-                    .map(|u| u.raw()),
-                kind,
-                mesh,
-                matrix: DMat4::from(doc.world_transform(id)).to_cols_array(),
-                color,
-                visible: object.visible,
-                role,
-            },
-        );
+        if let Some(parent) = object.parent {
+            children.entry(parent).or_default().push(id);
+        }
     }
-    out
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<u64> = named.to_vec();
+    while let Some(uid) = stack.pop() {
+        if !seen.insert(uid) {
+            continue;
+        }
+        if let Some(kids) = index.get(&uid).and_then(|id| children.get(id)) {
+            stack.extend(
+                kids.iter()
+                    .filter_map(|k| doc.object_uid(*k))
+                    .map(|u| u.raw()),
+            );
+        }
+    }
+    seen.into_iter().collect()
+}
+
+fn drawn(doc: &Document, id: ObjectId, uid: u64) -> Drawn {
+    let object = doc.object(id).expect("an object the document listed");
+    let (kind, mesh) = match object.data {
+        ObjectData::Empty => ("empty", None),
+        ObjectData::Mesh(m) => ("mesh", doc.mesh_uid(m).map(|u| u.raw())),
+        ObjectData::Camera(_) => ("camera", None),
+        ObjectData::Light(_) => ("light", None),
+        ObjectData::Armature(_) => ("armature", None),
+    };
+    let color = doc.material_at(id, 0).map(|m| {
+        let c = m.base_color;
+        [c.r, c.g, c.b]
+    });
+    let role = object.robot.as_ref().map(|part| match part {
+        RobotPart::Link { .. } => "link",
+        RobotPart::Joint(_) => "joint",
+        RobotPart::Collision => "collision",
+        RobotPart::Rig { .. } => "rig",
+    });
+    Drawn {
+        uid,
+        name: object.name.clone(),
+        parent: object
+            .parent
+            .and_then(|p| doc.object_uid(p))
+            .map(|u| u.raw()),
+        kind,
+        mesh,
+        matrix: DMat4::from(doc.world_transform(id)).to_cols_array(),
+        color,
+        visible: object.visible,
+        role,
+    }
+}
+
+fn robots(doc: &Document) -> Value {
+    Value::Array(
+        kynex_model::robots(doc)
+            .iter()
+            .map(crate::json::robot)
+            .collect(),
+    )
 }
 
 fn referenced(objects: &BTreeMap<u64, Drawn>) -> BTreeSet<u64> {
     objects.values().filter_map(|d| d.mesh).collect()
+}
+
+fn push_meshes<'a>(out: &mut String, meshes: impl Iterator<Item = (&'a u64, &'a String)>) {
+    out.push('{');
+    for (i, (uid, mesh)) in meshes.enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("\"{uid}\":{mesh}"));
+    }
+    out.push('}');
 }
 
 /// Every mesh by identity, made once: `Document::mesh_by_uid` looks through
@@ -252,23 +349,26 @@ mod tests {
         serde_json::from_str(s).unwrap()
     }
 
+    fn moved(uid: Uid) -> Changes {
+        let mut c = Changes::default();
+        c.changed.insert((DatablockKind::Object, uid));
+        c
+    }
+
     #[test]
     fn a_scene_is_sent_whole_then_by_the_edit() {
         let mut doc = Document::new();
         let cube = doc.add_mesh_object("Cube", kreate_mesh::primitives::cube(2.0));
         let mut view = ViewState::new();
-        view.reset(&doc, &Model::from_document(&doc));
+        view.reset(&doc);
         let scene = parse(&view.scene());
         assert_eq!(scene["objects"].as_array().unwrap().len(), 1);
         assert_eq!(scene["meshes"].as_object().unwrap().len(), 1);
 
         // Moving it sends its matrix and not its mesh again.
         doc.object_mut(cube).unwrap().transform.translation.x = 3.0;
-        let update = parse(
-            &view
-                .update(&doc, &Model::from_document(&doc), Some(&Changes::default()))
-                .unwrap(),
-        );
+        let uid = doc.object_uid(cube).unwrap();
+        let update = parse(&view.update(&doc, Some(&moved(uid))).unwrap());
         assert_eq!(update["meshes"].as_object().unwrap().len(), 0);
         assert_eq!(update["objects"][0]["matrix"][12], 3.0);
 
@@ -278,29 +378,51 @@ mod tests {
             .unwrap();
         let mut changes = Changes::default();
         changes.changed.insert((DatablockKind::Mesh, mesh_uid));
-        let update = parse(
-            &view
-                .update(&doc, &Model::from_document(&doc), Some(&changes))
-                .unwrap(),
-        );
+        let update = parse(&view.update(&doc, Some(&changes)).unwrap());
         assert_eq!(update["meshes"].as_object().unwrap().len(), 1);
 
-        // Nothing changed is nothing to send.
-        assert!(view
-            .update(&doc, &Model::from_document(&doc), None)
-            .is_none());
+        // Nothing changed is nothing to send, looked at either way.
+        assert!(view.update(&doc, None).is_none());
+        assert!(view.update(&doc, Some(&moved(uid))).is_none());
 
         // Deleting it says so, and its mesh is let go.
-        let uid = doc.object_uid(cube).unwrap();
         doc.remove_object(cube);
-        let update = parse(
-            &view
-                .update(&doc, &Model::from_document(&doc), None)
-                .unwrap(),
-        );
+        let mut gone = Changes::default();
+        gone.removed.insert(uid);
+        let update = parse(&view.update(&doc, Some(&gone)).unwrap());
         assert_eq!(update["removed"][0], uid.raw());
         assert_eq!(parse(&view.scene())["meshes"].as_object().unwrap().len(), 0);
-        let _ = Uid::NONE;
+    }
+
+    #[test]
+    fn a_parent_moved_moves_what_hangs_below_it() {
+        let mut doc = Document::new();
+        let station = doc.add_object(kreate_scene::Object::new("Station", ObjectData::Empty));
+        let part = doc.add_mesh_object("Part", kreate_mesh::primitives::cube(1.0));
+        let deeper = doc.add_mesh_object("Bolt", kreate_mesh::primitives::cube(0.1));
+        doc.set_parent(part, Some(station)).unwrap();
+        doc.set_parent(deeper, Some(part)).unwrap();
+        let other = doc.add_mesh_object("Elsewhere", kreate_mesh::primitives::cube(1.0));
+        let mut view = ViewState::new();
+        view.reset(&doc);
+
+        // Only the station is named; both parts below it move with it.
+        doc.object_mut(station).unwrap().transform.translation.y = 4.0;
+        let uid = doc.object_uid(station).unwrap();
+        let update = parse(&view.update(&doc, Some(&moved(uid))).unwrap());
+        let names: BTreeSet<&str> = update["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, BTreeSet::from(["Station", "Part", "Bolt"]));
+        let _ = other;
+
+        // And the incremental answer is the whole one.
+        let mut fresh = ViewState::new();
+        fresh.reset(&doc);
+        assert_eq!(view.scene(), fresh.scene());
     }
 
     #[test]

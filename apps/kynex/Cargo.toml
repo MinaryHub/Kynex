@@ -1,0 +1,16 @@
+[package]
+name = "kynex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+kynex-model.workspace = true
+kynex-link.workspace = true
+kynex-view.workspace = true
+kreate-scene.workspace = true
+kreate-io.workspace = true
+kreate-math.workspace = true
+kreate-mesh.workspace = true
+serde_json.workspace = true

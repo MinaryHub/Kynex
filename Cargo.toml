@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kynex-model",
+    "crates/kynex-link",
+    "crates/kynex-view",
+    "apps/kynex",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+
+# Kreate's scene, file format and shared-session protocol, from its own
+# repository, at one commit. KYNEX reads the same `Document` Kreate edits, so
+# a joint, a mass or a collision shape means one thing on both sides —
+# nothing is translated on the way, nothing can drift.
+#
+# Pinned so a change in progress in Kreate cannot break this build. To build
+# against a Kreate checkout beside this one instead (while changing both),
+# see `.cargo/kreate-local.toml`.
+[workspace.dependencies]
+kynex-model   = { path = "crates/kynex-model" }
+kynex-link    = { path = "crates/kynex-link" }
+kynex-view    = { path = "crates/kynex-view" }
+kreate-scene  = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
+kreate-io     = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
+kreate-math   = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
+kreate-mesh   = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
+kreate-collab = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
+
+serde      = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false

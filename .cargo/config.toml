@@ -1,0 +1,4 @@
+# Kreate is a private repository: fetch it with the git command line, which
+# uses the credentials this machine already has (Git Credential Manager, gh).
+[net]
+git-fetch-with-cli = true

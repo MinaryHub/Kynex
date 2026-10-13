@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KYNEX Viewer</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script type="importmap">
+{ "imports": { "three": "/vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<header class="bar">
+  <button class="icon-btn only-narrow" id="toggle-tree" aria-label="장면 트리" title="장면 트리">
+    <svg viewBox="0 0 20 20"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
+  </button>
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16M4 12l9-8M4 12l9 8M14 12h6"/></svg>
+    <span class="brand-name">KYNEX</span>
+    <span class="brand-sub">Viewer</span>
+  </div>
+  <div class="status" id="status" data-state="connecting">
+    <span class="dot"></span>
+    <span class="status-text" id="status-text">KYNEX에 연결하는 중…</span>
+  </div>
+  <div class="bar-right">
+    <span class="pulse" id="pulse" title="마지막 갱신"></span>
+    <span class="updated" id="updated">—</span>
+    <button class="icon-btn only-narrow" id="toggle-robots" aria-label="로봇" title="로봇">
+      <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2v3M10 15v3M2 10h3M15 10h3"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="panel left" id="tree-panel">
+    <div class="panel-head">
+      <h2>장면</h2>
+      <span class="count" id="object-count">0</span>
+    </div>
+    <div class="search">
+      <input id="search" type="search" placeholder="이름으로 찾기" autocomplete="off" spellcheck="false">
+    </div>
+    <ul class="tree" id="tree" role="tree"></ul>
+  </aside>
+
+  <section class="viewport" id="viewport">
+    <canvas id="canvas"></canvas>
+
+    <div class="empty" id="empty">
+      <div class="empty-card">
+        <h1 id="empty-title">Kreate 세션을 기다리는 중</h1>
+        <p id="empty-body">Kreate에서 <b>파일 ▸ 공동 편집 세션 ▸ 이 장면으로 세션 열기</b>를 누르면 장면이 여기에 나타납니다.</p>
+      </div>
+    </div>
+
+    <div class="toolbar" role="toolbar" aria-label="보기">
+      <button data-action="frame" title="화면 맞춤 (F)"><svg viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/></svg></button>
+      <span class="sep"></span>
+      <button data-view="iso" title="등각 (0)">ISO</button>
+      <button data-view="top" title="위 (7)">위</button>
+      <button data-view="front" title="앞 (1)">앞</button>
+      <button data-view="right" title="오른쪽 (3)">옆</button>
+      <span class="sep"></span>
+      <button data-toggle="joints" class="on" title="관절·링크 표시 (J)"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v4M10 13.5v4"/></svg></button>
+      <button data-toggle="wire" title="와이어프레임 (W)"><svg viewBox="0 0 20 20"><path d="M3 6l7-3 7 3v8l-7 3-7-3zM3 6l7 3 7-3M10 9v8"/></svg></button>
+      <button data-toggle="grid" class="on" title="그리드 (G)"><svg viewBox="0 0 20 20"><path d="M3 3h14v14H3zM3 8h14M3 12.5h14M8 3v14M12.5 3v14"/></svg></button>
+    </div>
+
+    <div class="inspector" id="inspector" hidden>
+      <div class="insp-head">
+        <span class="insp-kind" id="insp-kind"></span>
+        <span class="insp-name" id="insp-name"></span>
+        <button class="icon-btn small" id="insp-close" aria-label="선택 해제"><svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
+      </div>
+      <dl class="insp-grid">
+        <dt>위치 (mm)</dt><dd id="insp-pos" class="num"></dd>
+        <dt>회전 (°)</dt><dd id="insp-rot" class="num"></dd>
+        <dt>부모</dt><dd id="insp-parent"></dd>
+      </dl>
+    </div>
+
+    <div class="stale" id="stale" role="status" hidden>
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l8 14H2zM10 8v4M10 14.5v.5"/></svg>
+      <span id="stale-text">연결이 끊겼습니다 · 마지막으로 받은 장면입니다</span>
+    </div>
+
+    <div class="hint" id="hint">드래그: 회전 · 오른쪽 드래그: 이동 · 휠: 확대</div>
+  </section>
+
+  <aside class="panel right" id="robot-panel">
+    <div class="panel-head">
+      <h2>로봇</h2>
+      <span class="count" id="robot-count">0</span>
+    </div>
+    <div class="robots" id="robots">
+      <p class="muted pad">장면에 로봇이 없습니다. Kreate에서 URDF를 불러오면 관절이 여기에 나타납니다.</p>
+    </div>
+  </aside>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

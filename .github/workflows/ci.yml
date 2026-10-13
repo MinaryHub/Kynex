@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  check:
+    name: fmt / clippy / test
+    strategy:
+      fail-fast: false
+      # The viewer is meant to run anywhere: so is the server behind it.
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Kreate is private: a fine-grained token with read access to its
+      # contents, stored as the KREATE_TOKEN secret, lets the git CLI fetch it.
+      - name: Access to Kreate
+        shell: bash
+        run: git config --global url."https://x-access-token:${{ secrets.KREATE_TOKEN }}@github.com/knoxxr/Kreate".insteadOf "https://github.com/knoxxr/Kreate"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace

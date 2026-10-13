@@ -1,0 +1,14 @@
+# Builds KYNEX against the Kreate checkout beside this one instead of the
+# pinned commit — for changing both at once (docs/kreate-change-requests.md):
+#
+#     cargo --config .cargo/kreate-local.toml test --workspace
+#
+# This rewrites Cargo.lock to the local paths: run a plain `cargo build` before
+# committing so the lock names the pinned commit again. When the Kreate change
+# is pushed, move `rev` in Cargo.toml to it.
+[patch."https://github.com/knoxxr/Kreate.git"]
+kreate-scene  = { path = "../Kreate/crates/kreate-scene" }
+kreate-io     = { path = "../Kreate/crates/kreate-io" }
+kreate-math   = { path = "../Kreate/crates/kreate-math" }
+kreate-mesh   = { path = "../Kreate/crates/kreate-mesh" }
+kreate-collab = { path = "../Kreate/crates/kreate-collab" }

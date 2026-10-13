@@ -1,0 +1,2 @@
+# One line ending on every system, so a checkout on Windows matches CI on Linux.
+* text=auto eol=lf

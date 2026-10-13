@@ -1,0 +1,5 @@
+/target
+**/*.rs.bk
+.playwright-mcp/
+# Benchmark results: written per run, kept out of history.
+/bench-results/

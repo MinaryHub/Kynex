@@ -3,6 +3,9 @@
 .playwright-mcp/
 # Benchmark results: written per run, kept out of history.
 /bench-results/
-# Programs `kynex view` keeps by default in the directory it runs in.
+# The project `kynex view` keeps by default in the directory it runs in
+# (and the programs file it replaced).
+/kynex-project.json
+/kynex-project.json.new
 /kynex-programs.json
 /kynex-programs.json.new

@@ -41,6 +41,13 @@ pub struct Posing {
     saved: BTreeMap<u64, Value>,
 }
 
+/// What the project file holds besides programs, as saved.
+#[derive(Debug, Default)]
+pub struct Project {
+    pub cell: Vec<Value>,
+    pub library: Vec<Value>,
+}
+
 /// A program being played: the robot shown follows its plan by the clock.
 #[derive(Debug)]
 struct Playback {
@@ -58,23 +65,33 @@ struct Playback {
 }
 
 impl Posing {
-    /// Programs kept in `file`: read from it now, if it is there, and
-    /// written to it whenever they change.
-    pub fn with_file(file: &Path) -> Result<Self, String> {
-        let pending = match std::fs::read_to_string(file) {
+    /// Programs kept in the project file `file`: read now from `from` —
+    /// the same file, or an older one to carry over — and written to `file`
+    /// whenever they change. Also returns the rest of what the file held:
+    /// the cell's roles and the placed equipment.
+    pub fn with_file(from: &Path, file: &Path) -> Result<(Self, Project), String> {
+        let (pending, project) = match std::fs::read_to_string(from) {
             Ok(text) => {
                 let all: Value =
-                    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
-                all["programs"].as_array().cloned().unwrap_or_default()
+                    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", from.display()))?;
+                let list = |key: &str| all[key].as_array().cloned().unwrap_or_default();
+                (
+                    list("programs"),
+                    Project {
+                        cell: list("cell"),
+                        library: list("library"),
+                    },
+                )
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(format!("{}: {e}", file.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), Project::default()),
+            Err(e) => return Err(format!("{}: {e}", from.display())),
         };
-        Ok(Self {
+        let posing = Self {
             file: Some(file.to_path_buf()),
             pending,
             ..Self::default()
-        })
+        };
+        Ok((posing, project))
     }
 
     /// How many programs the file held that are waiting for their robot.
@@ -102,9 +119,10 @@ impl Posing {
         self.pending = waiting;
     }
 
-    /// Writes every program to the file, if there is one: whole, to a file
-    /// beside it first, so a crash midway leaves the old one.
-    pub fn save(&mut self, doc: &Document) -> Result<(), String> {
+    /// Writes every program, and the rest of the project, to the project
+    /// file, if there is one: whole, to a file beside it first, so a crash
+    /// midway leaves the old one.
+    pub fn save(&mut self, doc: &Document, rest: Project) -> Result<(), String> {
         let Some(file) = &self.file else {
             return Ok(());
         };
@@ -119,6 +137,8 @@ impl Posing {
         let text = serde_json::to_string_pretty(&json!({
             "version": program::FILE_VERSION,
             "programs": programs,
+            "cell": rest.cell,
+            "library": rest.library,
         }))
         .expect("programs serialise");
         let next = file.with_extension("json.new");
@@ -781,16 +801,16 @@ mod tests {
     fn programs_are_kept_in_their_file_between_runs() {
         let file = TempFile::new("programs");
         let (doc, base, joint, tip) = arm();
-        let mut p = Posing::with_file(&file.0).unwrap();
+        let mut p = Posing::with_file(&file.0, &file.0).unwrap().0;
         assert_eq!(p.pending(), 0, "no file yet");
         teach_two(&mut p, &doc, base, joint, tip);
         assert!(p.take_programs_changed());
-        p.save(&doc).unwrap();
+        p.save(&doc, Project::default()).unwrap();
         let before: Value =
             serde_json::from_str(&p.programs_json(&doc, &mut Collider::default())).unwrap();
 
         // The next run reads it, and takes it on once its robot is there.
-        let mut again = Posing::with_file(&file.0).unwrap();
+        let mut again = Posing::with_file(&file.0, &file.0).unwrap().0;
         assert_eq!(again.pending(), 1);
         again.adopt(&Document::new());
         assert_eq!(again.pending(), 1, "no robot, still waiting");
@@ -815,9 +835,9 @@ mod tests {
     fn a_saved_program_finds_its_robot_by_name_in_a_scene_built_anew() {
         let file = TempFile::new("renumbered");
         let (doc, base, joint, tip) = arm();
-        let mut p = Posing::with_file(&file.0).unwrap();
+        let mut p = Posing::with_file(&file.0, &file.0).unwrap().0;
         teach_two(&mut p, &doc, base, joint, tip);
-        p.save(&doc).unwrap();
+        p.save(&doc, Project::default()).unwrap();
 
         // The same robot, every object numbered differently.
         let mut other = Document::new();
@@ -825,7 +845,7 @@ mod tests {
         other.add_object(Object::new("Fence", ObjectData::Empty));
         let (other, base2, joint2, _) = arm_in(other);
         assert_ne!(base, base2);
-        let mut again = Posing::with_file(&file.0).unwrap();
+        let mut again = Posing::with_file(&file.0, &file.0).unwrap().0;
         again.adopt(&other);
         let programs: Value =
             serde_json::from_str(&again.programs_json(&other, &mut Collider::default())).unwrap();

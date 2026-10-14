@@ -154,7 +154,13 @@ impl Collider {
     /// visible mesh that is no robot's, and the robots' colliding parts.
     /// Only those whose boxes reach the region: a factory's far stations
     /// are not looked at past their boxes.
-    fn obstacles(&mut self, doc: &Document, robots: &[Robot], region: Aabb) -> Obstacles {
+    fn obstacles(
+        &mut self,
+        doc: &Document,
+        robots: &[Robot],
+        region: Aabb,
+        ignore: &HashSet<u64>,
+    ) -> Obstacles {
         let mut in_robot: HashSet<u64> = HashSet::new();
         let mut colliding: HashSet<u64> = HashSet::new();
         for robot in robots {
@@ -177,7 +183,7 @@ impl Collider {
             } else {
                 object.visible
             };
-            if !wanted {
+            if !wanted || ignore.contains(&uid) {
                 continue;
             }
             let Some(shape) = self.shape(doc, object) else {
@@ -195,8 +201,9 @@ impl Collider {
         Obstacles::new(bodies)
     }
 
-    /// Every contact of a robot's part in `doc` as it stands.
-    pub fn contacts(&mut self, doc: &Document) -> Vec<Contact> {
+    /// Every contact of a robot's part in `doc` as it stands, but with what
+    /// `ignore` names: parts a gripper holds, which move as its own.
+    pub fn contacts(&mut self, doc: &Document, ignore: &HashSet<u64>) -> Vec<Contact> {
         let robots = self.robots(doc);
         if robots.is_empty() {
             return Vec::new();
@@ -206,7 +213,7 @@ impl Collider {
             .iter()
             .flatten()
             .fold(Aabb::EMPTY, |b, (part, _)| b.union(part.bounds()));
-        let obstacles = self.obstacles(doc, &robots, region);
+        let obstacles = self.obstacles(doc, &robots, region, ignore);
         let mut out = Vec::new();
         for (robot, parts) in robots.iter().zip(&posed) {
             let own: HashSet<u64> = robot.kin.uids().collect();
@@ -254,7 +261,7 @@ impl Collider {
             .flat_map(|(_, parts)| parts)
             .fold(Aabb::EMPTY, |b, (part, _)| b.union(part.bounds()));
         let own: HashSet<u64> = robot.kin.uids().collect();
-        let obstacles = self.obstacles(doc, &robots, region);
+        let obstacles = self.obstacles(doc, &robots, region, &HashSet::new());
         samples
             .iter()
             .map(|seg| {
@@ -426,12 +433,12 @@ mod tests {
         let mut collider = Collider::default();
         // The base's block and the arm overlap at the joint: never reported.
         assert!(
-            collider.contacts(&doc).is_empty(),
+            collider.contacts(&doc, &HashSet::new()).is_empty(),
             "{:?}",
-            collider.contacts(&doc)
+            collider.contacts(&doc, &HashSet::new())
         );
         let into = turned(&doc, root, std::f64::consts::FRAC_PI_2);
-        let found = collider.contacts(&into);
+        let found = collider.contacts(&into, &HashSet::new());
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].robot, root);
         assert_eq!(label(&into, found[0].part), "arm");

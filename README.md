@@ -126,8 +126,10 @@ KYNEX times the moves (`kynex_kin::path`):
   pose (⟳) or delete it (✕). Its J/L chip switches it between MoveJ and
   MoveL.
 
-Programs are saved to `kynex-programs.json` in the directory `kynex view`
-runs in. Use `--programs FILE` to keep them somewhere else. Every change
+Programs, and the cell's roles (below), are saved to the project file
+`kynex-project.json` in the directory `kynex view` runs in. Use
+`--project FILE` to keep them somewhere else. An older
+`kynex-programs.json` is read once if no project file exists yet. Every change
 is written straight away. A program records its robot, joints and tool by
 identity and by name. When Kreate builds the scene again and numbers the
 objects anew, the program finds them again by name.
@@ -144,6 +146,71 @@ with six revolute joints.
   on, the rest runs in a `while (True):` loop.
 - The controller times moves in its own way, so a cycle on the robot is
   close to the planned cycle, but not equal to it.
+
+### The library: placing equipment
+
+The **라이브러리** tab, beside the scene tree, lists equipment to place
+(`apps/kynex/src/library.rs`):
+
+- 로봇: UR10e + 이중 그리퍼, UR5e.
+- 공작기계: CNC 선반.
+- 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대.
+- 안전: 안전 펜스.
+
+Drag an entry onto the scene, or click it and then click the scene. It
+lands on the floor, or on top of whatever is under the pointer (a robot
+on its pedestal). A CNC machine is turned so its door faces the origin.
+Select a placed item, here or in the scene, to set its position, turn
+and sizes in the inspector, or to move it with a handle (`R` turns it,
+`T` moves it). Sizes change the item's shape, and the item keeps its
+identities when they do.
+
+Equipment comes with its roles. A CNC machine is a CNC to the cell, a
+pallet table's plate is a pallet, and a tending robot's grip points are
+grippers. Placed equipment is KYNEX's own: it is added to the scene KYNEX
+shows, under identities Kreate never issues (`0xFFFE << 48` on), and kept
+in the project file. `kynex view --empty` lays out a cell with no Kreate
+session at all.
+
+### The cell: machines, pallets, grippers, parts
+
+For a machine-tending cell, KYNEX keeps what each object is to the process
+(`apps/kynex/src/cell.rs`). It stores this in the project file and does
+not change the session's scene.
+
+- **Roles**: select an object, then pick its role under **셀 역할** in the
+  inspector:
+  - CNC 장비: the object whose children include its door and chuck.
+  - 투입 팔레트 / 배출 팔레트: pallets.
+  - 그리퍼: a grip point on a robot link.
+  - 안전 펜스: a safety fence.
+
+  Settings start at industry-typical values (docs/roadmap-vs-visual-components.md
+  §4): 90 s machining, 3 s door, 1 s chuck, 5 × 4 places 100 mm apart, and
+  0.5 s grip. **셀 자동 구성** sets roles from names. A CNC machine is the
+  lowest object with a `…door…` and a `…chuck…` below it. Pallets are
+  named `infeed` and `outfeed` (`투입`, `배출`). Grip points are robot links
+  named `grip…` with no link below them.
+- **Parts**: **소재 채우기** puts a raw part (Ø60 × 80 mm) on every free place
+  of a pallet. Parts are KYNEX's own objects in the scene it shows. Their
+  identities come from a range Kreate never issues (`0xFFFF << 48` on), so
+  they keep their identities whenever the scene is rebuilt.
+- **Gripping**: the robot card lists its grip points with **잡기** and
+  **놓기**, and the TCP can be any of them. **잡기** takes the part within
+  20 mm of the grip point. The part then moves with the gripper and is not
+  counted as a collision. **놓기** sets the part into a free pallet place or
+  chuck within 30 mm, or leaves it where it is.
+- **CNC machines run**: in the inspector of a CNC machine:
+  - **문 열기/닫기** slides its door aside over the door time.
+  - **척 물림/풀기** clamps the chuck. A clamped part cannot be gripped.
+  - **가공 시작** runs the cycle, only with the door shut and a raw part
+    clamped. When the cycle time is up, the part in the chuck is finished.
+
+  The door, the chuck, the part in the chuck and the cycle's progress
+  are shown as they change.
+- The demo cell (`cargo run -p kynex-link --example cnc_cell`) has a UR10e
+  with a double gripper on a pedestal, two CNC machines, an infeed and an
+  outfeed pallet, and a fence.
 
 ### Collisions
 
@@ -192,7 +259,8 @@ bodies. That way, a page on another site cannot post a pose without
 first asking the browser for permission, and this server never grants
 it.
 
-To try the viewer without Kreate, start a demo session. It hosts a
+To try the viewer without Kreate, start a demo session. `demo_session` has
+a robot on a track and a UR5e; `cnc_cell` has the machine-tending cell. It hosts a
 Kreate-compatible session with a robot on a linear track that keeps moving:
 
 ```

@@ -355,10 +355,10 @@ fn measure(tier: &Tier, doc: &Document) -> Value {
     // first change: with no robot, and with an arm among the parts.
     let contacts = |doc: &Document| {
         let mut collider = crate::collide::Collider::default();
-        collider.contacts(doc);
+        collider.contacts(doc, &Default::default());
         median(|| {
             let t = Instant::now();
-            std::hint::black_box(collider.contacts(doc));
+            std::hint::black_box(collider.contacts(doc, &Default::default()));
             ms(t.elapsed())
         })
     };

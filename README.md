@@ -293,7 +293,8 @@ the standard digital I/O, 8–15 the configurable, 16–17 the tool's).
   take what KYNEX plans to within a few percent (`tools/ursim`):
 
   ```
-  docker run -d --rm --name kynex-ursim -e ROBOT_MODEL=UR10       -p 30001-30004:30001-30004 -p 29999:29999 universalrobots/ursim_e-series
+  docker run -d --rm --name kynex-ursim -e ROBOT_MODEL=UR10 \
+      -p 30001-30004:30001-30004 -p 29999:29999 universalrobots/ursim_e-series
   cargo test -p kynex ursim_program -- --ignored
   python tools/ursim/check.py
   ```
@@ -305,6 +306,20 @@ the standard digital I/O, 8–15 the configurable, 16–17 the tool's).
   move where KYNEX says, the second time at the pallets' next places, and
   the gripper's output goes on and off. Before its first program the robot is powered on
   and its brakes released over the dashboard server.
+
+  Each move's number goes on register 0 as it starts and on register 1
+  once it is done, so a move is timed alone: a gripper's time or a pulse
+  to a machine after it is not counted as moving.
+- **Stage 1's cell** (two CNC machines, a double gripper; the test
+  `stage_ones_cell_runs_half_an_hour_with_both_machines_busy`): the main
+  program loads both machines, then calls the swap at each — the finished
+  part out with grip_b, the raw part in with grip_a — over and over.
+  Its paths touch nothing and come within 20 mm of nothing. Half an hour
+  of it runs without an alarm: each machine cuts about 80 % of the time,
+  60 parts an hour. On URSim (`cargo test -p kynex ursim_stage_one --
+  --ignored`, then `check.py --name stage1` and `--io --name stage1`) its
+  81 moves take 3.3 % longer than KYNEX plans, and every one ends where
+  KYNEX says.
 - MoveJ becomes `movej` with the taught joint positions.
 - MoveL becomes `movel` to the taught tool pose, in the controller's base
   frame (the `base` link, half a turn from `base_link`).

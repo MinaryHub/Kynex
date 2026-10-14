@@ -75,7 +75,8 @@ def check_io(args):
     gripper output goes on and off, and the tool ends each move where KYNEX
     says — on the pallets' next places the second time round. Exits
     non-zero otherwise."""
-    expected = json.load(open(os.path.join(args.dir, 'm1_io.json'), encoding='utf-8'))
+    name = args.name or 'm1_io'
+    expected = json.load(open(os.path.join(args.dir, f'{name}.json'), encoding='utf-8'))
     ends = expected['ends']
     bit = 1 << expected['gripper_output']
 
@@ -86,7 +87,7 @@ def check_io(args):
                 'actual_TCP_pose', 'actual_digital_output_bits'])
     rtde.start()
     start = rtde.sample()
-    send(args.host, os.path.join(args.dir, 'm1_io.script'))
+    send(args.host, os.path.join(args.dir, f'{name}.script'))
 
     # Where the tool is as each number first shows: the end of the move
     # before it.
@@ -140,30 +141,36 @@ def main():
     ap.add_argument('--timeout', type=float, default=120.0)
     ap.add_argument('--io', action='store_true',
                     help='the wired program: I/O and pallet places (m1_io)')
+    ap.add_argument('--name', help="the program in --dir to run, NAME.script and NAME.json: "
+                    "m1, or m1_io with --io; stage1 for stage 1's cell")
     args = ap.parse_args()
     if args.io:
         return check_io(args)
 
-    script = open(os.path.join(args.dir, 'm1.script'), encoding='utf-8').read()
+    name = args.name or 'm1'
+    script = open(os.path.join(args.dir, f'{name}.script'), encoding='utf-8').read()
     # Sent to the controller, a function runs as it is defined; the call
     # after it, for a file, would not parse.
     script = script[: script.rindex('end\n') + 4]
-    plan = json.load(open(os.path.join(args.dir, 'm1.json'), encoding='utf-8'))
+    plan = json.load(open(os.path.join(args.dir, f'{name}.json'), encoding='utf-8'))
     planned = plan['moves']
 
     ready(args.host)
     dashboard(args.host, ['close safety popup', 'unlock protective stop'])
     rtde = Rtde(args.host)
-    rtde.setup(['timestamp', 'output_int_register_0', 'runtime_state'])
+    rtde.setup(['timestamp', 'output_int_register_0', 'output_int_register_1',
+                'runtime_state'])
     rtde.start()
-    # The register as the last run left it: not a mark of this one.
+    # The registers as the last run left them: not marks of this one.
     start = rtde.sample()
     sender = socket.create_connection((args.host, 30002), 5)
     sender.sendall(script.encode())
     sender.close()
 
-    # The controller's time each number first shows.
+    # The controller's time each number first shows: on register 0 as a
+    # move starts, on register 1 as it is done.
     marks = {}
+    ends = {}
     last = len(planned) + 2
     deadline = time.time() + args.timeout
     seen_running = False
@@ -173,6 +180,9 @@ def main():
         # The last run's number counts once this run has written its own.
         if reg not in marks and (marks or reg != start['output_int_register_0']):
             marks[reg] = s['timestamp']
+        done = s['output_int_register_1']
+        if marks and done not in ends and (ends or done != start['output_int_register_1']):
+            ends[done] = s['timestamp']
         seen_running |= s['runtime_state'] == 2
         if last in marks:
             break
@@ -187,12 +197,14 @@ def main():
 
     print(f'{"move":<6} {"kind":<9} {"KYNEX s":>8} {"URSim s":>8} {"off":>7}')
     total_k = total_u = 0.0
-    # Mark n+1 starts move n (0 is the move to the start); the controller
-    # writes the next once the move is done — or, into a blend, once the
-    # next move takes over. KYNEX's move is timed the same way: to where
-    # the next starts, which a blend brings forward.
+    # Mark n+1 is move n (0 is the move to the start): written on register
+    # 0 as it starts and on register 1 once it is done — or, into a blend,
+    # once the next move takes over — so that what the program does
+    # between moves (a gripper's time, a pulse to a machine) is not counted
+    # as moving. KYNEX's move is timed the same way: to where the next
+    # starts, which a blend brings forward.
     for i, move in enumerate(planned, start=1):
-        u = marks[i + 2] - marks[i + 1]
+        u = ends[i + 1] - marks[i + 1]
         if i < len(planned):
             k = planned[i]['start'] - move['start']
         else:

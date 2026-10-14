@@ -62,8 +62,9 @@ pub struct Export<'a> {
     /// Lines at the top of the function: what the moves and lines use.
     pub globals: Vec<String>,
     /// Number the moves on output integer register 0 as they start — 1,
-    /// 2, … and one past the last at the end — for timing them on a
-    /// controller or URSim (see `tools/ursim`).
+    /// 2, … and one past the last at the end — and on register 1 as each
+    /// is done, for timing them on a controller or URSim (see
+    /// `tools/ursim`).
     pub markers: bool,
 }
 
@@ -125,11 +126,28 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
             }
         }
     };
-    let mut mark = 0;
-    let mut marker = |out: &mut String, indent: &str| {
+    let mark = 0;
+    // Each move's number on register 0 as it starts, and again on
+    // register 1 once it is done: the time between is the move's own,
+    // whatever the program does after it.
+    let mark = std::cell::Cell::new(mark);
+    let marker = |out: &mut String, indent: &str| {
         if export.markers {
-            mark += 1;
-            let _ = writeln!(out, "{indent}write_output_integer_register(0, {mark})");
+            mark.set(mark.get() + 1);
+            let _ = writeln!(
+                out,
+                "{indent}write_output_integer_register(0, {})",
+                mark.get()
+            );
+        }
+    };
+    let ended = |out: &mut String, indent: &str| {
+        if export.markers {
+            let _ = writeln!(
+                out,
+                "{indent}write_output_integer_register(1, {})",
+                mark.get()
+            );
         }
     };
     let step = |out: &mut String, indent: &str, m: &Move, kind: MoveKind| {
@@ -152,10 +170,17 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
         match kind {
             MoveKind::Joint => {
                 let v = w.speed.clamp(0.01, 1.0) * slowest;
-                // On a pallet, to a pose the controller solves for: the
-                // joints taught are for one place only.
+                // On a pallet, to a pose the controller solves for — the
+                // joints taught are for one place only — from the joints
+                // taught, as KYNEX solves it: left to itself, the
+                // controller takes the solution nearest wherever the arm
+                // happens to be, which may be another posture altogether.
                 let to = if m.offset.is_some() {
-                    target(&w.positions)
+                    format!(
+                        "get_inverse_kin({}, qnear={})",
+                        target(&w.positions),
+                        joints(&w.positions)
+                    )
                 } else {
                     joints(&w.positions)
                 };
@@ -208,6 +233,7 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     let _ = writeln!(out, "  # To the start");
     marker(&mut out, "  ");
     step(&mut out, "  ", first, MoveKind::Joint);
+    ended(&mut out, "  ");
     let rest = &export.moves[1..];
     if export.close {
         let _ = writeln!(out, "  while (True):");
@@ -215,18 +241,21 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
             notes(&mut out, "    ", &m.notes);
             marker(&mut out, "    ");
             step(&mut out, "    ", m, m.waypoint.kind);
+            ended(&mut out, "    ");
         }
         notes(&mut out, "    ", &export.trailing);
         // Round again: what came before the first move comes again too.
         notes(&mut out, "    ", &first.notes);
         marker(&mut out, "    ");
         step(&mut out, "    ", first, first.waypoint.kind);
+        ended(&mut out, "    ");
         let _ = writeln!(out, "  end");
     } else {
         for m in rest {
             notes(&mut out, "  ", &m.notes);
             marker(&mut out, "  ");
             step(&mut out, "  ", m, m.waypoint.kind);
+            ended(&mut out, "  ");
         }
         notes(&mut out, "  ", &export.trailing);
         marker(&mut out, "  ");

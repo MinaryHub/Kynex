@@ -17,6 +17,7 @@ struct Cell1 {
     library: Library,
     robot: u64,
     grip_a: u64,
+    grip_b: u64,
     machine: u64,
     /// Every CNC machine, the first being `machine`.
     machines: Vec<u64>,
@@ -64,13 +65,14 @@ fn cell_with(cncs: usize, cycle: f64) -> Cell1 {
     library.apply(&mut doc);
     let mut cell = Cell::default();
     let mut machines = Vec::new();
-    let (mut infeed, mut outfeed, mut grip_a) = (0, 0, 0);
+    let (mut infeed, mut outfeed, mut grip_a, mut grip_b) = (0, 0, 0, 0);
     for (uid, name, kind) in library.roles() {
         match kind {
             crate::cell::Kind::Cnc => machines.push(uid),
             crate::cell::Kind::Infeed => infeed = uid,
             crate::cell::Kind::Outfeed => outfeed = uid,
             crate::cell::Kind::Gripper if name == "grip_a" => grip_a = uid,
+            crate::cell::Kind::Gripper if name == "grip_b" => grip_b = uid,
             _ => {}
         }
         cell.ensure(uid, name, kind);
@@ -95,6 +97,7 @@ fn cell_with(cncs: usize, cycle: f64) -> Cell1 {
         library,
         robot,
         grip_a,
+        grip_b,
         machine: machines[0],
         machines,
         infeed,
@@ -105,15 +108,18 @@ fn cell_with(cncs: usize, cycle: f64) -> Cell1 {
 impl Cell1 {
     /// Teaches a point with grip_a at `at`, pointing down.
     fn teach(&mut self, at: DVec3, kind: &str) {
-        let (r, t) = (self.robot.to_string(), self.grip_a.to_string());
+        self.teach_with(at, kind, self.grip_a);
+    }
+
+    /// Teaches a point with grip point `tool` at `at`, pointing down.
+    fn teach_with(&mut self, at: DVec3, kind: &str, tool: u64) {
+        let (r, t) = (self.robot.to_string(), tool.to_string());
         // Into a joint move the arm first turns at its base to face the
         // point, as someone teaching it would: from there the solver keeps
         // the elbow up rather than folding the arm round the other way.
         if kind == "joint" {
             let kin = kynex_kin::Kinematics::of(&self.doc, self.robot).unwrap();
-            let tool = kin
-                .tool(self.grip_a, kreate_math::DAffine3::IDENTITY)
-                .unwrap();
+            let tool = kin.tool(tool, kreate_math::DAffine3::IDENTITY).unwrap();
             let q = self.posing.positions(&kin, self.robot);
             let base = kin.world_of(&q, self.robot).unwrap().translation;
             let now = kin.pose(&q, &tool).translation - base;
@@ -969,7 +975,7 @@ fn ursim_wired_program() {
             &kin.current,
             program::names(&c.doc)
                 .iter()
-                .find(|(_, n)| *n == "base")
+                .find(|(u, n)| *n == "base" && kin.contains(**u))
                 .map(|(u, _)| *u)
                 .unwrap(),
         )
@@ -1173,4 +1179,285 @@ fn repeats_of_empty_routines_are_held_to_a_size_too() {
     let why = all[0].flatten(&all).unwrap_err();
     assert!(why.contains("100000"), "{why}");
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}
+
+/// The step last added to the robot's program worked on.
+fn last_step(c: &Cell1) -> usize {
+    c.posing.program(c.robot).unwrap().steps.len() - 1
+}
+
+/// Takes the next raw part from the infeed with grip_a: over it, down,
+/// grip, up, and the infeed's count on. Each point is on the pallet.
+fn pick_raw(c: &mut Cell1) {
+    let (a, infeed) = (c.grip_a, c.infeed);
+    let up = DVec3::Z * 0.15;
+    let raw = c.slot(infeed, 0);
+    c.teach_with(raw + up, "joint", a);
+    edit_step(c, last_step(c), "pallet", infeed);
+    c.teach_with(raw, "linear", a);
+    edit_step(c, last_step(c), "pallet", infeed);
+    c.act(json!({"type": "grip", "gripper": a.to_string()}));
+    c.teach_with(raw + up, "linear", a);
+    edit_step(c, last_step(c), "pallet", infeed);
+    c.act(json!({"type": "next", "pallet": infeed.to_string()}));
+}
+
+/// Machine `machine`'s seat, a point above it, and one backed out of its
+/// door towards the robot, far enough for a double gripper to turn clear
+/// of the machine's front.
+fn at_machine(c: &Cell1, machine: u64) -> (DVec3, DVec3, DVec3) {
+    let seat = c.seat_of(machine);
+    let up = DVec3::Z * 0.15;
+    let back = DVec3::new(-seat.x, -seat.y, 0.0).normalize() * 0.8 + up;
+    (seat, seat + up, seat + back)
+}
+
+/// Clamps, shuts and starts `machine` from outside its door.
+fn shut_and_start(c: &mut Cell1, machine: u64) {
+    let m = machine.to_string();
+    c.act(json!({"type": "command", "machine": m, "command": "clamp"}));
+    c.act(json!({"type": "command", "machine": m, "command": "close"}));
+    c.act(json!({"type": "wait", "machine": m, "signal": "door_closed"}));
+    c.act(json!({"type": "command", "machine": m, "command": "start"}));
+}
+
+/// Loads an empty `machine` with the raw part on grip_a and starts it.
+fn load_first(c: &mut Cell1, machine: u64) {
+    let (a, m) = (c.grip_a, machine.to_string());
+    let (seat, over, back) = at_machine(c, machine);
+    c.act(json!({"type": "command", "machine": m, "command": "open"}));
+    c.act(json!({"type": "wait", "machine": m, "signal": "door_open"}));
+    // Before the door by its joints, then in along a line: an arm swung
+    // round inside sweeps the machine's walls.
+    c.teach_with(back, "joint", a);
+    c.teach_with(over, "linear", a);
+    c.teach_with(seat, "linear", a);
+    c.act(json!({"type": "release", "gripper": a.to_string()}));
+    c.teach_with(over, "linear", a);
+    c.teach_with(back, "linear", a);
+    shut_and_start(c, machine);
+}
+
+/// The double gripper's swap at `machine`, a raw part on grip_a: the
+/// finished part out with grip_b, the raw one in with grip_a, the machine
+/// started; the finished part to the outfeed's next place, and the next
+/// raw part from the infeed. On its way to the machine it passes `via`,
+/// if given: the side the arm swings round by.
+fn swap(c: &mut Cell1, machine: u64, via: Option<DVec3>) {
+    let (a, b, m) = (c.grip_a, c.grip_b, machine.to_string());
+    let (seat, over, back) = at_machine(c, machine);
+    let finished = seat + DVec3::Z * ((crate::cell::FINISHED.1 - crate::cell::RAW.1) / 2.0);
+    c.act(json!({"type": "wait", "machine": m, "signal": "done"}));
+    c.act(json!({"type": "command", "machine": m, "command": "open"}));
+    c.act(json!({"type": "wait", "machine": m, "signal": "door_open"}));
+    c.act(json!({"type": "command", "machine": m, "command": "unclamp"}));
+    // Out with grip_b: above the place before the door, down to it, then
+    // in along a line...
+    if let Some(via) = via {
+        c.teach_with(via, "joint", b);
+    }
+    c.teach_with(back + DVec3::Z * 0.25, "joint", b);
+    c.teach_with(back, "linear", b);
+    c.teach_with(over, "linear", b);
+    c.teach_with(finished, "linear", b);
+    c.act(json!({"type": "grip", "gripper": b.to_string()}));
+    c.teach_with(over, "linear", b);
+    // ...in with grip_a.
+    c.teach_with(over, "linear", a);
+    c.teach_with(seat, "linear", a);
+    c.act(json!({"type": "release", "gripper": a.to_string()}));
+    c.teach_with(over, "linear", a);
+    c.teach_with(back, "linear", a);
+    shut_and_start(c, machine);
+    // The finished part out to the outfeed.
+    let (outfeed, up) = (c.outfeed, DVec3::Z * 0.15);
+    let out = c.slot(outfeed, 0);
+    c.teach_with(out + up, "joint", b);
+    edit_step(c, last_step(c), "pallet", outfeed);
+    c.teach_with(out, "linear", b);
+    edit_step(c, last_step(c), "pallet", outfeed);
+    c.act(json!({"type": "release", "gripper": b.to_string()}));
+    c.teach_with(out + up, "linear", b);
+    edit_step(c, last_step(c), "pallet", outfeed);
+    c.act(json!({"type": "next", "pallet": outfeed.to_string()}));
+    pick_raw(c);
+}
+
+/// Stage 1's cell (docs/roadmap-vs-visual-components.md §5): two CNC
+/// machines of 90 s, a double gripper. The main program loads both, then
+/// calls the swap at each, `times` over.
+fn stage_one(times: u32) -> Cell1 {
+    let mut c = cell_with(2, 90.0);
+    let (m1, m2) = (c.machines[0], c.machines[1]);
+    pick_raw(&mut c);
+    load_first(&mut c, m1);
+    pick_raw(&mut c);
+    load_first(&mut c, m2);
+    pick_raw(&mut c);
+    let r = c.robot.to_string();
+    let a = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "routine_new", "robot": r, "name": "교체"}),
+    );
+    assert_eq!(a["ok"], true, "{a}");
+    swap(&mut c, m1, None);
+    // From the infeed on the left to the machine on the right, round by the
+    // outfeed's side: not across the first machine's front.
+    swap(&mut c, m2, Some(DVec3::new(0.35, -0.45, 1.35)));
+    ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "routine_select", "robot": r, "index": 0}),
+    );
+    c.act(json!({"type": "call", "routine": "교체", "times": times}));
+    c
+}
+
+#[test]
+fn stage_ones_cell_runs_half_an_hour_with_both_machines_busy() {
+    let mut c = stage_one(1000);
+    // Its paths, the main program's and the swap's, run into nothing and
+    // come near nothing.
+    for index in [1, 0] {
+        ask_posing(
+            &mut c.posing,
+            &c.doc,
+            json!({"op": "routine_select", "robot": c.robot.to_string(), "index": index}),
+        );
+        let programs: serde_json::Value = serde_json::from_str(&c.posing.programs_json(
+            &c.doc,
+            &mut Collider::default(),
+            &c.cell,
+        ))
+        .unwrap();
+        let problems: Vec<&serde_json::Value> = programs[c.robot.to_string()]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["move"]["problems"].as_array().into_iter().flatten())
+            .collect();
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+    // Half an hour, as a scenario: the main program round, the cell kept
+    // supplied.
+    let saved = crate::scenario::snapshot(
+        "1단계 셀",
+        c.posing.saved_programs(&c.doc),
+        c.cell.to_saved(),
+        c.library.to_saved(),
+    );
+    let started = std::time::Instant::now();
+    let r = crate::scenario::simulate(&Document::new(), &saved, 1800.0);
+    println!("{r}\n{:?}", started.elapsed());
+    assert!(r["alarm"].is_null(), "{r}");
+    assert_eq!(r["machines"], 2);
+    // Two machines of 90 s, each idle only while it is swapped.
+    for m in r["machine_lanes"].as_array().unwrap() {
+        let u = m["utilization"].as_f64().unwrap();
+        assert!(u > 0.7, "{r}");
+    }
+    let per_hour = r["per_hour"].as_f64().unwrap();
+    assert!(per_hour > 55.0 && per_hour < 80.0, "{r}");
+}
+
+/// Writes stage 1's cell for URSim: its main program with the swap twice
+/// over, wired (the grippers on digital outputs 0 and 1, the first
+/// machine's commands on 2–6 and the second's on the configurable 0–4),
+/// its moves numbered, how long KYNEX plans each, and where the tool should
+/// be at the end of each. Run by `tools/ursim/check.py --name stage1`, and
+/// with `--io`, not with the tests.
+#[test]
+#[ignore = "writes target/ursim for tools/ursim/check.py --name stage1"]
+fn ursim_stage_one() {
+    let c = stage_one(2);
+    let (flat, _) = c.posing.runnable(c.robot).unwrap();
+    let mut io = c.cell.export(&c.doc);
+    io.io.insert((c.grip_a, "close".into()), 0);
+    io.io.insert((c.grip_b, "close".into()), 1);
+    for (k, command) in ["open", "close", "clamp", "unclamp", "start"]
+        .iter()
+        .enumerate()
+    {
+        io.io
+            .insert((c.machines[0], command.to_string()), 2 + k as u32);
+        io.io
+            .insert((c.machines[1], command.to_string()), 8 + k as u32);
+    }
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let (script, _) = flat.urscript(c.robot, &c.doc, &kin, true, &io).unwrap();
+    let plan = flat.plan(&kin).unwrap();
+    let names: Vec<&str> = flat.moves().map(|(_, p)| p.name.as_str()).collect();
+    let moves: Vec<serde_json::Value> = plan
+        .segments
+        .iter()
+        .map(|s| {
+            json!({
+                "name": names[s.to],
+                "kind": crate::program::kind_tag(s.kind),
+                "start": s.start,
+                "duration": s.duration,
+            })
+        })
+        .collect();
+
+    // Where the tool ends each move, in the controller's base frame: a
+    // pallet point at the place counted to, from the place it was taught
+    // over (nearest the tool point or a grip point, as the export finds it).
+    let tool = flat.tool(&kin).unwrap();
+    let names_of = program::names(&c.doc);
+    let base_uid = names_of
+        .iter()
+        .find(|(u, n)| *n == "base" && kin.contains(**u))
+        .map(|(u, _)| *u)
+        .unwrap();
+    let base = kin.world_of(&kin.current, base_uid).unwrap();
+    let mut placed: std::collections::HashMap<u64, usize> = Default::default();
+    let mut ends = Vec::new();
+    for step in &flat.steps {
+        match step {
+            Step::Move(p) => {
+                let q = kin.with(&p.positions);
+                let mut at = kin.pose(&q, &tool).translation;
+                if let Some(pallet) = p.pallet {
+                    let slots = &io.pallets[&pallet];
+                    let points: Vec<DVec3> = std::iter::once(at)
+                        .chain(io.grippers.iter().map(|g| {
+                            let t = kin.tool(*g, kreate_math::DAffine3::IDENTITY).unwrap();
+                            kin.pose(&q, &t).translation
+                        }))
+                        .collect();
+                    let gap = |i: usize| {
+                        points
+                            .iter()
+                            .map(|a| (slots[i] - *a).truncate().length())
+                            .fold(f64::INFINITY, f64::min)
+                    };
+                    let from = (0..slots.len())
+                        .min_by(|a, b| gap(*a).total_cmp(&gap(*b)))
+                        .unwrap();
+                    at += slots[placed.get(&pallet).copied().unwrap_or(0)] - slots[from];
+                }
+                let b = base.inverse().transform_point3(at);
+                ends.push(json!([b.x, b.y, b.z]));
+            }
+            Step::Do(Action::Next { pallet }) => *placed.entry(*pallet).or_default() += 1,
+            _ => {}
+        }
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ursim");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("stage1.script"), script).unwrap();
+    std::fs::write(
+        dir.join("stage1.json"),
+        serde_json::to_string_pretty(&json!({
+            "program": "Stage 1's cell: two CNC machines, a double gripper, the swap twice over",
+            "moves": moves,
+            "duration": plan.duration,
+            "ends": ends,
+            "gripper_output": 1,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }

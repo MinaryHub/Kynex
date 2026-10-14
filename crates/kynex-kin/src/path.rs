@@ -504,8 +504,13 @@ fn linear_move(
         turning
     };
 
+    // A track or other axis outside the arm goes evenly from end to end, as
+    // a controller moves it along a line; the arm alone keeps the tool on
+    // it.
+    let held = crate::post::axes(kin).map_or(0, |(_, outside)| outside.len());
     let opts = Options {
         max_iterations: 60,
+        held,
         ..Options::default()
     };
     let mut problems = Vec::new();

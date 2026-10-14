@@ -147,6 +147,9 @@ pub enum Action {
     Drive { amr: u64, stop: u64 },
     /// Run the robot's program `routine`, `times` over, and come back.
     Call { routine: String, times: u32 },
+    /// Turn positioner `positioner` to `angle` radians from where it was
+    /// placed; the robot waits until it is there.
+    Turn { positioner: u64, angle: f64 },
 }
 
 /// One line of a program: a move to a point, or an action.
@@ -587,6 +590,10 @@ impl Program {
                     amr: object(s, "amr")?,
                     stop: object(s, "stop")?,
                 }),
+                "turn" => Step::Do(Action::Turn {
+                    positioner: object(s, "positioner")?,
+                    angle: s["degrees"].as_f64().unwrap_or(0.0).to_radians(),
+                }),
                 "call" => Step::Do(Action::Call {
                     routine: text(&s["routine"])?,
                     times: s["times"].as_u64().unwrap_or(1).clamp(1, MAX_TIMES as u64) as u32,
@@ -955,6 +962,8 @@ pub struct CellIo {
     /// The grip points, and how long each takes to open or close.
     pub grippers: Vec<u64>,
     pub actuate: HashMap<u64, f64>,
+    /// Each positioner's turning speed, radians a second.
+    pub turns: HashMap<u64, f64>,
 }
 
 impl CellIo {
@@ -1019,6 +1028,16 @@ fn action_ops(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) -> 
             )),
         },
         Action::Drive { amr, stop } => note(format!("send AMR {} to {}", name(*amr), name(*stop))),
+        Action::Turn { positioner, angle } => vec![Op::Turn {
+            unit: name(*positioner),
+            degrees: angle.to_degrees(),
+            speed: cell
+                .turns
+                .get(positioner)
+                .copied()
+                .unwrap_or(std::f64::consts::FRAC_PI_2)
+                .to_degrees(),
+        }],
         // Calls are gone by the time a program is exported (see `flatten`).
         Action::Call { routine, times } => note(format!("call {routine} {times} times")),
     }
@@ -1080,6 +1099,12 @@ fn action_json(a: &Action, name: &dyn Fn(u64) -> String) -> Value {
             "routine": routine,
             "times": times,
         }),
+        Action::Turn { positioner, angle } => json!({
+            "type": "turn",
+            "positioner": positioner.to_string(),
+            "positioner_name": name(*positioner),
+            "degrees": angle.to_degrees(),
+        }),
         Action::Drive { amr, stop } => json!({
             "type": "drive",
             "amr": amr.to_string(),
@@ -1128,6 +1153,14 @@ pub fn action_of(v: &Value) -> Result<Action, String> {
         "drive" => Action::Drive {
             amr: uid("amr")?,
             stop: uid("stop")?,
+        },
+        "turn" => Action::Turn {
+            positioner: uid("positioner")?,
+            angle: v["degrees"]
+                .as_f64()
+                .unwrap_or(0.0)
+                .clamp(-360.0, 360.0)
+                .to_radians(),
         },
         "call" => Action::Call {
             routine: v["routine"]

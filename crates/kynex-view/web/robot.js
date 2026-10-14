@@ -432,6 +432,7 @@ export class RobotPanel {
               <option value="delay">시간 대기</option>
               <option value="next">팔레트 다음 칸</option>
               <option value="drive">AMR 주행</option>
+              <option value="turn">포지셔너 회전</option>
               <option value="call">서브루틴 호출</option>
             </select>
           </div>
@@ -604,6 +605,12 @@ export class RobotPanel {
           '<span class="unit">→</span>' +
           pick('stop', keep(this.ofKind('amr_stop'), step.stop, step.stop_name), step.stop);
         break;
+      case 'turn':
+        icon = '회전';
+        body =
+          pick('positioner', keep(this.ofKind('positioner'), step.positioner, step.positioner_name), step.positioner) +
+          `<input class="pspeed num" type="number" data-field="degrees" value="${Math.round(step.degrees * 10) / 10}" min="-360" max="360" step="15" aria-label="각도"><span class="unit">°</span>`;
+        break;
     }
     return `
           <li class="point action${cursor ? ' cursor' : ''}${inrange ? ' inrange' : ''}" data-index="${i}" data-type="${step.type}">
@@ -618,7 +625,7 @@ export class RobotPanel {
   actionOf(row) {
     const step = { type: row.dataset.type };
     for (const field of row.querySelectorAll('[data-field]')) {
-      step[field.dataset.field] = ['seconds', 'times'].includes(field.dataset.field) ? Number(field.value) : field.value;
+      step[field.dataset.field] = ['seconds', 'times', 'degrees'].includes(field.dataset.field) ? Number(field.value) : field.value;
     }
     // Another machine picked: what it takes and says, if the old does not fit.
     const kind = this.cell.components.find((c) => c.object === step.machine)?.kind;
@@ -736,6 +743,10 @@ export class RobotPanel {
         const amr = this.ofKind('amr')[0]?.[0];
         const stop = this.ofKind('amr_stop')[0]?.[0];
         return amr && stop ? { type, amr, stop } : null;
+      }
+      case 'turn': {
+        const positioner = this.ofKind('positioner')[0]?.[0];
+        return positioner ? { type, positioner, degrees: 180 } : null;
       }
     }
     return null;

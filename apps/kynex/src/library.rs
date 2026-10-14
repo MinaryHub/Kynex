@@ -85,6 +85,12 @@ pub const TEMPLATES: &[Template] = &[
         params: &[],
     },
     Template {
+        key: "irb1600_track",
+        name: "ABB IRB 1600 + 주행 트랙",
+        group: "로봇",
+        params: &[],
+    },
+    Template {
         key: "m1013_tending",
         name: "Doosan M1013 + 이중 그리퍼",
         group: "로봇",
@@ -151,6 +157,17 @@ pub const TEMPLATES: &[Template] = &[
             p("length", "길이", 0.9, 0.5, 2.0),
             p("width", "폭", 0.6, 0.4, 1.5),
             p("height", "높이", 0.35, 0.2, 0.8),
+        ],
+    },
+    Template {
+        key: "positioner",
+        name: "포지셔너 (턴테이블)",
+        group: "주변 장치",
+        // A two-station turntable: parts loaded on one side while the
+        // robot works on the other.
+        params: &[
+            p("diameter", "지름", 1.2, 0.5, 2.5),
+            p("height", "높이", 0.8, 0.4, 1.2),
         ],
     },
     Template {
@@ -648,12 +665,16 @@ fn build(item: &Item) -> Result<Built, String> {
     let mut roles = Vec::new();
     let mut root_link = None;
     match item.template.as_str() {
-        "ur10e_tending" | "ur5e" | "irb1600_tending" | "m1013_tending" => {
+        "ur10e_tending" | "ur5e" | "irb1600_tending" | "irb1600_track" | "m1013_tending" => {
             // Each at rest, the tool down: the pose a tending robot waits in.
             let (urdf, rest): (&str, &[(&str, f64)]) = match item.template.as_str() {
                 "ur5e" => (include_str!("../library/ur5e.urdf"), UR_REST),
                 "irb1600_tending" => (
                     include_str!("../library/irb1600_tending.urdf"),
+                    &[("joint_5", std::f64::consts::FRAC_PI_2)],
+                ),
+                "irb1600_track" => (
+                    include_str!("../library/irb1600_track.urdf"),
                     &[("joint_5", std::f64::consts::FRAC_PI_2)],
                 ),
                 // Doosan's: the forearm level, the tool down.
@@ -675,7 +696,8 @@ fn build(item: &Item) -> Result<Built, String> {
             let named = |doc: &Document, n: &str| {
                 doc.objects().find(|(_, o)| o.name == n).map(|(id, _)| id)
             };
-            root_link = named(&doc, "base_link");
+            // The robot's root: its track's, if it rides one.
+            root_link = named(&doc, "track_base").or_else(|| named(&doc, "base_link"));
             for grip in ["grip_a", "grip_b"] {
                 if let Some(id) = named(&doc, grip) {
                     roles.push((id, Kind::Gripper));
@@ -757,6 +779,11 @@ fn build(item: &Item) -> Result<Built, String> {
                 item.param("height"),
             );
             roles.push((amr, Kind::Amr));
+        }
+        "positioner" => {
+            let c = Colours::new(&mut doc);
+            let positioner = turntable(&mut doc, &c, item.param("diameter"), item.param("height"));
+            roles.push((positioner, Kind::Positioner));
         }
         "amr_stop" => {
             let c = Colours::new(&mut doc);
@@ -1208,6 +1235,33 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
         m,
     );
     amr
+}
+
+/// A two-station turntable `d` across, its plate `h` high: a round base,
+/// the plate (`top`) turning on it, and a screen across the plate between
+/// its two stations.
+fn turntable(doc: &mut Document, c: &Colours, d: f64, h: f64) -> ObjectId {
+    let table = doc.add_object(Object::new("positioner", ObjectData::Empty));
+    let m = Some(table);
+    post(
+        doc,
+        "base",
+        d * 0.35,
+        h - 0.03,
+        [0.0, 0.0, (h - 0.03) / 2.0],
+        c.dark,
+        m,
+    );
+    post(doc, "top", d / 2.0, 0.03, [0.0, 0.0, h - 0.015], c.table, m);
+    block(
+        doc,
+        "screen",
+        [0.02, d * 0.9, 0.5],
+        [0.0, 0.0, h + 0.25],
+        c.accent,
+        m,
+    );
+    table
 }
 
 /// Where an AMR stops: a frame on the floor its size, and an arrow along

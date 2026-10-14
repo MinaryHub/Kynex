@@ -295,6 +295,10 @@ impl Runner {
                 self.step += 1;
                 State::Begin
             }
+            // The robot holds still while the positioner turns.
+            Step::Do(Action::Turn { positioner, angle }) => {
+                State::Until(time + cell.turn(scene, positioner, angle)?)
+            }
             // A run is of a program whose calls are replaced by what they
             // call (`Program::flatten`).
             Step::Do(Action::Call { routine, .. }) => {

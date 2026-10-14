@@ -27,7 +27,6 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use kreate_math::{DAffine3, DMat3};
-use kreate_scene::robot::JointKind;
 
 use crate::path::{self, MoveKind};
 use crate::post::{comment, Export, Move, Op, Place, Writer};
@@ -111,12 +110,13 @@ fn wait_in(n: u32, on: bool) -> String {
 
 /// Writes the program as DRL, or says why it cannot be.
 pub fn drl(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, String> {
-    let turns = kin
-        .vars
-        .iter()
-        .all(|v| matches!(v.kind, JointKind::Revolute | JointKind::Continuous));
-    if kin.vars.len() != 6 || !turns {
-        return Err("DRL은 회전 관절 6개인 로봇만 만들 수 있습니다".into());
+    // An axis outside the arm — a track — is no axis this controller has.
+    let (_, outside) = crate::post::axes(kin)
+        .map_err(|_| "DRL은 회전 관절 6개인 로봇만 만들 수 있습니다".to_string())?;
+    if !outside.is_empty() {
+        return Err(
+            "DRL: 외부축(주행 트랙 등)이 있는 로봇은 RAPID(ABB)로만 내보낼 수 있습니다".into(),
+        );
     }
     if export.moves.is_empty() {
         return Err("프로그램에 지점이 없습니다".into());
@@ -338,6 +338,12 @@ pub fn drl(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, Str
 fn op_lines(op: &Op, export: &Export) -> Vec<String> {
     match op {
         Op::Note(n) => vec![format!("# {}", comment(n))],
+        // DRL has no external axis: the positioner's own controller turns
+        // it.
+        Op::Turn { unit, degrees, .. } => vec![format!(
+            "# KYNEX: turn positioner {} to {degrees:.1} degrees (its own controller)",
+            comment(unit)
+        )],
         Op::Set { port, on } => vec![set_out(*port, *on)],
         Op::Pulse { port, seconds } => vec![
             set_out(*port, true),

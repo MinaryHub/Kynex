@@ -123,6 +123,10 @@ pub struct Options {
     pub restarts: usize,
     /// Makes the restarts the same run to run.
     pub random_seed: u64,
+    /// The first this many variables are held where the seed has them: a
+    /// track or a positioner the controller moves its own way while the
+    /// arm follows a line (see [`crate::post::axes`]).
+    pub held: usize,
 }
 
 impl Default for Options {
@@ -136,6 +140,7 @@ impl Default for Options {
             max_step: 0.3,
             restarts: 0,
             random_seed: 0x9e37_79b9_7f4a_7c15,
+            held: 0,
         }
     }
 }
@@ -404,16 +409,16 @@ impl Kinematics {
 
     /// How near the arm at `q` is to a singularity, for the tool `tool`:
     /// the smallest singular value of its Jacobian and the joints of that
-    /// direction. `None` for an arm that cannot hold every pose of the tool
-    /// (fewer than six variables), which is never otherwise.
+    /// direction. The arm's alone, where it rides a track (see
+    /// [`post::axes`]): a controller moves the track its own way. `None`
+    /// for an arm of other than six joints.
     pub fn dexterity(&self, q: &[f64], tool: &Tool) -> Option<Dexterity> {
-        let n = self.vars.len();
-        if n < 6 {
-            return None;
-        }
+        let (arm, _) = post::axes(self).ok()?;
+        let n = arm.len();
         let world = self.forward(q);
         let p = (world[tool.node] * tool.offset).translation;
-        let mut cols = self.jacobian(&world, tool, p);
+        let all = self.jacobian(&world, tool, p);
+        let mut cols: Vec<[f64; 6]> = arm.iter().map(|i| all[*i]).collect();
         for col in &mut cols {
             for x in &mut col[3..] {
                 *x *= TURN_LENGTH;
@@ -433,6 +438,7 @@ impl Kinematics {
         let most = v.iter().fold(0.0f64, |m, x| m.max(x.abs()));
         let mut joints: Vec<usize> = (0..n).filter(|i| v[*i].abs() >= 0.4 * most).collect();
         joints.sort_by(|x, y| v[*y].abs().total_cmp(&v[*x].abs()));
+        let joints = joints.into_iter().map(|j| arm[j]).collect();
         Some(Dexterity {
             least: values[k].max(0.0).sqrt(),
             joints,
@@ -486,9 +492,12 @@ impl Kinematics {
                 .vars
                 .iter()
                 .zip(seed)
-                .map(|(var, s)| {
+                .enumerate()
+                .map(|(i, (var, s))| {
                     let u = next_unit(&mut rng);
-                    if var.limited() {
+                    if i < opts.held {
+                        *s
+                    } else if var.limited() {
                         var.lower + u * (var.upper - var.lower)
                     } else if var.kind.slides() {
                         s + (u - 0.5)
@@ -544,6 +553,10 @@ impl Kinematics {
                 for x in &mut col[3..] {
                     *x *= w;
                 }
+            }
+            // Held variables stay where they are.
+            for col in cols.iter_mut().take(opts.held) {
+                *col = [0.0; 6];
             }
             // A joint at a limit that the error would push further is left
             // out: kept in, it soaks up the step and the rest barely move.

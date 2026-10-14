@@ -18,6 +18,13 @@ use crate::{Kinematics, Tool};
 pub enum Op {
     /// A comment, for what cannot be said in the program yet.
     Note(String),
+    /// Turn positioner `unit` to `degrees` from where it was placed, at
+    /// `speed` degrees a second, and wait until it is there.
+    Turn {
+        unit: String,
+        degrees: f64,
+        speed: f64,
+    },
     /// Digital output `port` on or off.
     Set { port: u32, on: bool },
     /// Digital output `port` on for `seconds`, then off again: a command to
@@ -107,6 +114,24 @@ pub fn comment(text: &str) -> String {
             }
         })
         .collect()
+}
+
+/// A robot's arm and the axes outside it: the six revolute joints nearest
+/// the tool, and those before them — a track it rides on — by index into
+/// [`Kinematics::vars`]. An error for a robot whose last six are not all
+/// revolute, which no writer can write for.
+pub fn axes(kin: &Kinematics) -> Result<(Vec<usize>, Vec<usize>), String> {
+    let n = kin.vars.len();
+    let turns = |i: &usize| {
+        matches!(
+            kin.vars[*i].kind,
+            kreate_scene::robot::JointKind::Revolute | kreate_scene::robot::JointKind::Continuous
+        )
+    };
+    if n < 6 || !(n - 6..n).all(|i| turns(&i)) {
+        return Err("회전 관절 6개인 팔만 내보낼 수 있습니다".into());
+    }
+    Ok(((n - 6..n).collect(), (0..n - 6).collect()))
 }
 
 /// An identifier from `name`: letters, digits and `_`, starting with a

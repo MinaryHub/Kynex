@@ -432,6 +432,8 @@ not change the session's scene.
   - 컨베이어: a belt, a box whose top carries parts along its own X.
   - AMR: a mobile robot, with its top plate (`…top…`) below it.
   - AMR 정지 위치: where an AMR stops, facing the stop's X.
+  - 포지셔너: a turntable, turned about its own vertical axis, with its
+    top plate (`…top…`).
 
   Settings start at industry-typical values (docs/roadmap-vs-visual-components.md
   §4): 90 s machining, 3 s door, 1 s chuck, 5 × 4 places 100 mm apart, and
@@ -481,6 +483,20 @@ not change the session's scene.
   program, **AMR 주행** sends it, and a wait for **AMR 도착** holds the
   robot until it is there. A part let go over an AMR's top plate stands on
   it and rides along. The timeline shows each AMR's driving.
+- **Positioners turn** (90°/s unless set otherwise): in the inspector, →
+  0° and → 180° turn one; in a program, **포지셔너 회전** turns it to an
+  angle from where it was placed, and the robot waits until it is there.
+  What stands on its plate turns with it. For ABB it is the external axis
+  after the robot's own, turned with `MoveExtJ` (a mechanical unit to set
+  up on the controller); a UR or a Doosan has no such axis, and the
+  program says where it is to be turned, as a comment.
+- **A robot on a track** (ABB IRB 1600 + 주행 트랙: 3 m of travel, 1.6
+  m/s): the track is its first joint, jogged and solved with the arm. On
+  a line or an arc the track goes evenly from end to end, as the
+  controller moves it, and the arm keeps the tool on the line. Its RAPID
+  gives the track as external axis a, in millimetres, in every target's
+  `extax`, and its targets in the frame the track stands in. URScript and
+  DRL refuse a robot with an axis outside the arm.
 - **Parts go with their equipment**: move a pallet table, a machine or a
   conveyor in the library and the parts on it go with it; remove it and
   they go too.

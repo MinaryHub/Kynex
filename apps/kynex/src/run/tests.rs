@@ -1564,3 +1564,63 @@ fn the_exports_are_as_they_were() {
         }
     }
 }
+
+/// A positioner turned by the robot's program: the run waits the 2 s it
+/// takes to turn half round, it ends turned, and the program exports as
+/// `MoveExtJ` for ABB, its positioner external axis a, and as a note for a
+/// controller with no axis to turn it.
+#[test]
+fn a_program_turns_a_positioner_and_waits_for_it() {
+    let mut c = cell_for("irb1600_tending", 0.7, 1, 10.0);
+    c.library.handle(
+        &json!({"op": "place", "template": "positioner", "at": [0.0, -1.3, 0.0]}).to_string(),
+    );
+    c.doc = Document::new();
+    c.library.apply(&mut c.doc);
+    let (table, name, kind) = c
+        .library
+        .roles()
+        .into_iter()
+        .find(|r| r.2 == crate::cell::Kind::Positioner)
+        .unwrap();
+    c.cell.ensure(table, name, kind);
+    let raw = c.slot(c.infeed, 0) + DVec3::Z * 0.15;
+    c.teach(raw, "joint");
+    c.act(json!({"type": "turn", "positioner": table.to_string(), "degrees": 180.0}));
+    c.teach(raw + DVec3::Z * 0.1, "linear");
+
+    let (runner, t) = c.run(30.0);
+    assert!(runner.stopped());
+    let (flat, _) = c.posing.runnable(c.robot).unwrap();
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let moving = flat.plan(&kin).unwrap().duration;
+    assert!(t > moving + 2.0 - 0.05, "{t} {moving}");
+    let shown: serde_json::Value = serde_json::from_str(&c.cell.to_json(&c.doc)).unwrap();
+    let angle = shown["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["kind"] == "positioner")
+        .unwrap()["positioner"]["angle"]
+        .as_f64()
+        .unwrap();
+    assert!((angle.abs() - std::f64::consts::PI).abs() < 1e-6, "{angle}");
+
+    let io = c.cell.export(&c.doc);
+    let (module, _) = flat
+        .export(c.robot, &c.doc, &kin, false, &io, &kynex_kin::rapid::Abb)
+        .unwrap();
+    assert!(module.contains("! External axis a: positioner"), "{module}");
+    assert!(
+        module.contains("CONST speeddata kynex_rot90 := [100,500,5000,90];"),
+        "{module}"
+    );
+    assert!(
+        module.contains("MoveExtJ [[9E9,9E9,9E9,9E9,9E9,9E9],[180.0000,9E9,9E9,9E9,9E9,9E9]], kynex_rot90, fine;"),
+        "{module}"
+    );
+    let (script, _) = flat
+        .export(c.robot, &c.doc, &kin, false, &io, &kynex_kin::urscript::Ur)
+        .unwrap();
+    assert!(script.contains("# KYNEX: turn positioner"), "{script}");
+}

@@ -16,6 +16,7 @@ const KINDS = [
   ['conveyor', '컨베이어'],
   ['amr', 'AMR'],
   ['amr_stop', 'AMR 정지 위치'],
+  ['positioner', '포지셔너'],
 ];
 
 // What each I/O point is, in words: the robot's outputs and its inputs.
@@ -71,6 +72,7 @@ const FIELDS = {
     ['drain', '끝에서 치움 (1: 예)', '', 1],
   ],
   amr: [['speed', '주행 속도', 'mm/s', 1000]],
+  positioner: [['speed', '회전 속도', '°/s', 180 / Math.PI]],
 };
 FIELDS.outfeed = FIELDS.infeed;
 
@@ -105,6 +107,8 @@ export class CellPanel {
       if (action) this.send({ op: 'machine', object: this.ctx.selected(), action });
       const stop = e.target.closest('[data-drive]')?.dataset.drive;
       if (stop) this.send({ op: 'drive', object: this.ctx.selected(), stop });
+      const turn = e.target.closest('[data-turn]')?.dataset.turn;
+      if (turn != null) this.send({ op: 'turn', object: this.ctx.selected(), angle: (Number(turn) * Math.PI) / 180 });
     });
     document.getElementById('cell-io').addEventListener('change', (e) => {
       const key = e.target.dataset.io;
@@ -191,6 +195,13 @@ export class CellPanel {
             .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(s.name)}</button>`)
             .join('') + (c.amr?.driving ? '<span class="muted">주행 중</span>' : '')
         : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
+    } else if (c && c.kind === 'positioner') {
+      const p = c.positioner;
+      const angle = p?.angle != null ? Math.round((p.angle * 180) / Math.PI) : 0;
+      actions =
+        [0, 180]
+          .map((a) => `<button class="text-btn" data-turn="${a}"${p?.turning ? ' disabled' : ''}>→ ${a}°</button>`)
+          .join('') + `<span class="muted">${p?.turning ? '회전 중' : `지금 ${angle}°`}</span>`;
     } else if (c && c.kind === 'gripper' && !c.robot) {
       actions = '<span class="warn-text">로봇의 링크가 아닙니다</span>';
     }

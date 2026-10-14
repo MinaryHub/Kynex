@@ -440,3 +440,117 @@ fn the_abb_robot_s_reach_is_its_arm_laid_out() {
     assert!((base[14].as_f64().unwrap() - 0.5).abs() < 1e-6);
     assert!(answer["section"].as_array().unwrap().len() > 50);
 }
+
+/// The IRB 1600 on its track: the track its first axis, a line along the
+/// track planned with the track going evenly from end to end as the
+/// controller moves it, and its RAPID giving the track as external axis a,
+/// its targets in the frame the track stands in. No other controller's
+/// language has the track.
+#[test]
+fn the_abb_robot_on_a_track_moves_the_track_as_its_controller_does() {
+    use kynex_kin::path::{plan, MoveKind, Waypoint};
+    use kynex_kin::post::{Export, Move, Writer};
+
+    let mut library = Library::default();
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "irb1600_track", "at": [0.0, 0.0, 0.0]}),
+    );
+    let (doc, _) = shown(&mut library);
+    let robot = &kynex_model::robots(&doc)[0];
+    assert_eq!(robot.vendor(), Some("abb"));
+    let kin = Kinematics::of(&doc, robot.root).unwrap();
+    assert_eq!(kin.vars.len(), 7);
+    let track = &kin.vars[0];
+    assert!(
+        track.kind.slides() && track.lower == 0.0 && track.upper == 3.0 && track.velocity == 1.6
+    );
+    let uid = |n: &str| doc.object_uid(named(&doc, n)).unwrap().raw();
+    let flange = kin.tool(uid("tool0"), DAffine3::IDENTITY).unwrap();
+
+    // The tool down 0.9 m above the floor, ahead of the carriage, with the
+    // carriage at 0.5 m; then the same a metre on, the carriage at 1.5 m.
+    let down = Some(DQuat::from_rotation_y(std::f64::consts::PI));
+    let at = |x: f64, track: f64| {
+        let mut seed = kin.current.clone();
+        seed[0] = track;
+        let goal = kynex_kin::Goal {
+            position: DVec3::new(x, 0.0, 0.9),
+            rotation: down,
+        };
+        let opts = kynex_kin::Options {
+            held: 1,
+            ..Default::default()
+        };
+        let found = kin.solve(&flange, &goal, &seed, &opts);
+        assert!(found.reached, "{found:?}");
+        assert!((found.positions[0] - track).abs() < 1e-12);
+        found.positions
+    };
+    let (a, b) = (at(1.3, 0.5), at(2.3, 1.5));
+    let waypoints = [
+        Waypoint {
+            kind: MoveKind::Joint,
+            positions: a.clone(),
+            speed: 0.5,
+            blend: 0.0,
+            via: None,
+        },
+        Waypoint {
+            kind: MoveKind::Linear,
+            positions: b.clone(),
+            speed: 0.25,
+            blend: 0.0,
+            via: None,
+        },
+    ];
+    let planned = plan(&kin, &flange, &waypoints, false);
+    let line = &planned.segments[0];
+    assert!(line.problems.is_empty(), "{:?}", line.problems);
+    // Half way along, the carriage is half way, the tool on the line.
+    let middle = planned.at(line.start + line.duration / 2.0);
+    assert!((middle[0] - 1.0).abs() < 0.02, "{middle:?}");
+    let tool_at = kin.pose(&middle, &flange).translation;
+    assert!(
+        (tool_at - DVec3::new(1.8, 0.0, 0.9)).length() < 0.002,
+        "{tool_at}"
+    );
+
+    let export = Export {
+        name: "track",
+        moves: waypoints
+            .iter()
+            .enumerate()
+            .map(|(k, w)| Move {
+                name: ["P1", "P2"][k],
+                waypoint: w,
+                before: Vec::new(),
+                place: None,
+            })
+            .collect(),
+        close: false,
+        base: uid("base"),
+        flange: uid("tool0"),
+        trailing: Vec::new(),
+        pallets: Vec::new(),
+        markers: false,
+    };
+    let module = kynex_kin::rapid::Abb.write(&kin, &flange, &export).unwrap();
+    assert!(module.contains("! External axis a: track (mm)"), "{module}");
+    assert!(
+        module.contains("],[500.00,9E9,9E9,9E9,9E9,9E9]];"),
+        "{module}"
+    );
+    // In the track's frame: 2.3 m along it, whatever the carriage's place.
+    assert!(
+        module.contains("CONST robtarget p2 := [[2300.00,0.00,900.00],[0.000000,0.000000,1.000000,0.000000],[0,0,0,0],[1500.00,9E9,9E9,9E9,9E9,9E9]];"),
+        "{module}"
+    );
+    for writer in [
+        &kynex_kin::urscript::Ur as &dyn Writer,
+        &kynex_kin::drl::Doosan,
+    ] {
+        let err = writer.write(&kin, &flange, &export).unwrap_err();
+        assert!(err.contains("RAPID"), "{err}");
+    }
+}

@@ -138,10 +138,14 @@ pub enum Kind {
     Amr,
     /// Where an AMR stops: its centre there, facing the stop's X.
     Stop,
+    /// A positioner: a turntable, turned about its own vertical axis to an
+    /// angle from where it was placed, its top plate (`…top…`) and the
+    /// parts on it with it.
+    Positioner,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Amr,
         Kind::Stop,
         Kind::Cnc,
@@ -151,6 +155,7 @@ impl Kind {
         Kind::Fence,
         Kind::Molder,
         Kind::Conveyor,
+        Kind::Positioner,
     ];
 
     pub fn tag(self) -> &'static str {
@@ -164,6 +169,7 @@ impl Kind {
             Kind::Conveyor => "conveyor",
             Kind::Amr => "amr",
             Kind::Stop => "amr_stop",
+            Kind::Positioner => "positioner",
         }
     }
 
@@ -196,7 +202,8 @@ pub struct Props {
     pub pitch: f64,
     /// Gripper: opening, and again closing, seconds.
     pub actuate: f64,
-    /// Conveyor: its belt's speed, metres a second; every how many seconds
+    /// Conveyor: its belt's speed, metres a second (an AMR's too; a
+    /// positioner's turn, radians a second); every how many seconds
     /// a raw part is put on at its start (0: none); and whether a part
     /// that reaches its end is taken away (1) or waits there (0).
     pub speed: f64,
@@ -236,6 +243,11 @@ impl Props {
             // A mobile base's usual pace indoors among people.
             Kind::Amr => Self {
                 speed: 1.0,
+                ..Self::default()
+            },
+            // A positioner turns some 90° a second: radians a second.
+            Kind::Positioner => Self {
+                speed: std::f64::consts::FRAC_PI_2,
                 ..Self::default()
             },
             _ => Self::default(),
@@ -414,8 +426,8 @@ impl Belt {
     }
 }
 
-/// An AMR's top plate: where the AMR stands now, and the plate's box from
-/// the AMR's middle.
+/// An AMR's or a positioner's top plate: where it stands now, and the
+/// plate's box from its middle.
 struct Deck {
     object: u64,
     pose: DAffine3,
@@ -702,7 +714,12 @@ impl Cell {
         // One machine is one role: a role on a part of a machine, an AMR
         // or a stop that has one already (saved before auto roles, or the
         // library, knew better) is dropped.
-        let whole = |k: Kind| matches!(k, Kind::Cnc | Kind::Molder | Kind::Amr | Kind::Stop);
+        let whole = |k: Kind| {
+            matches!(
+                k,
+                Kind::Cnc | Kind::Molder | Kind::Amr | Kind::Stop | Kind::Positioner
+            )
+        };
         let machines: Vec<ObjectId> = self
             .components
             .iter()
@@ -1023,6 +1040,9 @@ impl Cell {
                 out.grippers.push(c.object);
                 out.actuate.insert(c.object, c.props.actuate);
             }
+            if c.kind == Kind::Positioner {
+                out.turns.insert(c.object, c.props.speed);
+            }
         }
         out
     }
@@ -1235,6 +1255,10 @@ impl Cell {
                 self.changed = true;
             }
             "drive" => self.drive(doc, uid("object")?, uid("stop")?)?,
+            "turn" => {
+                let angle = req["angle"].as_f64().ok_or("no angle")?;
+                self.turn(doc, uid("object")?, angle)?;
+            }
             "io" => {
                 let object = uid("object")?;
                 let key = req["key"].as_str().ok_or("no key")?;
@@ -1447,7 +1471,7 @@ impl Cell {
         let Some(c) = self.components.iter().find(|c| c.object == machine) else {
             return false;
         };
-        if c.kind == Kind::Amr {
+        if matches!(c.kind, Kind::Amr | Kind::Positioner) {
             return signal == Signal::Arrived
                 && self.rovers.get(&machine).is_none_or(|r| r.legs.is_empty());
         }
@@ -1619,15 +1643,47 @@ impl Cell {
         Ok(())
     }
 
-    /// Moves each AMR on its way by `dt` seconds, the parts on its top
-    /// plate with it. Returns whether one moved, and whether one arrived.
+    /// Turns positioner `positioner` to `angle` radians from where it was
+    /// placed, the short way round, and returns how long that takes, in
+    /// seconds.
+    pub fn turn(&mut self, doc: &Document, positioner: u64, angle: f64) -> Result<f64, String> {
+        let c = self
+            .components
+            .iter()
+            .find(|c| c.object == positioner && c.kind == Kind::Positioner)
+            .cloned()
+            .ok_or("포지셔너가 아닙니다")?;
+        let id = id_of(doc, positioner).ok_or("no such positioner")?;
+        let (_, placed) = floor_pose(&doc.world_transform(id));
+        let mut r = self.rover(doc, &c).ok_or("no such positioner")?;
+        if !r.legs.is_empty() {
+            return Err("포지셔너가 아직 돌고 있습니다".into());
+        }
+        let to = placed + angle;
+        let seconds = turn_between(r.yaw, to).abs() / c.props.speed.max(1e-6);
+        r.legs.push(Leg::Turn(to));
+        self.rovers.insert(positioner, r);
+        self.changed = true;
+        Ok(seconds)
+    }
+
+    /// How far positioner `c` stands turned now, radians from where it was
+    /// placed.
+    fn turned(&self, doc: &Document, c: &Component) -> Option<f64> {
+        let (_, placed) = floor_pose(&doc.world_transform(id_of(doc, c.object)?));
+        Some(turn_between(placed, self.rover(doc, c)?.yaw))
+    }
+
+    /// Moves each AMR on its way, and turns each positioner, by `dt`
+    /// seconds, the parts on its top plate with it. Returns whether one
+    /// moved, and whether one arrived.
     fn drive_on(&mut self, doc: &Document, dt: f64) -> (bool, bool) {
         let (mut moved, mut arrived) = (false, false);
         let amrs: Vec<Component> = self
             .components
             .iter()
             .filter(|c| {
-                c.kind == Kind::Amr
+                matches!(c.kind, Kind::Amr | Kind::Positioner)
                     && self
                         .rovers
                         .get(&c.object)
@@ -1646,11 +1702,16 @@ impl Cell {
                 };
                 match leg {
                     Leg::Turn(to) => {
+                        let rate = if c.kind == Kind::Positioner {
+                            c.props.speed.max(1e-6)
+                        } else {
+                            AMR_TURN
+                        };
                         let need = turn_between(r.yaw, to);
-                        let can = AMR_TURN * left;
+                        let can = rate * left;
                         if need.abs() <= can {
                             r.yaw = to;
-                            left -= need.abs() / AMR_TURN;
+                            left -= need.abs() / rate;
                             r.legs.remove(0);
                         } else {
                             r.yaw += can * need.signum();
@@ -1689,11 +1750,11 @@ impl Cell {
         (moved, arrived)
     }
 
-    /// Each AMR's top plate where the AMR now is.
+    /// Each AMR's and positioner's top plate where it now is.
     fn decks(&self, doc: &Document) -> Vec<Deck> {
         self.components
             .iter()
-            .filter(|c| c.kind == Kind::Amr)
+            .filter(|c| matches!(c.kind, Kind::Amr | Kind::Positioner))
             .filter_map(|c| {
                 let id = id_of(doc, c.object)?;
                 let home = doc.world_transform(id);
@@ -1830,16 +1891,17 @@ impl Cell {
             .chain(
                 self.components
                     .iter()
-                    .filter(|c| c.kind == Kind::Amr)
+                    .filter(|c| matches!(c.kind, Kind::Amr | Kind::Positioner))
                     .map(|c| {
                         let driving = self
                             .rovers
                             .get(&c.object)
                             .is_some_and(|r| !r.legs.is_empty());
+                        let busy = if c.kind == Kind::Amr { "drive" } else { "turn" };
                         (
                             c.object,
                             c.name.clone(),
-                            if driving { "drive" } else { "idle" },
+                            if driving { busy } else { "idle" },
                         )
                     }),
             )
@@ -1858,7 +1920,11 @@ impl Cell {
     /// `doc`, and returns its objects, all of which moved.
     fn place_rovers(&self, doc: &mut Document) -> Vec<u64> {
         let mut uids = Vec::new();
-        for c in self.components.iter().filter(|c| c.kind == Kind::Amr) {
+        for c in self
+            .components
+            .iter()
+            .filter(|c| matches!(c.kind, Kind::Amr | Kind::Positioner))
+        {
             let (Some(r), Some(id)) = (self.rovers.get(&c.object), id_of(doc, c.object)) else {
                 continue;
             };
@@ -2055,6 +2121,13 @@ impl Cell {
                     "slots": self.slots(doc, c).into_iter().map(point).collect::<Vec<_>>(),
                     "seat": self.seat(doc, c).map(point),
                     "holding": self.parts.iter().any(|p| p.held.is_some_and(|h| h.0 == c.object)),
+                    "positioner": (c.kind == Kind::Positioner).then(|| {
+                        let r = self.rover(doc, c);
+                        json!({
+                            "turning": r.as_ref().is_some_and(|r| !r.legs.is_empty()),
+                            "angle": self.turned(doc, c),
+                        })
+                    }),
                     "amr": (c.kind == Kind::Amr).then(|| {
                         let r = self.rover(doc, c);
                         json!({
@@ -2116,6 +2189,7 @@ pub fn is_op(op: &str) -> bool {
             | "release"
             | "machine"
             | "drive"
+            | "turn"
             | "io"
     )
 }
@@ -2694,6 +2768,34 @@ mod tests {
             "{p}"
         );
         assert!(cell.decks(&doc)[0].carries(&cell.parts[0]));
+    }
+
+    /// A positioner turns half round at 90° a second in 2 s, the part on its
+    /// plate with it, and says so once there; the page sees its angle.
+    #[test]
+    fn a_positioner_turns_with_what_is_on_it() {
+        let (doc, mut cell, table) = equipment("positioner", json!({}));
+        let top = cell.decks(&doc)[0].hi.z;
+        cell.add_part(DVec3::new(0.4, 0.0, top + FINISHED.1 / 2.0), true);
+        assert!(cell.signal(&doc, table, Signal::Arrived), "at rest");
+        let seconds = cell.turn(&doc, table, std::f64::consts::PI).unwrap();
+        assert!((seconds - 2.0).abs() < 1e-9, "{seconds}");
+        assert!(!cell.signal(&doc, table, Signal::Arrived));
+        assert!(cell.turn(&doc, table, 0.0).is_err(), "still turning");
+        let t = run_for(&mut cell, &doc, 0.0, 1.0);
+        assert!(!cell.signal(&doc, table, Signal::Arrived), "half way");
+        run_for(&mut cell, &doc, t, 1.2);
+        assert!(cell.signal(&doc, table, Signal::Arrived));
+        let p = cell.parts[0].world.translation;
+        assert!(
+            p.distance(DVec3::new(-0.4, 0.0, top + FINISHED.1 / 2.0)) < 1e-6,
+            "{p}"
+        );
+        let shown: Value = serde_json::from_str(&cell.to_json(&doc)).unwrap();
+        let angle = shown["components"][0]["positioner"]["angle"]
+            .as_f64()
+            .unwrap();
+        assert!((angle.abs() - std::f64::consts::PI).abs() < 1e-9, "{angle}");
     }
 
     #[test]

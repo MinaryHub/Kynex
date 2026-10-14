@@ -22,7 +22,6 @@
 use std::fmt::Write;
 
 use kreate_math::{DAffine3, DQuat};
-use kreate_scene::robot::JointKind;
 
 use crate::path::{self, MoveKind};
 pub use crate::post::{comment, Export, Move, Op, Place, Places};
@@ -69,6 +68,12 @@ fn get_in(n: u32) -> String {
 fn op_lines(op: &Op, pallets: &[Places]) -> Vec<String> {
     match op {
         Op::Note(n) => vec![format!("# {}", comment(n))],
+        // A UR has no axis to turn it with: the positioner's own
+        // controller does.
+        Op::Turn { unit, degrees, .. } => vec![format!(
+            "# KYNEX: turn positioner {} to {degrees:.1} degrees (its own controller)",
+            comment(unit)
+        )],
         Op::Set { port, on } => vec![set_out(*port, *on)],
         Op::Pulse { port, seconds } => vec![
             set_out(*port, true),
@@ -96,12 +101,13 @@ fn op_lines(op: &Op, pallets: &[Places]) -> Vec<String> {
 
 /// The program as a URScript file, or why it cannot be one.
 pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, String> {
-    let turns = kin
-        .vars
-        .iter()
-        .all(|v| matches!(v.kind, JointKind::Revolute | JointKind::Continuous));
-    if kin.vars.len() != 6 || !turns {
-        return Err("URScript는 회전 관절 6개인 UR 로봇만 만들 수 있습니다".into());
+    // An axis outside the arm — a track — is no axis this controller has.
+    let (_, outside) = crate::post::axes(kin)
+        .map_err(|_| "URScript는 회전 관절 6개인 UR 로봇만 만들 수 있습니다".to_string())?;
+    if !outside.is_empty() {
+        return Err(
+            "URScript: 외부축(주행 트랙 등)이 있는 로봇은 RAPID(ABB)로만 내보낼 수 있습니다".into(),
+        );
     }
     if export.moves.is_empty() {
         return Err("프로그램에 지점이 없습니다".into());

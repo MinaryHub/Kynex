@@ -18,15 +18,22 @@
 //!   `MoveJ` to the moved pose, the posture left to the controller.
 //! - Markers, for timing on a virtual controller: each move's number in
 //!   `kynex_mark` as it starts and in `kynex_done` as it is done.
+//! - Axes outside the arm — a track it rides on — are the controller's
+//!   external axes, in each target's `extax`: millimetres for a linear one,
+//!   degrees for a rotary one. Targets are then in the frame the track
+//!   stands in, which does not move with it (the robot's root), as a
+//!   controller with its base frame moved by the track has them.
+//! - A positioner is the external axis after those, in degrees, turned by
+//!   `MoveExtJ` at its own speed; it is to be set up on the controller as a
+//!   mechanical unit.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use kreate_math::{DAffine3, DQuat, DVec3};
-use kreate_scene::robot::JointKind;
 
 use crate::path::MoveKind;
-use crate::post::{comment, identifier, Export, Move, Op, Place, Writer};
+use crate::post::{axes, comment, identifier, Export, Move, Op, Place, Writer};
 use crate::{Kinematics, Tool};
 
 /// ABB: RAPID.
@@ -82,36 +89,75 @@ fn quaternion(r: DQuat) -> String {
     format!("[{w},{x},{y},{z}]")
 }
 
-/// A `robtarget` at `pose`, its posture left to the controller.
-fn robtarget(pose: &DAffine3) -> String {
-    let (_, r, t) = pose.to_scale_rotation_translation();
-    format!(
-        "[{},{},[0,0,0,0],[9E9,9E9,9E9,9E9,9E9,9E9]]",
-        mm(t),
-        quaternion(r)
-    )
+/// The arm's joints and the axes outside it (see [`axes`]), by index.
+struct Axes {
+    arm: Vec<usize>,
+    outside: Vec<usize>,
+    /// Whether each outside axis slides, by its place in `outside`.
+    slides: Vec<bool>,
 }
 
-/// A `jointtarget` at `q`, radians as degrees.
-fn jointtarget(q: &[f64]) -> String {
-    let deg: Vec<String> = q.iter().map(|x| fixed(x.to_degrees(), 4)).collect();
-    format!("[[{}],[9E9,9E9,9E9,9E9,9E9,9E9]]", deg.join(","))
+impl Axes {
+    /// `extax`: the outside axes at `q`, millimetres or degrees, the rest
+    /// unused.
+    fn extax(&self, q: &[f64]) -> String {
+        let mut e = self.outside_at(q);
+        e.resize(6, "9E9".into());
+        format!("[{}]", e.join(","))
+    }
+
+    /// The outside axes at `q`, millimetres or degrees.
+    fn outside_at(&self, q: &[f64]) -> Vec<String> {
+        self.outside
+            .iter()
+            .zip(&self.slides)
+            .map(|(i, slides)| {
+                if *slides {
+                    fixed(q[*i] * 1000.0, 2)
+                } else {
+                    fixed(q[*i].to_degrees(), 4)
+                }
+            })
+            .collect()
+    }
+
+    /// A `robtarget` at `pose`, its posture left to the controller.
+    fn robtarget(&self, pose: &DAffine3, q: &[f64]) -> String {
+        let (_, r, t) = pose.to_scale_rotation_translation();
+        format!("[{},{},[0,0,0,0],{}]", mm(t), quaternion(r), self.extax(q))
+    }
+
+    /// A `jointtarget` at `q`, radians as degrees.
+    fn jointtarget(&self, q: &[f64]) -> String {
+        let deg: Vec<String> = self
+            .arm
+            .iter()
+            .map(|i| fixed(q[*i].to_degrees(), 4))
+            .collect();
+        format!("[[{}],{}]", deg.join(","), self.extax(q))
+    }
 }
 
 /// Writes the program as a RAPID module, or says why it cannot be one.
 pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, String> {
-    let turns = kin
-        .vars
-        .iter()
-        .all(|v| matches!(v.kind, JointKind::Revolute | JointKind::Continuous));
-    if kin.vars.len() != 6 || !turns {
-        return Err("RAPID는 회전 관절 6개인 로봇만 만들 수 있습니다".into());
-    }
+    let (arm, outside) = axes(kin).map_err(|e| format!("RAPID: {e}"))?;
+    let slides = outside.iter().map(|i| kin.vars[*i].kind.slides()).collect();
+    let axes = Axes {
+        arm,
+        outside,
+        slides,
+    };
     if export.moves.is_empty() {
         return Err("프로그램에 지점이 없습니다".into());
     }
     let any = &export.moves[0].waypoint.positions;
-    let base = kin.world_of(any, export.base).ok_or("no base frame")?;
+    // With a track, the frame it stands in; else the arm's own base.
+    let frame = if axes.outside.is_empty() {
+        export.base
+    } else {
+        kin.root
+    };
+    let base = kin.world_of(any, frame).ok_or("no base frame")?;
     let flange = kin.world_of(any, export.flange).ok_or("no flange")?;
     let tcp = flange.inverse() * kin.pose(any, tool);
     let in_base = |q: &[f64]| base.inverse() * kin.pose(q, tool);
@@ -123,6 +169,9 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
     let mut zones: BTreeSet<u32> = BTreeSet::new();
     let mut outputs: BTreeSet<u32> = BTreeSet::new();
     let mut inputs: BTreeSet<u32> = BTreeSet::new();
+    // Positioners, as they first come, and the speeds they turn at.
+    let mut units: Vec<String> = Vec::new();
+    let mut turns: BTreeSet<u32> = BTreeSet::new();
     let ops = export
         .moves
         .iter()
@@ -135,6 +184,12 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
             }
             Op::Wait { port, .. } => {
                 inputs.insert(*port);
+            }
+            Op::Turn { unit, speed, .. } => {
+                if !units.contains(unit) {
+                    units.push(unit.clone());
+                }
+                turns.insert(speed.round().max(1.0) as u32);
             }
             _ => {}
         }
@@ -152,7 +207,7 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
                 targets,
                 "  CONST jointtarget j{} := {};",
                 k + 1,
-                jointtarget(&w.positions)
+                axes.jointtarget(&w.positions)
             );
         }
         if by_pose {
@@ -160,14 +215,14 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
                 targets,
                 "  CONST robtarget p{} := {};",
                 k + 1,
-                robtarget(&in_base(&w.positions))
+                axes.robtarget(&in_base(&w.positions), &w.positions)
             );
             if let Some(via) = w.via.as_ref().filter(|_| w.kind == MoveKind::Circular) {
                 let _ = writeln!(
                     targets,
                     "  CONST robtarget v{} := {};",
                     k + 1,
-                    robtarget(&in_base(via))
+                    axes.robtarget(&in_base(via), via)
                 );
             }
             if w.kind != MoveKind::Joint {
@@ -187,10 +242,34 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
         "  ! Made by KYNEX from program \"{}\".",
         comment(export.name)
     );
-    let _ = writeln!(
-        out,
-        "  ! Targets in the base frame (wobj0), millimetres and quaternions."
-    );
+    if axes.outside.is_empty() {
+        let _ = writeln!(
+            out,
+            "  ! Targets in the base frame (wobj0), millimetres and quaternions."
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "  ! Targets in the frame the track stands in (wobj0, the base frame moved by the track), millimetres and quaternions."
+        );
+        for (k, (i, slides)) in axes.outside.iter().zip(&axes.slides).enumerate() {
+            let _ = writeln!(
+                out,
+                "  ! External axis {}: {} ({})",
+                (b'a' + k as u8) as char,
+                comment(&kin.vars[*i].name),
+                if *slides { "mm" } else { "degrees" }
+            );
+        }
+    }
+    for (k, unit) in units.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "  ! External axis {}: positioner {} (degrees), a mechanical unit to set up on the controller",
+            (b'a' + (axes.outside.len() + k) as u8) as char,
+            comment(unit)
+        );
+    }
     if !outputs.is_empty() || !inputs.is_empty() {
         let _ = writeln!(out, "  ! Signals to set up on the controller:");
         for n in &outputs {
@@ -209,6 +288,9 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
     );
     for v in &speeds {
         let _ = writeln!(out, "  CONST speeddata kynex_v{v} := [{v},500,5000,1000];");
+    }
+    for v in &turns {
+        let _ = writeln!(out, "  CONST speeddata kynex_rot{v} := [100,500,5000,{v}];");
     }
     for z in &zones {
         let r = *z as f64;
@@ -245,9 +327,24 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
 
     let mut velset: Option<u32> = None;
     let mut mark = 0;
+    // What an outside axis is at before move `k`: the move before's.
+    let before = |k: usize| {
+        let at = if k == 0 {
+            export.moves.last()
+        } else {
+            export.moves.get(k - 1)
+        };
+        at.map_or_else(Vec::new, |m| m.waypoint.positions.clone())
+    };
+    let ext = |q: Vec<f64>| Ext {
+        axes: &axes,
+        units: &units,
+        at: q,
+    };
     let mut body = |out: &mut String, indent: &str, k: usize, m: &Move, kind: MoveKind| {
+        let e = ext(before(k));
         for op in &m.before {
-            op_lines(out, indent, op, export);
+            op_lines(out, indent, op, export, &e);
         }
         let w = m.waypoint;
         let zone = if w.blend > 0.0 {
@@ -337,8 +434,9 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
         for (k, m) in rest.iter().enumerate() {
             body(&mut out, "      ", k + 1, m, m.waypoint.kind);
         }
+        let e = ext(before(0));
         for op in &export.trailing {
-            op_lines(&mut out, "      ", op, export);
+            op_lines(&mut out, "      ", op, export, &e);
         }
         body(&mut out, "      ", 0, first, first.waypoint.kind);
         let _ = writeln!(out, "    ENDWHILE");
@@ -346,8 +444,9 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
         for (k, m) in rest.iter().enumerate() {
             body(&mut out, "    ", k + 1, m, m.waypoint.kind);
         }
+        let e = ext(before(0));
         for op in &export.trailing {
-            op_lines(&mut out, "    ", op, export);
+            op_lines(&mut out, "    ", op, export, &e);
         }
         if export.markers {
             mark += 1;
@@ -359,10 +458,44 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
     Ok(out)
 }
 
+/// Where the external axes stand between two moves: the robot's own at
+/// `at`, and the positioners, in order after them.
+struct Ext<'a> {
+    axes: &'a Axes,
+    units: &'a [String],
+    at: Vec<f64>,
+}
+
 /// `op` as RAPID, at `indent`.
-fn op_lines(out: &mut String, indent: &str, op: &Op, export: &Export) {
+fn op_lines(out: &mut String, indent: &str, op: &Op, export: &Export, ext: &Ext) {
     let _ = match op {
         Op::Note(n) => writeln!(out, "{indent}! {}", comment(n)),
+        // The positioner alone moves; the robot's own axes stay put.
+        Op::Turn {
+            unit,
+            degrees,
+            speed,
+        } => {
+            let mut e = if ext.at.is_empty() {
+                vec!["9E9".to_string(); ext.axes.outside.len()]
+            } else {
+                ext.axes.outside_at(&ext.at)
+            };
+            for u in ext.units {
+                e.push(if u == unit {
+                    fixed(*degrees, 4)
+                } else {
+                    "9E9".into()
+                });
+            }
+            e.resize(6, "9E9".into());
+            writeln!(
+                out,
+                "{indent}MoveExtJ [[9E9,9E9,9E9,9E9,9E9,9E9],[{}]], kynex_rot{}, fine;",
+                e.join(","),
+                speed.round().max(1.0) as u32
+            )
+        }
         Op::Set { port, on } => writeln!(out, "{indent}SetDO DO_KYNEX_{port}, {};", u8::from(*on)),
         Op::Pulse { port, seconds } => writeln!(
             out,

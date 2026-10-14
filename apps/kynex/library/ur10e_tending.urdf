@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<robot name="ur10e">
+  <material name="ur_blue"><color rgba="0.35 0.62 0.86 1"/></material>
+  <material name="ur_grey"><color rgba="0.80 0.82 0.84 1"/></material>
+  <material name="ur_dark"><color rgba="0.20 0.21 0.23 1"/></material>
+  <material name="gripper"><color rgba="0.30 0.32 0.36 1"/></material>
+  <material name="jaw"><color rgba="0.90 0.55 0.15 1"/></material>
+  <link name="base_link">
+    <visual><origin xyz="0 0 0.05"/><geometry><cylinder radius="0.095" length="0.1"/></geometry><material name="ur_dark"/></visual>
+  </link>
+  <joint name="base_link-base_fixed_joint" type="fixed">
+    <parent link="base_link"/><child link="base"/><origin rpy="0 0 3.141592654"/>
+  </joint>
+  <link name="base"/>
+  <joint name="shoulder_pan_joint" type="revolute">
+    <parent link="base_link"/><child link="shoulder_link"/>
+    <origin xyz="0 0 0.1807"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="330" velocity="2.0944"/>
+  </joint>
+  <link name="shoulder_link">
+    <visual><origin xyz="0 0 -0.05"/><geometry><cylinder radius="0.08" length="0.14"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="shoulder_lift_joint" type="revolute">
+    <parent link="shoulder_link"/><child link="upper_arm_link"/>
+    <origin rpy="1.570796327 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="330" velocity="2.0944"/>
+  </joint>
+  <link name="upper_arm_link">
+    <visual><origin xyz="-0.306 0 0.176" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.06" length="0.612"/></geometry><material name="ur_grey"/></visual>
+    <visual><origin xyz="0 0 0.09"/><geometry><cylinder radius="0.08" length="0.18"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="elbow_joint" type="revolute">
+    <parent link="upper_arm_link"/><child link="forearm_link"/>
+    <origin xyz="-0.6127 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="150" velocity="3.1416"/>
+  </joint>
+  <link name="forearm_link">
+    <visual><origin xyz="-0.286 0 0.04" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.045" length="0.57"/></geometry><material name="ur_grey"/></visual>
+    <visual><origin xyz="0 0 0.08"/><geometry><cylinder radius="0.06" length="0.16"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="wrist_1_joint" type="revolute">
+    <parent link="forearm_link"/><child link="wrist_1_link"/>
+    <origin xyz="-0.57155 0 0.17415"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="56" velocity="3.1416"/>
+  </joint>
+  <link name="wrist_1_link">
+    <visual><geometry><cylinder radius="0.045" length="0.12"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="wrist_2_joint" type="revolute">
+    <parent link="wrist_1_link"/><child link="wrist_2_link"/>
+    <origin xyz="0 -0.11985 0" rpy="1.570796327 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="56" velocity="3.1416"/>
+  </joint>
+  <link name="wrist_2_link">
+    <visual><geometry><cylinder radius="0.045" length="0.12"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="wrist_3_joint" type="revolute">
+    <parent link="wrist_2_link"/><child link="wrist_3_link"/>
+    <origin xyz="0 0.11655 0" rpy="1.570796327 3.141592654 3.141592654"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="56" velocity="3.1416"/>
+  </joint>
+  <link name="wrist_3_link">
+    <visual><origin xyz="0 0 -0.02"/><geometry><cylinder radius="0.045" length="0.04"/></geometry><material name="ur_dark"/></visual>
+  </link>
+  <joint name="wrist_3-flange" type="fixed">
+    <parent link="wrist_3_link"/><child link="tool0"/>
+  </joint>
+  <link name="tool0"/>
+  <joint name="tool0-gripper" type="fixed">
+    <parent link="tool0"/><child link="gripper"/>
+  </joint>
+  <link name="gripper">
+    <visual><origin xyz="0 0 0.04"/><geometry><box size="0.09 0.24 0.08"/></geometry><material name="gripper"/></visual>
+    <visual><origin xyz="0 0.07 0.105"/><geometry><box size="0.07 0.07 0.05"/></geometry><material name="gripper"/></visual>
+    <visual><origin xyz="0 -0.07 0.105"/><geometry><box size="0.07 0.07 0.05"/></geometry><material name="gripper"/></visual>
+    <visual><origin xyz="0.045 0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="jaw"/></visual>
+    <visual><origin xyz="-0.045 0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="jaw"/></visual>
+    <visual><origin xyz="0.045 -0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="jaw"/></visual>
+    <visual><origin xyz="-0.045 -0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="jaw"/></visual>
+  </link>
+  <joint name="gripper-grip_a" type="fixed">
+    <parent link="gripper"/><child link="grip_a"/><origin xyz="0 0.07 0.17"/>
+  </joint>
+  <link name="grip_a"/>
+  <joint name="gripper-grip_b" type="fixed">
+    <parent link="gripper"/><child link="grip_b"/><origin xyz="0 -0.07 0.17"/>
+  </joint>
+  <link name="grip_b"/>
+</robot>

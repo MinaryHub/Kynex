@@ -129,6 +129,9 @@ pub enum Action {
     /// Move pallet `pallet`'s count on to its next place, from its last
     /// back to its first.
     Next { pallet: u64 },
+    /// Send AMR `amr` to stop `stop`; a wait for it to say it has arrived
+    /// holds the robot until it has.
+    Drive { amr: u64, stop: u64 },
 }
 
 /// One line of a program: a move to a point, or an action.
@@ -486,6 +489,10 @@ impl Program {
                 "next" => Step::Do(Action::Next {
                     pallet: object(s, "pallet")?,
                 }),
+                "drive" => Step::Do(Action::Drive {
+                    amr: object(s, "amr")?,
+                    stop: object(s, "stop")?,
+                }),
                 _ => continue,
             };
             steps.push(step);
@@ -561,6 +568,8 @@ impl Program {
                         Action::Delay { seconds } => format!("sleep({seconds})"),
                         Action::Next { pallet } =>
                             format!("move pallet {} on to its next place", name(*pallet)),
+                        Action::Drive { amr, stop } =>
+                            format!("send AMR {} to {}", name(*amr), name(*stop)),
                     }
                 )),
             }
@@ -794,6 +803,13 @@ fn action_json(a: &Action, name: &dyn Fn(u64) -> String) -> Value {
             "pallet": pallet.to_string(),
             "pallet_name": name(*pallet),
         }),
+        Action::Drive { amr, stop } => json!({
+            "type": "drive",
+            "amr": amr.to_string(),
+            "amr_name": name(*amr),
+            "stop": stop.to_string(),
+            "stop_name": name(*stop),
+        }),
     }
 }
 
@@ -831,6 +847,10 @@ pub fn action_of(v: &Value) -> Result<Action, String> {
         },
         "next" => Action::Next {
             pallet: uid("pallet")?,
+        },
+        "drive" => Action::Drive {
+            amr: uid("amr")?,
+            stop: uid("stop")?,
         },
         other => return Err(format!("unknown step {other:?}")),
     })

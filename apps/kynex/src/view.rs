@@ -355,12 +355,17 @@ impl Stage {
                 touched = true;
                 answer
             } else if library::is_op(&op) {
+                // The scene before, to carry the parts on moved equipment
+                // with it, and take those on removed equipment away.
+                let before = self.base.clone().unwrap_or_else(|| doc.clone());
                 let (reply, roles) = self.library.handle(&request.body);
                 for (uid, name, kind) in roles.added {
                     self.cell.ensure(uid, name, kind);
                 }
-                self.cell.forget(&roles.removed);
                 self.rebase(doc);
+                let after = self.base.as_ref().unwrap_or(doc);
+                self.cell.carry(&before, after);
+                self.cell.forget(&roles.removed);
                 touched = true;
                 reply
             } else if cell::is_op(&op) {

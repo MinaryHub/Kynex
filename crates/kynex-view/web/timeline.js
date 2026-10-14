@@ -26,6 +26,7 @@ const ACTIVITIES = {
   cut: ['가공', '#3fcf8e'],
   door: ['문 개폐', '#7d8fa6'],
   blocked: ['언로드 대기', '#e0a43a'],
+  drive: ['주행', '#9b7bff'],
   idle: ['쉼', '#2f353f'],
 };
 

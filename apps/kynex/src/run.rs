@@ -286,6 +286,11 @@ impl Runner {
             }
             Step::Do(Action::Wait { .. }) => State::Waiting,
             Step::Do(Action::Delay { seconds }) => State::Until(time + seconds),
+            Step::Do(Action::Drive { amr, stop }) => {
+                cell.drive(scene, amr, stop)?;
+                self.step += 1;
+                State::Begin
+            }
             Step::Do(Action::Next { pallet }) => {
                 let count = cell.pallet_slots(scene, pallet).len();
                 if count == 0 {
@@ -466,6 +471,7 @@ pub fn signal_label(signal: Signal) -> &'static str {
         Signal::Idle => "가공 대기",
         Signal::Done => "가공 완료",
         Signal::PartAtEnd => "부품 도착",
+        Signal::Arrived => "AMR 도착",
     }
 }
 

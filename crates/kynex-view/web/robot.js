@@ -50,6 +50,7 @@ const SIGNALS_OF = {
     ['done', '성형 완료'],
   ],
   conveyor: [['part_at_end', '부품 도착']],
+  amr: [['arrived', 'AMR 도착']],
 };
 const SPEEDS = [1, 2, 5, 10, 20];
 
@@ -413,6 +414,7 @@ export class RobotPanel {
               <option value="wait">신호 대기</option>
               <option value="delay">시간 대기</option>
               <option value="next">팔레트 다음 칸</option>
+              <option value="drive">AMR 주행</option>
             </select>
           </div>
           <div class="copy-bar" hidden></div>
@@ -552,6 +554,13 @@ export class RobotPanel {
         icon = '칸';
         body = pick('pallet', keep(this.pallets(), step.pallet, step.pallet_name), step.pallet) + '<span class="unit">다음 칸</span>';
         break;
+      case 'drive':
+        icon = '주행';
+        body =
+          pick('amr', keep(this.ofKind('amr'), step.amr, step.amr_name), step.amr) +
+          '<span class="unit">→</span>' +
+          pick('stop', keep(this.ofKind('amr_stop'), step.stop, step.stop_name), step.stop);
+        break;
     }
     return `
           <li class="point action${cursor ? ' cursor' : ''}${inrange ? ' inrange' : ''}" data-index="${i}" data-type="${step.type}">
@@ -612,6 +621,11 @@ export class RobotPanel {
       ${copy}`;
   }
 
+  // The cell's components of one kind, by identity and name.
+  ofKind(kind) {
+    return this.cell.components.filter((c) => c.kind === kind).map((c) => [c.object, c.name]);
+  }
+
   // The machines a robot tends: CNC and injection moulding machines.
   machines() {
     return this.cell.components.filter((c) => c.kind === 'cnc' || c.kind === 'molder').map((c) => [c.object, c.name]);
@@ -669,6 +683,11 @@ export class RobotPanel {
         return { type, seconds: 1 };
       case 'next':
         return pallet ? { type, pallet } : null;
+      case 'drive': {
+        const amr = this.ofKind('amr')[0]?.[0];
+        const stop = this.ofKind('amr_stop')[0]?.[0];
+        return amr && stop ? { type, amr, stop } : null;
+      }
     }
     return null;
   }
@@ -1075,7 +1094,7 @@ export class RobotPanel {
     if (opt === 'newstep' && e.target.value) {
       const step = this.newAction(r, e.target.value);
       e.target.value = '';
-      if (!step) return this.ctx.toast('셀에 그리퍼, 장비(CNC·사출기)나 팔레트가 없습니다. 먼저 셀 역할을 정하세요');
+      if (!step) return this.ctx.toast('이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요');
       this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });
       if (ui.cursor != null) ui.cursor += 1;
     }

@@ -142,6 +142,16 @@ pub const TEMPLATES: &[Template] = &[
         ],
     },
     Template {
+        key: "amr_stop",
+        name: "AMR 정지 위치",
+        group: "물류",
+        // The AMR's own footprint, to see where it will stand.
+        params: &[
+            p("length", "길이", 0.9, 0.5, 2.0),
+            p("width", "폭", 0.6, 0.4, 1.5),
+        ],
+    },
+    Template {
         key: "pedestal",
         name: "로봇 받침대",
         group: "주변 장치",
@@ -532,8 +542,9 @@ fn role_uids(item: &Item, built: &Built) -> Vec<(u64, String, Kind)> {
         .roles
         .iter()
         .filter_map(|(id, kind)| {
-            // A machine is the item as a whole: its root, under its name.
-            if *kind == Kind::Cnc {
+            // A machine, an AMR, a stop is the item as a whole: its root,
+            // under its name.
+            if matches!(kind, Kind::Cnc | Kind::Molder | Kind::Amr | Kind::Stop) {
                 return Some((item.root_uid(), item.name.clone(), *kind));
             }
             let k = built.order.iter().position(|o| o == id)? as u64;
@@ -712,13 +723,19 @@ fn build(item: &Item) -> Result<Built, String> {
         }
         "amr" => {
             let c = Colours::new(&mut doc);
-            amr(
+            let amr = amr(
                 &mut doc,
                 &c,
                 item.param("length"),
                 item.param("width"),
                 item.param("height"),
             );
+            roles.push((amr, Kind::Amr));
+        }
+        "amr_stop" => {
+            let c = Colours::new(&mut doc);
+            let stop = amr_stop(&mut doc, &c, item.param("length"), item.param("width"));
+            roles.push((stop, Kind::Stop));
         }
         "pedestal" => {
             let c = Colours::new(&mut doc);
@@ -1107,7 +1124,9 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
 /// An autonomous mobile robot `l` × `w` × `h`, centred on the origin: a
 /// body with a top plate to carry a load, a bumper round its foot, drive
 /// wheels at its middle and a laser scanner at its front.
-fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
+fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
+    let amr = doc.add_object(Object::new("amr", ObjectData::Empty));
+    let m = Some(amr);
     let clearance = 0.04;
     block(
         doc,
@@ -1115,7 +1134,7 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         [l, w, h - clearance - 0.02],
         [0.0, 0.0, clearance + (h - clearance - 0.02) / 2.0],
         c.body,
-        None,
+        m,
     );
     block(
         doc,
@@ -1123,7 +1142,7 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         [l - 0.02, w - 0.02, 0.02],
         [0.0, 0.0, h - 0.01],
         c.dark,
-        None,
+        m,
     );
     block(
         doc,
@@ -1131,7 +1150,7 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         [l + 0.02, w + 0.02, 0.06],
         [0.0, 0.0, clearance + 0.05],
         c.dark,
-        None,
+        m,
     );
     block(
         doc,
@@ -1139,7 +1158,7 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         [l + 0.004, w + 0.004, 0.025],
         [0.0, 0.0, h * 0.7],
         c.accent,
-        None,
+        m,
     );
     for (side, y) in [("left", -1.0), ("right", 1.0)] {
         bar(
@@ -1150,7 +1169,7 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
             [0.0, y * (w / 2.0 - 0.03), 0.08],
             false,
             c.belt,
-            None,
+            m,
         );
     }
     post(
@@ -1160,8 +1179,29 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         0.06,
         [l / 2.0 - 0.06, 0.0, h + 0.03],
         c.dark,
-        None,
+        m,
     );
+    amr
+}
+
+/// Where an AMR stops: a frame on the floor its size, and an arrow along
+/// +X, the way the AMR faces there. Returns the stop, an empty at its
+/// middle.
+fn amr_stop(doc: &mut Document, c: &Colours, l: f64, w: f64) -> ObjectId {
+    let stop = doc.add_object(Object::new("stop", ObjectData::Empty));
+    let s = Some(stop);
+    let t = 0.03;
+    for (name, size, at) in [
+        ("edge_front", [l, t, 0.004], [0.0, -w / 2.0, 0.002]),
+        ("edge_back", [l, t, 0.004], [0.0, w / 2.0, 0.002]),
+        ("edge_left", [t, w, 0.004], [-l / 2.0, 0.0, 0.002]),
+        ("edge_right", [t, w, 0.004], [l / 2.0, 0.0, 0.002]),
+        ("arrow", [l * 0.5, 0.05, 0.005], [0.0, 0.0, 0.003]),
+        ("arrow_head", [0.08, 0.16, 0.005], [l * 0.25, 0.0, 0.003]),
+    ] {
+        block(doc, name, size, at, c.fence, s);
+    }
+    stop
 }
 
 /// A fence `l` × `w` round the origin: posts at most 1.3 m apart, and three

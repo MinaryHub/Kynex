@@ -299,11 +299,12 @@ thumbnails: each drawn from the piece at its usual size
   guard, injection unit with its hopper; length, width, height).
 - 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대.
 - 물류: 벨트 컨베이어 (length, belt width, height), AMR (a mobile base
-  with a top plate to carry a load; length, width, height).
+  with a top plate to carry a load; length, width, height), AMR 정지 위치
+  (a frame its size on the floor, an arrow the way it faces).
 - 안전: 안전 펜스.
 
-The conveyor and the injection moulding machine come with their roles
-and run (see below). The AMR is laid out only, for now.
+The conveyor, the injection moulding machine, the AMR and its stops come
+with their roles and run (see below).
 
 Drag an entry onto the scene, or click it and then click the scene. It
 lands on the floor, or on top of whatever is under the pointer (a robot
@@ -335,6 +336,8 @@ not change the session's scene.
   - 사출 성형기: the object whose children include its guard (`…door…`)
     and its mould (`…mould…`).
   - 컨베이어: a belt, a box whose top carries parts along its own X.
+  - AMR: a mobile robot, with its top plate (`…top…`) below it.
+  - AMR 정지 위치: where an AMR stops, facing the stop's X.
 
   Settings start at industry-typical values (docs/roadmap-vs-visual-components.md
   §4): 90 s machining, 3 s door, 1 s chuck, 5 × 4 places 100 mm apart, and
@@ -378,6 +381,15 @@ not change the session's scene.
   A program waits for a part with the conveyor's signal 부품 도착, its
   sensor at the end. A scenario comparison counts the parts taken away at
   a conveyor's end as delivered.
+- **AMRs drive** to stops: they turn to face the stop, drive there
+  straight (1 m/s), and turn as the stop faces (1 rad/s). In the
+  inspector of an AMR, a button for each stop sends it there. In a
+  program, **AMR 주행** sends it, and a wait for **AMR 도착** holds the
+  robot until it is there. A part let go over an AMR's top plate stands on
+  it and rides along. The timeline shows each AMR's driving.
+- **Parts go with their equipment**: move a pallet table, a machine or a
+  conveyor in the library and the parts on it go with it; remove it and
+  they go too.
 - The demo cell (`cargo run -p kynex-link --example cnc_cell`) has a UR10e
   with a double gripper on a pedestal, two CNC machines, an infeed and an
   outfeed pallet, and a fence.

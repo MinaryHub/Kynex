@@ -14,6 +14,8 @@ const KINDS = [
   ['fence', '안전 펜스'],
   ['molder', '사출 성형기'],
   ['conveyor', '컨베이어'],
+  ['amr', 'AMR'],
+  ['amr_stop', 'AMR 정지 위치'],
 ];
 
 // Each kind's settings, as the inspector shows them: key, label, unit, and
@@ -39,6 +41,7 @@ const FIELDS = {
     ['feed', '소재 공급 간격 (0: 없음)', 's', 1],
     ['drain', '끝에서 치움 (1: 예)', '', 1],
   ],
+  amr: [['speed', '주행 속도', 'mm/s', 1000]],
 };
 FIELDS.outfeed = FIELDS.infeed;
 
@@ -71,6 +74,8 @@ export class CellPanel {
       if (act) this.send({ op: act, object: this.ctx.selected() });
       const action = e.target.closest('[data-machine]')?.dataset.machine;
       if (action) this.send({ op: 'machine', object: this.ctx.selected(), action });
+      const stop = e.target.closest('[data-drive]')?.dataset.drive;
+      if (stop) this.send({ op: 'drive', object: this.ctx.selected(), stop });
     });
     // What the inspector last drew, so that a running machine's progress
     // does not redraw the fields under the pointer.
@@ -140,6 +145,13 @@ export class CellPanel {
           `<button class="text-btn" data-machine="start"${busy ? ' disabled' : ''}>성형 시작</button>` +
           `<button class="text-btn quiet" data-cell="empty"${busy ? ' disabled' : ''}>금형 비우기</button>`;
       }
+    } else if (c && c.kind === 'amr') {
+      const stops = this.cell.components.filter((s) => s.kind === 'amr_stop');
+      actions = stops.length
+        ? stops
+            .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(s.name)}</button>`)
+            .join('') + (c.amr?.driving ? '<span class="muted">주행 중</span>' : '')
+        : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
     } else if (c && c.kind === 'gripper' && !c.robot) {
       actions = '<span class="warn-text">로봇의 링크가 아닙니다</span>';
     }

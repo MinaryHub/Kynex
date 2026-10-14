@@ -79,10 +79,13 @@ pub enum Signal {
     Done,
     /// A conveyor's sensor at its end: a part has come to it.
     PartAtEnd,
+    /// An AMR at rest where it was sent.
+    Arrived,
 }
 
 impl Signal {
-    pub const ALL: [Signal; 6] = [
+    pub const ALL: [Signal; 7] = [
+        Signal::Arrived,
         Signal::DoorOpen,
         Signal::DoorClosed,
         Signal::Clamped,
@@ -99,6 +102,7 @@ impl Signal {
             Signal::Idle => "idle",
             Signal::Done => "done",
             Signal::PartAtEnd => "part_at_end",
+            Signal::Arrived => "arrived",
         }
     }
 
@@ -129,10 +133,17 @@ pub enum Kind {
     /// A belt conveyor: the belt, a box whose top it carries parts along,
     /// along its own X, to its end.
     Conveyor,
+    /// An autonomous mobile robot: an object with its top plate below it
+    /// (`…top…`), which parts ride on. It drives to stops.
+    Amr,
+    /// Where an AMR stops: its centre there, facing the stop's X.
+    Stop,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 9] = [
+        Kind::Amr,
+        Kind::Stop,
         Kind::Cnc,
         Kind::Infeed,
         Kind::Outfeed,
@@ -151,6 +162,8 @@ impl Kind {
             Kind::Fence => "fence",
             Kind::Molder => "molder",
             Kind::Conveyor => "conveyor",
+            Kind::Amr => "amr",
+            Kind::Stop => "amr_stop",
         }
     }
 
@@ -220,6 +233,11 @@ impl Props {
                 door: 1.5,
                 ..Self::default()
             },
+            // A mobile base's usual pace indoors among people.
+            Kind::Amr => Self {
+                speed: 1.0,
+                ..Self::default()
+            },
             _ => Self::default(),
         }
     }
@@ -239,7 +257,7 @@ impl Props {
             .map_or(self.pitch, |x| x.clamp(0.01, 2.0));
         self.speed = v["speed"]
             .as_f64()
-            .map_or(self.speed, |x| x.clamp(0.01, 2.0));
+            .map_or(self.speed, |x| x.clamp(0.01, 3.0));
         self.feed = time("feed", self.feed);
         self.drain = v["drain"]
             .as_f64()
@@ -355,6 +373,47 @@ impl Belt {
     }
 }
 
+/// An AMR's top plate: where the AMR stands now, and the plate's box from
+/// the AMR's middle.
+struct Deck {
+    object: u64,
+    pose: DAffine3,
+    lo: DVec3,
+    hi: DVec3,
+}
+
+impl Deck {
+    /// Whether part `p` stands on the plate.
+    fn carries(&self, p: &Part) -> bool {
+        let foot = self
+            .pose
+            .inverse()
+            .transform_point3(p.world.translation - DVec3::Z * (p.size().1 / 2.0));
+        foot.x >= self.lo.x
+            && foot.x <= self.hi.x
+            && foot.y >= self.lo.y
+            && foot.y <= self.hi.y
+            && (foot.z - self.hi.z).abs() < 0.01
+    }
+
+    /// The plate's height under `at`, a part's centre `half` its height
+    /// up, if `at` is over the plate and not far above it.
+    fn top_under(&self, at: DVec3, half: f64) -> Option<f64> {
+        let l = self.pose.inverse().transform_point3(at);
+        let above = l.z - half - self.hi.z;
+        (l.x >= self.lo.x
+            && l.x <= self.hi.x
+            && l.y >= self.lo.y
+            && l.y <= self.hi.y
+            && (-0.01..0.1).contains(&above))
+        .then(|| {
+            self.pose
+                .transform_point3(DVec3::new(0.0, 0.0, self.hi.z))
+                .z
+        })
+    }
+}
+
 /// The cell: roles, and parts.
 #[derive(Debug, Default)]
 pub struct Cell {
@@ -381,6 +440,45 @@ pub struct Cell {
     conveying: bool,
     /// Parts taken away at a conveyor's end since last counted.
     drained: usize,
+    /// Each AMR that has been sent anywhere: where it is, and the legs of
+    /// its way still to go.
+    rovers: BTreeMap<u64, Rover>,
+}
+
+/// An AMR on its way: where its centre is on the floor and which way it
+/// faces, and what it still has to do.
+#[derive(Clone, Debug, PartialEq)]
+struct Rover {
+    at: DVec3,
+    yaw: f64,
+    legs: Vec<Leg>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Leg {
+    /// Turn on the spot to face this way.
+    Turn(f64),
+    /// Drive straight to here.
+    Go(DVec3),
+}
+
+/// How fast an AMR turns on the spot, radians a second.
+const AMR_TURN: f64 = 1.0;
+
+/// Where a placement stands on the floor, and which way its X faces.
+fn floor_pose(world: &DAffine3) -> (DVec3, f64) {
+    let x = world.matrix3.x_axis;
+    (world.translation, x.y.atan2(x.x))
+}
+
+/// The placement at `at` facing `yaw`, upright.
+fn pose_of(at: DVec3, yaw: f64) -> DAffine3 {
+    DAffine3::from_rotation_translation(kreate_math::DQuat::from_rotation_z(yaw), at)
+}
+
+/// From `from` to `to` the short way round, radians.
+fn turn_between(from: f64, to: f64) -> f64 {
+    (to - from + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }
 
 /// How often a running cell tells the viewers how it is getting on.
@@ -558,16 +656,18 @@ impl Cell {
             }
         }
         self.pending = waiting;
-        // One machine is one CNC role: a role on a part of a machine that
-        // has one already (saved before auto roles knew better) is dropped.
+        // One machine is one role: a role on a part of a machine, an AMR
+        // or a stop that has one already (saved before auto roles, or the
+        // library, knew better) is dropped.
+        let whole = |k: Kind| matches!(k, Kind::Cnc | Kind::Molder | Kind::Amr | Kind::Stop);
         let machines: Vec<ObjectId> = self
             .components
             .iter()
-            .filter(|c| c.kind == Kind::Cnc)
+            .filter(|c| whole(c.kind))
             .filter_map(|c| id_of(doc, c.object))
             .collect();
         self.components.retain(|c| {
-            c.kind != Kind::Cnc
+            !whole(c.kind)
                 || !id_of(doc, c.object)
                     .is_some_and(|id| machines.iter().any(|m| is_below(doc, id, *m)))
         });
@@ -727,6 +827,72 @@ impl Cell {
             }
         }
         put
+    }
+
+    /// The parts standing on component `c` in `doc`, by index: in its
+    /// places (a pallet's, a chuck or mould), or on its belt.
+    fn parts_on(&self, doc: &Document, c: &Component) -> Vec<usize> {
+        let mut places = self.slots(doc, c);
+        places.extend(self.seat(doc, c));
+        let belt = (c.kind == Kind::Conveyor)
+            .then(|| self.belts(doc).into_iter().find(|b| b.object == c.object))
+            .flatten();
+        self.parts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.held.is_none())
+            .filter(|(_, p)| {
+                places
+                    .iter()
+                    .any(|at| p.world.translation.distance(*at) < SNAP)
+                    || belt.as_ref().is_some_and(|b| b.along_of(p).is_some())
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Equipment moved or removed between scene `before` and `after`: the
+    /// parts on what moved go with it, and those on what went go too.
+    pub fn carry(&mut self, before: &Document, after: &Document) {
+        let mut gone = Vec::new();
+        for c in self.components.clone() {
+            let (Some(was), now) = (id_of(before, c.object), id_of(after, c.object)) else {
+                continue;
+            };
+            let on = self.parts_on(before, &c);
+            if on.is_empty() {
+                continue;
+            }
+            match now {
+                Some(now) => {
+                    let moved = after.world_transform(now) * before.world_transform(was).inverse();
+                    if moved.abs_diff_eq(DAffine3::IDENTITY, 1e-9) {
+                        continue;
+                    }
+                    for i in on {
+                        // Moved, not turned over: the part stays upright.
+                        let p = &mut self.parts[i];
+                        let (_, turn, _) = moved.to_scale_rotation_translation();
+                        let at = moved.transform_point3(p.world.translation);
+                        p.world = DAffine3::from_rotation_translation(turn, at) * {
+                            let (_, r, _) = p.world.to_scale_rotation_translation();
+                            DAffine3::from_quat(r)
+                        };
+                    }
+                    self.changed = true;
+                }
+                None => gone.extend(on),
+            }
+        }
+        if !gone.is_empty() {
+            gone.sort_unstable_by(|a, b| b.cmp(a));
+            gone.dedup();
+            for i in gone {
+                let p = self.parts.remove(i);
+                self.removed.push(p.uid);
+            }
+            self.changed = true;
+        }
     }
 
     /// Takes away the roles of objects that are gone from the scene.
@@ -997,6 +1163,7 @@ impl Cell {
                     .extend(std::mem::take(&mut self.parts).iter().map(|p| p.uid));
                 self.changed = true;
             }
+            "drive" => self.drive(doc, uid("object")?, uid("stop")?)?,
             "grip" => self.grip(doc, uid("gripper")?)?,
             "release" => self.release(doc, uid("gripper")?)?,
             "machine" => {
@@ -1054,6 +1221,7 @@ impl Cell {
         let at = Self::grip_point(doc, gripper).ok_or("no such gripper")?;
         let places = self.places(doc);
         let belts = self.belts(doc);
+        let decks = self.decks(doc);
         let Some(part) = self
             .parts
             .iter_mut()
@@ -1077,6 +1245,14 @@ impl Cell {
             .next()
         {
             // Let go over a belt: it stands on it, upright, to be carried.
+            let half = part.size().1 / 2.0;
+            part.world = DAffine3::from_translation(DVec3::new(here.x, here.y, top + half));
+        } else if let Some(top) = decks
+            .iter()
+            .filter_map(|d| d.top_under(here, part.size().1 / 2.0))
+            .next()
+        {
+            // On an AMR's top plate: it rides along.
             let half = part.size().1 / 2.0;
             part.world = DAffine3::from_translation(DVec3::new(here.x, here.y, top + half));
         }
@@ -1176,6 +1352,10 @@ impl Cell {
         let Some(c) = self.components.iter().find(|c| c.object == machine) else {
             return false;
         };
+        if c.kind == Kind::Amr {
+            return signal == Signal::Arrived
+                && self.rovers.get(&machine).is_none_or(|r| r.legs.is_empty());
+        }
         if c.kind == Kind::Conveyor {
             return signal == Signal::PartAtEnd
                 && self
@@ -1194,7 +1374,7 @@ impl Cell {
             Signal::Clamped => m.clamped,
             Signal::Idle => m.machining.is_none(),
             Signal::Done => m.machining.is_none() && self.in_chuck(doc, c) == Some(true),
-            Signal::PartAtEnd => false,
+            Signal::PartAtEnd | Signal::Arrived => false,
         }
     }
 
@@ -1221,6 +1401,7 @@ impl Cell {
     /// Whether anything is moving or running: the loop then keeps time.
     pub fn is_running(&self) -> bool {
         self.conveying
+            || self.rovers.values().any(|r| !r.legs.is_empty())
             || self
                 .components
                 .iter()
@@ -1292,7 +1473,149 @@ impl Cell {
         }
         let (carried, arrived) = self.convey(doc, dt);
         self.conveying = carried;
-        (moving || carried, finished || arrived)
+        let (driven, stopped) = self.drive_on(doc, dt);
+        (moving || carried || driven, finished || arrived || stopped)
+    }
+
+    /// Where AMR `c` stands now: where it was sent, or else where it is
+    /// placed in `doc`.
+    fn rover(&self, doc: &Document, c: &Component) -> Option<Rover> {
+        if let Some(r) = self.rovers.get(&c.object) {
+            return Some(r.clone());
+        }
+        let (at, yaw) = floor_pose(&doc.world_transform(id_of(doc, c.object)?));
+        Some(Rover {
+            at,
+            yaw,
+            legs: Vec::new(),
+        })
+    }
+
+    /// Sends AMR `amr` to stop `stop`: it turns to face it, drives there
+    /// straight, and turns as the stop faces.
+    pub fn drive(&mut self, doc: &Document, amr: u64, stop: u64) -> Result<(), String> {
+        let c = self
+            .components
+            .iter()
+            .find(|c| c.object == amr && c.kind == Kind::Amr)
+            .cloned()
+            .ok_or("AMR가 아닙니다")?;
+        let s = self
+            .components
+            .iter()
+            .find(|c| c.object == stop && c.kind == Kind::Stop)
+            .ok_or("AMR 정지 위치가 아닙니다")?;
+        let (to, facing) =
+            floor_pose(&doc.world_transform(id_of(doc, s.object).ok_or("no such stop")?));
+        let mut r = self.rover(doc, &c).ok_or("no such AMR")?;
+        if !r.legs.is_empty() {
+            return Err("AMR가 아직 주행 중입니다".into());
+        }
+        // The floor where it drives: its own height, not the stop's.
+        let to = DVec3::new(to.x, to.y, r.at.z);
+        let way = to - r.at;
+        if way.truncate().length() > 1e-3 {
+            r.legs.push(Leg::Turn(way.y.atan2(way.x)));
+            r.legs.push(Leg::Go(to));
+        }
+        r.legs.push(Leg::Turn(facing));
+        self.rovers.insert(amr, r);
+        self.changed = true;
+        Ok(())
+    }
+
+    /// Moves each AMR on its way by `dt` seconds, the parts on its top
+    /// plate with it. Returns whether one moved, and whether one arrived.
+    fn drive_on(&mut self, doc: &Document, dt: f64) -> (bool, bool) {
+        let (mut moved, mut arrived) = (false, false);
+        let amrs: Vec<Component> = self
+            .components
+            .iter()
+            .filter(|c| {
+                c.kind == Kind::Amr
+                    && self
+                        .rovers
+                        .get(&c.object)
+                        .is_some_and(|r| !r.legs.is_empty())
+            })
+            .cloned()
+            .collect();
+        for c in amrs {
+            let deck = self.decks(doc).into_iter().find(|d| d.object == c.object);
+            let r = self.rovers.get_mut(&c.object).expect("an AMR on its way");
+            let before = pose_of(r.at, r.yaw);
+            let mut left = dt;
+            while left > 1e-12 {
+                let Some(leg) = r.legs.first().copied() else {
+                    break;
+                };
+                match leg {
+                    Leg::Turn(to) => {
+                        let need = turn_between(r.yaw, to);
+                        let can = AMR_TURN * left;
+                        if need.abs() <= can {
+                            r.yaw = to;
+                            left -= need.abs() / AMR_TURN;
+                            r.legs.remove(0);
+                        } else {
+                            r.yaw += can * need.signum();
+                            left = 0.0;
+                        }
+                    }
+                    Leg::Go(to) => {
+                        let need = to.distance(r.at);
+                        let can = c.props.speed * left;
+                        if need <= can {
+                            r.at = to;
+                            left -= need / c.props.speed;
+                            r.legs.remove(0);
+                        } else {
+                            r.at += (to - r.at) / need * can;
+                            left = 0.0;
+                        }
+                    }
+                }
+            }
+            moved = true;
+            arrived |= r.legs.is_empty();
+            let shift = pose_of(r.at, r.yaw) * before.inverse();
+            // What stands on its top plate rides along.
+            if let Some(deck) = deck {
+                for p in &mut self.parts {
+                    if p.held.is_none() && deck.carries(p) {
+                        let (_, turn, _) = shift.to_scale_rotation_translation();
+                        let at = shift.transform_point3(p.world.translation);
+                        let (_, own, _) = p.world.to_scale_rotation_translation();
+                        p.world = DAffine3::from_rotation_translation(turn * own, at);
+                    }
+                }
+            }
+        }
+        (moved, arrived)
+    }
+
+    /// Each AMR's top plate where the AMR now is.
+    fn decks(&self, doc: &Document) -> Vec<Deck> {
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Amr)
+            .filter_map(|c| {
+                let id = id_of(doc, c.object)?;
+                let home = doc.world_transform(id);
+                let (lo, hi) = bounds(doc, part_named(doc, id, "top")?)?;
+                let (at, yaw) = floor_pose(&home);
+                let r = self.rover(doc, c)?;
+                // Where the plate is from the AMR's middle, as placed.
+                let local = pose_of(at, yaw).inverse();
+                let (a, b) = (local.transform_point3(lo), local.transform_point3(hi));
+                Some(Deck {
+                    object: c.object,
+                    pose: pose_of(r.at, r.yaw),
+                    lo: a.min(b),
+                    hi: a.max(b),
+                })
+            })
+            .collect()
     }
 
     /// Every conveyor's belt, where it is in `doc`.
@@ -1409,13 +1732,59 @@ impl Cell {
                 };
                 (c.object, c.name.clone(), activity)
             })
+            .chain(
+                self.components
+                    .iter()
+                    .filter(|c| c.kind == Kind::Amr)
+                    .map(|c| {
+                        let driving = self
+                            .rovers
+                            .get(&c.object)
+                            .is_some_and(|r| !r.legs.is_empty());
+                        (
+                            c.object,
+                            c.name.clone(),
+                            if driving { "drive" } else { "idle" },
+                        )
+                    }),
+            )
             .collect()
     }
 
     /// Whether the scene shown needs the cell in it: parts to add, or a
     /// door to move.
     pub fn needs_scene(&self) -> bool {
-        !self.parts.is_empty() || self.machines.values().any(|m| m.door > 0.0)
+        !self.parts.is_empty()
+            || !self.rovers.is_empty()
+            || self.machines.values().any(|m| m.door > 0.0)
+    }
+
+    /// Puts each AMR that has been sent anywhere where it now is, in
+    /// `doc`, and returns its objects, all of which moved.
+    fn place_rovers(&self, doc: &mut Document) -> Vec<u64> {
+        let mut uids = Vec::new();
+        for c in self.components.iter().filter(|c| c.kind == Kind::Amr) {
+            let (Some(r), Some(id)) = (self.rovers.get(&c.object), id_of(doc, c.object)) else {
+                continue;
+            };
+            let home = doc.world_transform(id);
+            let (at, yaw) = floor_pose(&home);
+            let now = pose_of(r.at, r.yaw) * pose_of(at, yaw).inverse() * home;
+            let Some(o) = doc.object(id) else { continue };
+            let above = home * o.transform.to_affine().inverse();
+            let local = above.inverse() * now;
+            let (scale, rotation, translation) = local.to_scale_rotation_translation();
+            let o = doc.object_mut(id).unwrap();
+            o.transform.translation = translation;
+            o.transform.rotation = rotation;
+            o.transform.scale = scale;
+            uids.extend(
+                doc.objects()
+                    .filter(|(o, _)| *o == id || is_below(doc, *o, id))
+                    .filter_map(|(o, _)| doc.object_uid(o).map(|u| u.raw())),
+            );
+        }
+        uids
     }
 
     /// What the viewers need to look at again when the scene shown has
@@ -1490,7 +1859,11 @@ impl Cell {
     /// now is.
     pub fn apply(&mut self, doc: &mut Document) -> Changes {
         let mut changes = self.take_removed();
-        for uid in self.open_doors(doc) {
+        for uid in self
+            .open_doors(doc)
+            .into_iter()
+            .chain(self.place_rovers(doc))
+        {
             changes
                 .changed
                 .insert((DatablockKind::Object, Uid::from_raw(uid)));
@@ -1582,6 +1955,13 @@ impl Cell {
                     "slots": self.slots(doc, c).into_iter().map(point).collect::<Vec<_>>(),
                     "seat": self.seat(doc, c).map(point),
                     "holding": self.parts.iter().any(|p| p.held.is_some_and(|h| h.0 == c.object)),
+                    "amr": (c.kind == Kind::Amr).then(|| {
+                        let r = self.rover(doc, c);
+                        json!({
+                            "driving": r.as_ref().is_some_and(|r| !r.legs.is_empty()),
+                            "at": r.as_ref().map(|r| [r.at.x, r.at.y]),
+                        })
+                    }),
                     "machine": c.kind.machine().then(|| {
                         let m = self.machines.get(&c.object).cloned().unwrap_or_default();
                         let part = self.seat(doc, c).and_then(|seat| {
@@ -1627,7 +2007,15 @@ impl Cell {
 pub fn is_op(op: &str) -> bool {
     matches!(
         op,
-        "role" | "auto" | "fill" | "empty" | "clear_parts" | "grip" | "release" | "machine"
+        "role"
+            | "auto"
+            | "fill"
+            | "empty"
+            | "clear_parts"
+            | "grip"
+            | "release"
+            | "machine"
+            | "drive"
     )
 }
 
@@ -2101,5 +2489,109 @@ mod tests {
         );
         run_for(&mut cell, &doc, t, 6.0);
         assert!(cell.take_drained() >= 3);
+    }
+
+    #[test]
+    fn parts_go_with_the_equipment_they_stand_on() {
+        let mut library = crate::library::Library::default();
+        library.handle(
+            &json!({"op": "place", "template": "infeed_station", "at": [0.0, 0.0, 0.0]})
+                .to_string(),
+        );
+        let mut before = Document::new();
+        library.apply(&mut before);
+        let mut cell = Cell::default();
+        let (plate, name, kind) = library.roles().remove(0);
+        cell.ensure(plate, name, kind);
+        ask(
+            &mut cell,
+            &before,
+            json!({"op": "fill", "object": plate.to_string()}),
+        );
+        let count = cell.parts().len();
+        assert_eq!(count, 20);
+
+        // Moved half a metre along X and turned a quarter: the parts are
+        // in the plate's places where it now stands.
+        library.handle(
+            &json!({"op": "move", "item": 1, "at": [0.5, 0.0, 0.0], "yaw": std::f64::consts::FRAC_PI_2}).to_string(),
+        );
+        let mut after = before.clone();
+        library.apply(&mut after);
+        cell.carry(&before, &after);
+        let c = cell.components()[0].clone();
+        let slots = cell.slots(&after, &c);
+        for p in cell.parts() {
+            assert!(
+                slots.iter().any(|s| s.distance(p.world.translation) < 1e-6),
+                "{:?}",
+                p.world.translation
+            );
+        }
+
+        // Removed: they go too.
+        library.handle(&json!({"op": "remove", "item": 1}).to_string());
+        let mut gone = Document::new();
+        library.apply(&mut gone);
+        cell.carry(&after, &gone);
+        assert!(cell.parts().is_empty());
+        assert_eq!(cell.take_removed().removed.len(), count);
+    }
+
+    #[test]
+    fn an_amr_drives_to_its_stop_with_what_is_on_it() {
+        let mut library = crate::library::Library::default();
+        library
+            .handle(&json!({"op": "place", "template": "amr", "at": [0.0, 0.0, 0.0]}).to_string());
+        // Two metres ahead, facing left.
+        library.handle(
+            &json!({"op": "place", "template": "amr_stop", "at": [2.0, 0.0, 0.0], "yaw": std::f64::consts::FRAC_PI_2})
+                .to_string(),
+        );
+        let mut doc = Document::new();
+        library.apply(&mut doc);
+        let mut cell = Cell::default();
+        let mut amr = 0;
+        let mut stop = 0;
+        for (uid, name, kind) in library.roles() {
+            match kind {
+                Kind::Amr => amr = uid,
+                Kind::Stop => stop = uid,
+                _ => {}
+            }
+            cell.ensure(uid, name, kind);
+        }
+        // Over its top plate a part let go stands on it.
+        let top = cell.decks(&doc)[0].hi.z;
+        let over =
+            cell.decks(&doc)[0].top_under(DVec3::new(0.2, 0.1, top + 0.05), FINISHED.1 / 2.0);
+        assert!(over.is_some_and(|z| (z - top).abs() < 1e-9));
+        cell.add_part(DVec3::new(0.2, 0.1, top + FINISHED.1 / 2.0), true);
+
+        assert!(
+            cell.signal(&doc, amr, Signal::Arrived),
+            "at rest where placed"
+        );
+        cell.drive(&doc, amr, stop).unwrap();
+        assert!(!cell.signal(&doc, amr, Signal::Arrived));
+        let t = run_for(&mut cell, &doc, 0.0, 1.0);
+        assert!(!cell.signal(&doc, amr, Signal::Arrived), "on its way");
+        // Straight ahead at 1 m/s, then a quarter turn at 1 rad/s: 3.6 s.
+        run_for(&mut cell, &doc, t, 3.0);
+        assert!(cell.signal(&doc, amr, Signal::Arrived));
+        let r = cell.rovers[&amr].clone();
+        assert!(
+            r.at.truncate().distance(kreate_math::DVec2::new(2.0, 0.0)) < 1e-9,
+            "{:?}",
+            r.at
+        );
+        assert!((r.yaw - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        // The part rode along: on the plate, turned with it.
+        let p = cell.parts[0].world.translation;
+        assert!(
+            p.distance(DVec3::new(1.9, 0.2, top + FINISHED.1 / 2.0)) < 1e-6,
+            "{p}"
+        );
+        assert!(cell.decks(&doc)[0].carries(&cell.parts[0]));
     }
 }

@@ -541,6 +541,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .copy-bar select { flex: 1; min-width: 0; height: 24px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 11.5px; }
 .icon-mini.on { color: var(--info); }
 .act-next { color: var(--info); background: rgba(90, 169, 255, 0.14); }
+.act-drive { color: #b9a3ff; background: rgba(155, 123, 255, 0.16); }
 .prog-actions .step-pick {
   height: 24px;
   border: 1px solid var(--line-2);

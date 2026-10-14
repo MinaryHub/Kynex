@@ -412,3 +412,31 @@ fn the_doosan_robot_moves_as_its_description_has_it() {
         [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]
     );
 }
+
+/// Where the IRB 1600's flange reaches, as the page asks for it: at the
+/// most 150, 700, 600 and 65 mm laid end to end (its 1.45 m to the wrist,
+/// and the flange), drawn from its base frame.
+#[test]
+fn the_abb_robot_s_reach_is_its_arm_laid_out() {
+    let mut library = Library::default();
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "irb1600_tending", "at": [1.0, 0.0, 0.5]}),
+    );
+    let (doc, _) = shown(&mut library);
+    let root = kynex_model::robots(&doc)[0].root;
+    let mut posing = crate::pose::Posing::default();
+    let (answer, _) = posing.handle(
+        &doc,
+        &json!({"op": "reach", "robot": root.to_string()}).to_string(),
+    );
+    let answer: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    let farthest = answer["farthest"].as_f64().unwrap();
+    assert!((farthest - 1.515).abs() < 0.005, "{farthest}");
+    // Its base frame where the robot stands.
+    let base = answer["base"].as_array().unwrap();
+    assert!((base[12].as_f64().unwrap() - 1.0).abs() < 1e-6);
+    assert!((base[14].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    assert!(answer["section"].as_array().unwrap().len() > 50);
+}

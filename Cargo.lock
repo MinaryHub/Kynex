@@ -462,6 +462,7 @@ dependencies = [
  "kreate-math",
  "kreate-mesh",
  "kreate-scene",
+ "kynex-kin",
  "kynex-model",
  "meshopt",
  "rayon",

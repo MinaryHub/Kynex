@@ -123,6 +123,10 @@ export class RobotPanel {
     this.contacts = [];
     this.contactDots = null;
 
+    // Where a robot reaches, shown for one at a time: its root, and the
+    // shape, placed from the root's frame as the robot moves.
+    this.reach = null;
+
     this.proxy = new THREE.Object3D();
     ctx.scene.add(this.proxy);
     this.handle = new TransformControls(ctx.camera, ctx.canvas);
@@ -374,6 +378,7 @@ export class RobotPanel {
             <span class="tcp-title">TCP</span>
             ${toolPick}
             <button class="chip-btn" data-act="handle" aria-pressed="false" title="장면에서 끌어서 TCP 이동">핸들</button>
+            <button class="chip-btn" data-act="reach" aria-pressed="false" title="관절 한계 안에서 플랜지가 닿는 범위 (자기 충돌은 보지 않음)">범위</button>
           </div>
           ${gripRows ? `<div class="grippers">${gripRows}</div>` : ''}
           <dl class="tcp-pose num">
@@ -403,6 +408,7 @@ export class RobotPanel {
             <button data-mode="rotate" class="${ui.mode === 'rotate' ? 'on' : ''}">회전</button>
           </div>
           <div class="tcp-status"></div>
+          <div class="tcp-sing" hidden></div>
         </div>
         <div class="program">
           <div class="prog-head">
@@ -826,12 +832,92 @@ export class RobotPanel {
       const status = box.querySelector('.tcp-status');
       status.textContent = ui.status;
       status.classList.toggle('bad', ui.bad);
+      // Near a singularity, as posed: the joints that would race there.
+      const sing = box.querySelector('.tcp-sing');
+      const d = r.dexterity;
+      sing.hidden = !d?.near;
+      if (d?.near) {
+        sing.textContent = `⚠ 특이점 근접: ${d.joints.join('·')} 관절이 급하게 돌 수 있음`;
+        sing.title = `자코비안 최소 특이값 ${(d.least * 1000).toFixed(1)} mm/rad (경고 기준 10 mm/rad)`;
+      }
+      if (this.reach?.root === r.root) this.placeReach(r);
       if (this.handleRoot === r.root && !this.dragging) {
         this.proxy.position.copy(tcp.position);
         this.proxy.quaternion.copy(tcp.quaternion);
         this.proxy.updateMatrixWorld();
       }
     }
+  }
+
+  // Where robot `r` reaches: KYNEX's section of it, swept round the first
+  // joint, see-through, with the section's edge drawn where it is cut by
+  // the base frame's XZ plane.
+  async showReach(r) {
+    this.hideReach();
+    let answer;
+    try {
+      answer = await post({ op: 'reach', robot: r.root });
+    } catch (err) {
+      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      return;
+    }
+    if (!answer.ok) {
+      this.ctx.toast(answer.error || '도달 범위를 구하지 못했습니다');
+      return;
+    }
+    const points = answer.section.map(([rr, z]) => new THREE.Vector2(rr, z));
+    const [lo, hi] = answer.turn;
+    const sweep = Math.min(hi - lo, Math.PI * 2);
+    // A lathe turns about its Y; turned onto Z, its angle 0 lies along -Y,
+    // so the first joint's angle a is the lathe's a + 90°.
+    const shell = new THREE.LatheGeometry(points, 96, lo + Math.PI / 2, sweep);
+    shell.rotateX(Math.PI / 2);
+    const group = new THREE.Group();
+    group.matrixAutoUpdate = false;
+    group.add(
+      new THREE.Mesh(
+        shell,
+        new THREE.MeshBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide }),
+      ),
+    );
+    const edge = new THREE.LineBasicMaterial({ color: 0x4aa3ff, transparent: true, opacity: 0.8 });
+    for (const side of [1, -1]) {
+      const line = points.map((p) => new THREE.Vector3(side * p.x, 0, p.y));
+      group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(line), edge));
+    }
+    this.ctx.scene.add(group);
+    // The base frame from the robot's root, to follow it when moved.
+    const root = this.ctx.records.get(r.root);
+    const base = new THREE.Matrix4().fromArray(answer.base);
+    const offset = root ? new THREE.Matrix4().fromArray(root.matrix).invert().multiply(base) : new THREE.Matrix4();
+    this.reach = { root: r.root, group, offset };
+    this.placeReach(r);
+    this.ctx.toast(`도달 범위: 플랜지 최대 ${(answer.farthest * 1000).toFixed(0)} mm`);
+    this.host
+      .querySelector(`.robot[data-root="${r.root}"] [data-act="reach"]`)
+      ?.setAttribute('aria-pressed', 'true');
+    this.ctx.render?.();
+  }
+
+  placeReach(r) {
+    const root = this.ctx.records.get(r.root);
+    if (!this.reach || !root) return;
+    this.reach.group.matrix.fromArray(root.matrix).multiply(this.reach.offset);
+    this.reach.group.matrixWorldNeedsUpdate = true;
+  }
+
+  hideReach() {
+    if (!this.reach) return;
+    this.ctx.scene.remove(this.reach.group);
+    this.reach.group.traverse((o) => {
+      o.geometry?.dispose();
+      o.material?.dispose();
+    });
+    this.host
+      .querySelector(`.robot[data-root="${this.reach.root}"] [data-act="reach"]`)
+      ?.setAttribute('aria-pressed', 'false');
+    this.reach = null;
+    this.ctx.render?.();
   }
 
   // The tool point's world pose: the tool link's matrix, then the offset
@@ -1045,6 +1131,9 @@ export class RobotPanel {
       this.send(r, { op: 'release', robot: r.root });
     } else if (act === 'handle') {
       this.showHandle(this.handleRoot === r.root ? null : r.root);
+    } else if (act === 'reach') {
+      if (this.reach?.root === r.root) this.hideReach();
+      else this.showReach(r);
     } else if (act === 'grip' || act === 'release') {
       const gripper = e.target.closest('[data-gripper]').dataset.gripper;
       this.programOp(r, { op: act, gripper });

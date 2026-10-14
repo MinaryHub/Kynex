@@ -462,6 +462,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .handle-modes { align-self: flex-start; }
 .tcp-status { font: 11px var(--mono); color: var(--ok); min-height: 15px; }
 .tcp-status.bad { color: var(--warn); }
+.tcp-sing { font: 11px var(--mono); color: var(--warn); }
 
 /* ---- the program: taught points, timed -------------------------------- */
 .program { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }

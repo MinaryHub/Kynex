@@ -436,6 +436,31 @@ impl Posing {
                     "iterations": found.iterations,
                 }))
             }
+            // Where the arm's flange reaches: a section in its base frame,
+            // to be swept round the first joint (see `kynex_kin::reach`).
+            "reach" => {
+                let flange = kynex_model::robots(doc)
+                    .into_iter()
+                    .find(|r| r.root == root)
+                    .and_then(|r| r.tool)
+                    .and_then(|t| kin.tool(t, DAffine3::IDENTITY))
+                    .ok_or("no flange")?;
+                let names = program::names(doc);
+                let base = names
+                    .iter()
+                    .find(|(u, n)| n.eq_ignore_ascii_case("base") && kin.contains(**u))
+                    .map_or(root, |(u, _)| *u);
+                let reach = kynex_kin::reach::reach(&kin, &flange, base)
+                    .ok_or("이 로봇은 도달 범위를 그릴 수 없습니다")?;
+                let at = kin.world_of(&now, base).ok_or("no base frame")?;
+                Ok(json!({
+                    "ok": true,
+                    "section": reach.section,
+                    "turn": [reach.turn.0, reach.turn.1],
+                    "farthest": reach.farthest,
+                    "base": kreate_math::DMat4::from(at).to_cols_array(),
+                }))
+            }
             other => Err(format!("unknown op {other:?}")),
         }
     }

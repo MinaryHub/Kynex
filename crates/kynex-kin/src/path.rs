@@ -52,6 +52,12 @@ pub const SAMPLE: f64 = 0.02;
 pub const JUMP_TURN: f64 = 0.05;
 pub const JUMP_SLIDE: f64 = 0.005;
 
+/// How near a singularity a line or an arc may pass before the plan says
+/// so: the arm's [`crate::Dexterity::least`], metres a radian. About 10°
+/// from a wrist's singularity, 5° from an elbow's, on the robots of
+/// KYNEX's library; at rest they are some eight times this.
+pub const SINGULAR: f64 = 0.01;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MoveKind {
     Joint,
@@ -93,6 +99,14 @@ pub enum Problem {
     /// The line ends with the arm in another configuration than the one
     /// taught: at the end it would have to jump, by this much.
     Jump { joint: usize, by: f64 },
+    /// The line passes near a singularity: how far along it (0 to 1) it is
+    /// nearest, the arm's [`crate::Dexterity`] there, and the joints that
+    /// would race there.
+    Singular {
+        along: f64,
+        least: f64,
+        joints: Vec<usize>,
+    },
 }
 
 /// A speed-up, cruise and slow-down over a distance.
@@ -565,6 +579,22 @@ fn linear_move(
     // small difference is numerical drift, spread over the move so that
     // nothing snaps; past JUMP the arm has come round to another
     // configuration, and the plan says so.
+    // Near a singularity on the way: where it is nearest.
+    let last = samples.len() - 1;
+    let nearest = samples
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(k, q)| Some((k, kin.dexterity(q, tool)?)))
+        .min_by(|a, b| a.1.least.total_cmp(&b.1.least));
+    if let Some((k, d)) = nearest.filter(|(_, d)| d.least < SINGULAR) {
+        problems.push(Problem::Singular {
+            along: k as f64 / last as f64,
+            least: d.least,
+            joints: d.joints,
+        });
+    }
+
     let end = samples.last().unwrap().clone();
     let (worst, by) = end
         .iter()

@@ -84,6 +84,10 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   cannot keep an orientation everywhere, so for them it starts off.
 - **Handle**: **핸들** puts a move/rotate handle on the TCP in the scene.
   Dragging it sends the tool after the handle.
+- **Reach**: **범위** draws where the flange reaches within the joints'
+  limits, see-through, swept round the first joint, with its section
+  outlined; it follows the robot when moved. As a datasheet's working
+  range, the arm running into itself or the floor is not counted.
 - The TCP is the tool link plus a Z offset. The tool link is the link
   named `tcp`, `tool0`, `tool`, `flange`, `ee_link` or `end_effector`. If no
   link has one of those names, it is the link furthest out along the
@@ -136,8 +140,12 @@ KYNEX times the moves (`kynex_kin::path`):
 - A move that cannot run as asked is planned as near as it can be, then
   flagged in the list. This happens when a line leaves the reachable
   space, when a line needs a joint to go faster than it can (the move is
-  slowed and the factor is shown), or when a line ends in a different
-  arm configuration than the one taught.
+  slowed and the factor is shown), when a line ends in a different
+  arm configuration than the one taught, or when a line or an arc passes
+  near a singularity: where, and which joints would race there (the
+  Jacobian's least singular value under 10 mm/rad, a turn of the tool
+  counted as 0.1 m — about 10° from a wrist singularity, 5° from an
+  elbow's). The robot panel says so for the pose the robot is in, too.
 - The tool's path is drawn in the scene in blue, and the points in white.
 - Each point has buttons to go to it (→), re-teach it from the current
   pose (⟳) or delete it (✕). They show while the row is pointed at. Its

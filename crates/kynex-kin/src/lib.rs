@@ -140,6 +140,25 @@ impl Default for Options {
     }
 }
 
+/// How near an arm is to a singularity, where some way of moving the tool
+/// takes no joint motion at all and, close by, a great deal (see
+/// [`Kinematics::dexterity`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dexterity {
+    /// The least the tool moves for a unit of joint motion, the slowest
+    /// way: metres a radian, a turn of the tool counted as
+    /// [`TURN_LENGTH`] metres a radian. Zero at a singularity.
+    pub least: f64,
+    /// The joints that, in that way, move together and get the tool
+    /// nowhere: those that would race near the singularity. By index into
+    /// [`Kinematics::vars`], the most moved first.
+    pub joints: Vec<usize>,
+}
+
+/// How a turn of the tool counts against its travel, metres a radian, in
+/// [`Dexterity`]: a tenth of a metre, about the size of a wrist.
+pub const TURN_LENGTH: f64 = 0.1;
+
 /// What the inverse found: the best it reached, whether or not that is the
 /// goal.
 #[derive(Clone, Debug, PartialEq)]
@@ -383,6 +402,43 @@ impl Kinematics {
         self.forward(q)[tool.node] * tool.offset
     }
 
+    /// How near the arm at `q` is to a singularity, for the tool `tool`:
+    /// the smallest singular value of its Jacobian and the joints of that
+    /// direction. `None` for an arm that cannot hold every pose of the tool
+    /// (fewer than six variables), which is never otherwise.
+    pub fn dexterity(&self, q: &[f64], tool: &Tool) -> Option<Dexterity> {
+        let n = self.vars.len();
+        if n < 6 {
+            return None;
+        }
+        let world = self.forward(q);
+        let p = (world[tool.node] * tool.offset).translation;
+        let mut cols = self.jacobian(&world, tool, p);
+        for col in &mut cols {
+            for x in &mut col[3..] {
+                *x *= TURN_LENGTH;
+            }
+        }
+        // Jᵀ J: its least eigenvalue is the least singular value squared,
+        // and its eigenvector the joint motion that moves the tool least.
+        let mut a = vec![vec![0.0; n]; n];
+        for (i, row) in a.iter_mut().enumerate() {
+            for (j, x) in row.iter_mut().enumerate() {
+                *x = (0..6).map(|r| cols[i][r] * cols[j][r]).sum();
+            }
+        }
+        let (values, vectors) = symmetric_eigen(a);
+        let k = (0..n).min_by(|x, y| values[*x].total_cmp(&values[*y]))?;
+        let v: Vec<f64> = (0..n).map(|i| vectors[i][k]).collect();
+        let most = v.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        let mut joints: Vec<usize> = (0..n).filter(|i| v[*i].abs() >= 0.4 * most).collect();
+        joints.sort_by(|x, y| v[*y].abs().total_cmp(&v[*x].abs()));
+        Some(Dexterity {
+            least: values[k].max(0.0).sqrt(),
+            joints,
+        })
+    }
+
     /// How the tool point `p` moves and turns as each variable does: per
     /// variable, linear velocity then angular, in the world.
     fn jacobian(&self, world: &[DAffine3], tool: &Tool, p: DVec3) -> Vec<[f64; 6]> {
@@ -581,6 +637,54 @@ fn error(pose: &DAffine3, goal: &Goal) -> (DVec3, DVec3) {
 
 /// `a y = b` for a symmetric positive definite `a` of size `n`, by
 /// Cholesky.
+/// The eigenvalues of symmetric `a`, and its eigenvectors as columns, by
+/// Jacobi's rotations.
+fn symmetric_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let n = a.len();
+    let mut v: Vec<Vec<f64>> = (0..n)
+        .map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+        .collect();
+    for _ in 0..100 {
+        let off: f64 = (0..n)
+            .flat_map(|i| (0..n).filter(move |j| *j != i).map(move |j| (i, j)))
+            .map(|(i, j)| a[i][j] * a[i][j])
+            .sum();
+        if off < 1e-22 {
+            break;
+        }
+        for p in 0..n {
+            for q in p + 1..n {
+                if a[p][q].abs() < 1e-300 {
+                    continue;
+                }
+                let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+                let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+                let t = if theta == 0.0 { 1.0 } else { t };
+                let c = 1.0 / (t * t + 1.0).sqrt();
+                let s = t * c;
+                for row in a.iter_mut() {
+                    let (akp, akq) = (row[p], row[q]);
+                    row[p] = c * akp - s * akq;
+                    row[q] = s * akp + c * akq;
+                }
+                let (rp, rq) = (a[p].clone(), a[q].clone());
+                for ((x, apk), aqk) in a[p].iter_mut().zip(&rp).zip(&rq) {
+                    *x = c * apk - s * aqk;
+                }
+                for ((x, apk), aqk) in a[q].iter_mut().zip(&rp).zip(&rq) {
+                    *x = s * apk + c * aqk;
+                }
+                for row in v.iter_mut() {
+                    let (vp, vq) = (row[p], row[q]);
+                    row[p] = c * vp - s * vq;
+                    row[q] = s * vp + c * vq;
+                }
+            }
+        }
+    }
+    ((0..n).map(|i| a[i][i]).collect(), v)
+}
+
 fn solve_spd(mut a: [[f64; 6]; 6], b: [f64; 6], n: usize) -> Option<[f64; 6]> {
     for j in 0..n {
         let d = a[j][j] - a[j][..j].iter().map(|x| x * x).sum::<f64>();
@@ -630,6 +734,7 @@ pub mod drl;
 pub mod path;
 pub mod post;
 pub mod rapid;
+pub mod reach;
 pub mod urscript;
 
 #[cfg(test)]

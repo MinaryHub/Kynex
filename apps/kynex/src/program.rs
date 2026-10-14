@@ -1209,5 +1209,13 @@ fn describe(kin: &Kinematics, problem: &Problem) -> String {
             };
             format!("끝에서 자세 구성이 바뀜 ({} {amount} 점프)", name(*joint))
         }
+        Problem::Singular { along, joints, .. } => {
+            let joints: Vec<&str> = joints.iter().map(|j| name(*j)).collect();
+            format!(
+                "경로 {:.0}% 지점에서 특이점 근접 ({} 관절이 급하게 돌 수 있음)",
+                along * 100.0,
+                joints.join("·")
+            )
+        }
     }
 }

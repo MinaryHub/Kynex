@@ -409,3 +409,58 @@ fn a_circular_move_goes_round_the_arc_through_its_via_point() {
         seg.duration
     );
 }
+
+/// A line on which the wrist comes straight passes the UR's wrist
+/// singularity: the plan says where, and that wrists 1 and 3 would race
+/// there. A line clear of it says nothing.
+#[test]
+fn a_line_near_a_singularity_is_said_to_be() {
+    let (kin, tool) = robot(UR5E, "base_link");
+    let names = |joints: &[usize]| -> Vec<&str> {
+        joints.iter().map(|j| kin.vars[*j].name.as_str()).collect()
+    };
+    let through = plan(
+        &kin,
+        &tool,
+        &[
+            wp(MoveKind::Joint, &[0.0, -1.2, 1.4, -1.6, 0.3, 0.0], 1.0),
+            wp(MoveKind::Linear, &[0.0, -1.2, 1.4, -1.6, -0.3, 0.0], 0.25),
+        ],
+        false,
+    );
+    let problems = &through.segments[0].problems;
+    let Some(Problem::Singular {
+        along,
+        least,
+        joints,
+    }) = problems
+        .iter()
+        .find(|p| matches!(p, Problem::Singular { .. }))
+    else {
+        panic!("{problems:?}");
+    };
+    assert!((0.3..0.7).contains(along), "about the middle: {along}");
+    assert!(*least < SINGULAR, "{least}");
+    let mut racing = names(joints);
+    racing.sort();
+    assert_eq!(
+        racing[..2],
+        ["wrist_1_joint", "wrist_3_joint"],
+        "{joints:?}"
+    );
+
+    let clear = plan(
+        &kin,
+        &tool,
+        &[
+            wp(MoveKind::Joint, &[0.0, -1.2, 1.4, -1.6, -1.5, 0.0], 1.0),
+            wp(MoveKind::Linear, &[0.2, -1.1, 1.3, -1.6, -1.5, 0.0], 0.25),
+        ],
+        false,
+    );
+    assert!(
+        clear.segments[0].problems.is_empty(),
+        "{:?}",
+        clear.segments[0].problems
+    );
+}

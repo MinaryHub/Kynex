@@ -400,3 +400,39 @@ fn spd_solve() {
         assert!((got - want).abs() < 1e-12);
     }
 }
+
+#[test]
+fn a_symmetric_matrix_comes_apart_into_its_eigenvalues() {
+    let a = vec![
+        vec![4.0, 1.0, 0.5],
+        vec![1.0, 3.0, -0.2],
+        vec![0.5, -0.2, 1.0],
+    ];
+    let (values, vectors) = crate::symmetric_eigen(a.clone());
+    for k in 0..3 {
+        // A v = λ v, for each column v.
+        for i in 0..3 {
+            let av: f64 = (0..3).map(|j| a[i][j] * vectors[j][k]).sum();
+            assert!((av - values[k] * vectors[i][k]).abs() < 1e-9, "{values:?}");
+        }
+    }
+    let trace: f64 = values.iter().sum();
+    assert!((trace - 8.0).abs() < 1e-9);
+}
+
+#[test]
+fn an_arm_at_rest_is_dexterous_and_one_with_its_wrist_straight_is_not() {
+    let doc = load(UR5E);
+    let (_, root) = find(&doc, "base_link");
+    let (_, tip) = find(&doc, "tool0");
+    let kin = Kinematics::of(&doc, root).unwrap();
+    let tool = kin.tool(tip, DAffine3::IDENTITY).unwrap();
+    let rest = kin
+        .dexterity(&[0.0, -1.2, 1.4, -1.6, -1.5, 0.0], &tool)
+        .unwrap();
+    assert!(rest.least > 5.0 * crate::path::SINGULAR, "{rest:?}");
+    let straight = kin
+        .dexterity(&[0.0, -1.2, 1.4, -1.6, 0.0, 0.0], &tool)
+        .unwrap();
+    assert!(straight.least < 1e-6, "{straight:?}");
+}

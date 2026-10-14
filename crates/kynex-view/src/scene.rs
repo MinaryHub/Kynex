@@ -497,9 +497,37 @@ fn robots(doc: &Document) -> Value {
     Value::Array(
         kynex_model::robots(doc)
             .iter()
-            .map(crate::json::robot)
+            .map(|r| {
+                let mut v = crate::json::robot(r);
+                v["dexterity"] = dexterity(doc, r);
+                v
+            })
             .collect(),
     )
+}
+
+/// How near robot `r` stands to a singularity as it is posed, at its tool
+/// link (see [`kynex_kin::Kinematics::dexterity`]): `least`, whether that
+/// is `near` by the plan's measure, and the joints that would race there.
+/// Null for an arm that cannot hold every pose of its tool.
+fn dexterity(doc: &Document, r: &kynex_model::Robot) -> Value {
+    let Some(kin) = kynex_kin::Kinematics::of(doc, r.root) else {
+        return Value::Null;
+    };
+    let Some(tool) = r
+        .tool
+        .and_then(|t| kin.tool(t, kreate_math::DAffine3::IDENTITY))
+    else {
+        return Value::Null;
+    };
+    let Some(d) = kin.dexterity(&kin.current, &tool) else {
+        return Value::Null;
+    };
+    serde_json::json!({
+        "least": d.least,
+        "near": d.least < kynex_kin::path::SINGULAR,
+        "joints": d.joints.iter().map(|j| kin.vars[*j].name.clone()).collect::<Vec<_>>(),
+    })
 }
 
 fn referenced(objects: &BTreeMap<u64, Drawn>) -> BTreeSet<u64> {

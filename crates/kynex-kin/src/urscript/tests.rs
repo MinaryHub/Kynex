@@ -64,6 +64,7 @@ fn a_ur_program_reads_as_movej_and_movel_in_the_base_frame() {
             base,
             flange,
             trailing: Vec::new(),
+            markers: false,
         },
     )
     .unwrap();
@@ -127,6 +128,7 @@ fn a_closed_program_loops_back_to_its_first_point() {
             base,
             flange,
             trailing: Vec::new(),
+            markers: false,
         },
     )
     .unwrap();
@@ -173,6 +175,7 @@ fn only_a_six_joint_arm_has_urscript() {
             base: root,
             flange: tip,
             trailing: Vec::new(),
+            markers: false,
         },
     )
     .unwrap_err();
@@ -218,6 +221,7 @@ fn what_cannot_be_said_yet_is_left_as_comments_in_its_place() {
             base,
             flange,
             trailing: vec!["wait for machine".into()],
+            markers: false,
         },
     )
     .unwrap();

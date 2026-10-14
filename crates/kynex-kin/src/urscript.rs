@@ -41,6 +41,10 @@ pub struct Export<'a> {
     pub flange: u64,
     /// What the program does after its last move, as comments.
     pub trailing: Vec<String>,
+    /// Number the moves on output integer register 0 as they start — 1,
+    /// 2, … and one past the last at the end — for timing them on a
+    /// controller or URSim (see `tools/ursim`).
+    pub markers: bool,
 }
 
 /// The program as a URScript file, or why it cannot be one.
@@ -83,6 +87,13 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     let notes = |out: &mut String, indent: &str, notes: &[String]| {
         for n in notes {
             let _ = writeln!(out, "{indent}# {}", ascii(n));
+        }
+    };
+    let mut mark = 0;
+    let mut marker = |out: &mut String, indent: &str| {
+        if export.markers {
+            mark += 1;
+            let _ = writeln!(out, "{indent}write_output_integer_register(0, {mark})");
         }
     };
     let step = |out: &mut String, indent: &str, m: &Move, kind: MoveKind| {
@@ -148,25 +159,30 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     let first = &export.moves[0];
     notes(&mut out, "  ", &first.notes);
     let _ = writeln!(out, "  # To the start");
+    marker(&mut out, "  ");
     step(&mut out, "  ", first, MoveKind::Joint);
     let rest = &export.moves[1..];
     if export.close {
         let _ = writeln!(out, "  while (True):");
         for m in rest {
             notes(&mut out, "    ", &m.notes);
+            marker(&mut out, "    ");
             step(&mut out, "    ", m, m.waypoint.kind);
         }
         notes(&mut out, "    ", &export.trailing);
         // Round again: what came before the first move comes again too.
         notes(&mut out, "    ", &first.notes);
+        marker(&mut out, "    ");
         step(&mut out, "    ", first, first.waypoint.kind);
         let _ = writeln!(out, "  end");
     } else {
         for m in rest {
             notes(&mut out, "  ", &m.notes);
+            marker(&mut out, "  ");
             step(&mut out, "  ", m, m.waypoint.kind);
         }
         notes(&mut out, "  ", &export.trailing);
+        marker(&mut out, "  ");
     }
     let _ = writeln!(out, "end");
     let _ = writeln!(out, "{name}()");

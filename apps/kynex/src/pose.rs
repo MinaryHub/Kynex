@@ -547,7 +547,7 @@ impl Posing {
                 return Ok(json!({ "ok": true, "added": added }));
             }
             "urscript" => {
-                let (script, file) = program.urscript(root, doc, kin)?;
+                let (script, file) = program.urscript(root, doc, kin, false)?;
                 return Ok(json!({ "ok": true, "script": script, "file": file }));
             }
             _ => unreachable!("program::is_op lists {op}"),

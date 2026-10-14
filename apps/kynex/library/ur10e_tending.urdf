@@ -14,7 +14,9 @@
   <link name="base"/>
   <joint name="shoulder_pan_joint" type="revolute">
     <parent link="base_link"/><child link="shoulder_link"/>
-    <origin xyz="0 0 0.1807"/><axis xyz="0 0 1"/>
+    <!-- ur_description hangs the arm from base_link_inertia, turned half a turn:
+         the same joint positions as the controller's point the same way. -->
+    <origin xyz="0 0 0.1807" rpy="0 0 3.141592654"/><axis xyz="0 0 1"/>
     <limit lower="-6.283" upper="6.283" effort="330" velocity="2.0944"/>
   </joint>
   <link name="shoulder_link">

@@ -471,11 +471,14 @@ impl Program {
     }
 
     /// The program as URScript for a UR controller, and a file name for it.
+    /// With `markers`, the moves are numbered on an output register, to be
+    /// timed (see [`urscript::Export::markers`]).
     pub fn urscript(
         &self,
         root: u64,
         doc: &Document,
         kin: &Kinematics,
+        markers: bool,
     ) -> Result<(String, String), String> {
         let tool = self.tool(kin).ok_or("툴이 정해지지 않았습니다")?;
         let names = names(doc);
@@ -534,6 +537,7 @@ impl Program {
                 base,
                 flange,
                 trailing: notes,
+                markers,
             },
         )?;
         let file: String = robot

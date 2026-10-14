@@ -266,6 +266,18 @@ is written as a comment where it falls between the moves
 (`# KYNEX, not exported until its I/O is mapped: …`), to be completed on
 the controller.
 
+- On URSim (free, in Docker) the program runs as exported, and its moves
+  take what KYNEX plans to within a few percent (`tools/ursim`):
+
+  ```
+  docker run -d --rm --name kynex-ursim -e ROBOT_MODEL=UR10       -p 30001-30004:30001-30004 -p 29999:29999 universalrobots/ursim_e-series
+  cargo test -p kynex ursim_program -- --ignored
+  python tools/ursim/check.py
+  ```
+
+  The e-Series image takes `UR10`, not `UR10E`; given a name it does not
+  know, it runs a UR5e. Before its first program the robot is powered on
+  and its brakes released over the dashboard server.
 - MoveJ becomes `movej` with the taught joint positions.
 - MoveL becomes `movel` to the taught tool pose, in the controller's base
   frame (the `base` link, half a turn from `base_link`).

@@ -105,6 +105,33 @@ impl Cell1 {
     /// Teaches a point with grip_a at `at`, pointing down.
     fn teach(&mut self, at: DVec3, kind: &str) {
         let (r, t) = (self.robot.to_string(), self.grip_a.to_string());
+        // Into a joint move the arm first turns at its base to face the
+        // point, as someone teaching it would: from there the solver keeps
+        // the elbow up rather than folding the arm round the other way.
+        if kind == "joint" {
+            let kin = kynex_kin::Kinematics::of(&self.doc, self.robot).unwrap();
+            let tool = kin
+                .tool(self.grip_a, kreate_math::DAffine3::IDENTITY)
+                .unwrap();
+            let q = self.posing.positions(&kin, self.robot);
+            let base = kin.world_of(&q, self.robot).unwrap().translation;
+            let now = kin.pose(&q, &tool).translation - base;
+            let want = at - base;
+            let turn = (want.y.atan2(want.x) - now.y.atan2(now.x) + std::f64::consts::PI)
+                .rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            let pan = kin
+                .vars
+                .iter()
+                .position(|v| v.name == "shoulder_pan_joint")
+                .unwrap();
+            ask_posing(
+                &mut self.posing,
+                &self.doc,
+                json!({"op": "jog", "robot": r, "joint": kin.vars[pan].uid.to_string(),
+                       "position": q[pan] + turn}),
+            );
+        }
         let a = ask_posing(
             &mut self.posing,
             &self.doc,
@@ -789,4 +816,52 @@ fn a_circular_move_is_taught_twice_saved_exported_and_run() {
     let tool = kin.tool(c.grip_a, kreate_math::DAffine3::IDENTITY).unwrap();
     let q = c.posing.positions(&kin, c.robot);
     assert!(kin.pose(&q, &tool).translation.distance(end) < 1e-3);
+}
+
+/// Writes the M1 tending program for URSim: the URScript, its moves
+/// numbered on output register 0, and how long KYNEX plans each move. Run
+/// by `tools/ursim/check.py`, not with the tests.
+#[test]
+#[ignore = "writes target/ursim for tools/ursim/check.py"]
+fn ursim_program() {
+    let mut c = cell1();
+    tending(&mut c);
+    // Blends where the robot would pass straight through.
+    for i in [9, 22, 23] {
+        ask_posing(
+            &mut c.posing,
+            &c.doc,
+            json!({"op": "edit", "robot": c.robot.to_string(), "index": i, "blend": 0.05}),
+        );
+    }
+    let program = c.posing.program(c.robot).unwrap().clone();
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let (script, _) = program.urscript(c.robot, &c.doc, &kin, true).unwrap();
+    let plan = program.plan(&kin).unwrap();
+    let names: Vec<&str> = program.moves().map(|(_, p)| p.name.as_str()).collect();
+    let moves: Vec<serde_json::Value> = plan
+        .segments
+        .iter()
+        .map(|s| {
+            json!({
+                "name": names[s.to],
+                "kind": crate::program::kind_tag(s.kind),
+                "start": s.start,
+                "duration": s.duration,
+            })
+        })
+        .collect();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ursim");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("m1.script"), script).unwrap();
+    std::fs::write(
+        dir.join("m1.json"),
+        serde_json::to_string_pretty(&json!({
+            "program": "M1 machine tending, UR10e",
+            "moves": moves,
+            "duration": plan.duration,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }

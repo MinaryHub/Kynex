@@ -138,16 +138,28 @@ KYNEX times the moves (`kynex_kin::path`):
 - Each point has buttons to go to it (→), re-teach it from the current
   pose (⟳) or delete it (✕). They show while the row is pointed at. Its
   J/L chip switches it between MoveJ and MoveL.
-- **▦** sets a point on the nearest pallet. Teach the moves over one
-  place of the pallet: above it, down to it, back up. Then set those
-  points with ▦. A run takes each such point to the place the pallet's
-  count has reached, at the same height and turn, keeping the arm's
-  posture. **팔레트 다음 칸** moves the count on, from the last place
-  back to the first. One program then goes through the whole pallet: the
-  infeed place by place, the outfeed filling up.
+- **⌖** sets a point in the frame of the equipment nearest it: a CNC
+  machine or a pallet. The line under the point shows its frame, to be
+  changed there (월드 for none).
+  - In a machine's frame, the point moves with the machine: move or turn
+    the machine in the library and the program still reaches its chuck.
+  - On a pallet, a point also goes from place to place. Teach the moves
+    over one place of the pallet: above it, down to it, back up. A run
+    takes each such point to the place the pallet's count has reached,
+    at the same height and turn. **팔레트 다음 칸** moves the count on,
+    from the last place back to the first. One program then goes through
+    the whole pallet: the infeed place by place, the outfeed filling up.
+  - The joints are solved from the taught ones, so the arm keeps the
+    posture it was taught in.
   - The place a point was taught over is the one nearest the tool point
     or a grip point, so a double gripper's offset grip points count too.
   - A place the arm cannot reach stops the run with an alarm.
+- **The same work at another machine**: click a step, then Shift-click
+  another to pick the steps between. **CNC 골라 복제…** copies them after
+  the span for another machine. Commands and waits for the first machine
+  become the other's. The points in the first machine's frame are solved
+  again to stand as far from the other. Other points, such as those on a
+  pallet, are copied as they are. Set the points' frames before copying.
 - The time shown beside the program (**이동**) is its moves'. With
   actions, a cycle also waits for machines, so the cycle time is measured
   by running it.

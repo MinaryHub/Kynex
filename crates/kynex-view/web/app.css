@@ -476,9 +476,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .points-empty b { color: var(--muted); font-weight: 600; }
 .point {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 22px 46px 30px 48px auto;
+  position: relative;
+  grid-template-columns: 16px minmax(0, 1fr) 22px 48px 30px 48px;
   align-items: center;
-  column-gap: 5px;
+  column-gap: 4px;
   padding: 3px 4px;
   border-radius: 5px;
   font-size: 12px;
@@ -489,7 +490,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .point .pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .point.back .pname { grid-column: 2 / span 4; font-size: 11.5px; }
 .point .unit { color: var(--faint); font-size: 10.5px; }
-.point .ptime { text-align: right; font-size: 11.5px; color: var(--muted); }
+.point .ptime { text-align: right; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .kind-chip {
   width: 22px; height: 20px;
   border: 0;
@@ -512,9 +513,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   text-align: right;
 }
 .pspeed:disabled { color: var(--faint); border-color: transparent; background: transparent; }
-.pacts { display: flex; gap: 1px; }
+/* A row's buttons show over its end while it is pointed at or in use. */
+.pacts { position: absolute; top: 3px; right: 4px; display: none; gap: 0; border-radius: 5px; background: var(--panel-2); box-shadow: 0 0 0 1px var(--line-2); }
+.point:hover .pacts, .point:focus-within .pacts { display: flex; }
 .icon-mini {
-  width: 20px; height: 20px;
+  width: 18px; height: 20px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -525,6 +528,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 }
 .icon-mini:hover { background: var(--panel); color: var(--text); }
 .pprob { grid-column: 2 / -1; color: var(--warn); font-size: 11px; line-height: 1.35; }
+.pslot { grid-column: 2 / -1; color: var(--info); font-size: 11px; }
+.icon-mini.on { color: var(--info); }
+.act-next { color: var(--info); background: rgba(90, 169, 255, 0.14); }
 .prog-actions .step-pick {
   height: 24px;
   border: 1px solid var(--line-2);
@@ -536,7 +542,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 }
 .point.cursor { box-shadow: inset 2px 0 0 var(--info); background: rgba(90, 169, 255, 0.07); }
 .point.running { box-shadow: inset 2px 0 0 var(--ok); background: rgba(63, 207, 142, 0.1); }
-.point.action { grid-template-columns: 18px 32px minmax(0, 1fr) auto; }
+.point.action { grid-template-columns: 16px 32px minmax(0, 1fr); }
 .act-icon { font-size: 10.5px; font-weight: 600; text-align: center; border-radius: 4px; padding: 1px 0; color: var(--muted); background: var(--line); }
 .act-grip, .act-release { color: var(--accent); background: var(--accent-soft); }
 .act-command { color: var(--info); background: rgba(90, 169, 255, 0.14); }

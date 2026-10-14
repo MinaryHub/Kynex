@@ -391,6 +391,7 @@ export class RobotPanel {
               <option value="command">장비 명령</option>
               <option value="wait">신호 대기</option>
               <option value="delay">시간 대기</option>
+              <option value="next">팔레트 다음 칸</option>
             </select>
           </div>
           <ol class="points"></ol>
@@ -455,10 +456,12 @@ export class RobotPanel {
             <span class="unit">${linear ? 'mm/s' : '%'}</span>
             <span class="ptime num">${p.move ? seconds(p.move.duration) : i === firstMove ? '시작' : ''}</span>
             <span class="pacts">
+              <button class="icon-mini${p.pallet ? ' on' : ''}" data-act="pallet" title="${p.pallet ? '팔레트 기준 해제' : '가까운 팔레트를 기준으로: 실행할 때 팔레트의 지금 칸으로 옮겨 갑니다'}">▦</button>
               <button class="icon-mini" data-act="goto" title="이 지점으로 이동">→</button>
               <button class="icon-mini" data-act="retouch" title="현재 자세로 다시 지정">⟳</button>
               <button class="icon-mini" data-act="delete" title="삭제">✕</button>
             </span>
+            ${p.pallet ? `<div class="pslot">▦ ${escapeHtml(this.pallets().find(([u]) => u === p.pallet)?.[1] ?? p.pallet_name ?? '팔레트')} 기준 · 실행할 때 지금 칸으로</div>` : ''}
             ${problems(p.move)}
           </li>`;
       });
@@ -508,6 +511,10 @@ export class RobotPanel {
         icon = '대기';
         body = `<input class="pspeed num" type="number" data-field="seconds" value="${step.seconds}" min="0" step="0.5"><span class="unit">s</span>`;
         break;
+      case 'next':
+        icon = '칸';
+        body = pick('pallet', keep(this.pallets(), step.pallet, step.pallet_name), step.pallet) + '<span class="unit">다음 칸</span>';
+        break;
     }
     return `
           <li class="point action${cursor ? ' cursor' : ''}" data-index="${i}" data-type="${step.type}">
@@ -527,11 +534,34 @@ export class RobotPanel {
     return step;
   }
 
+  // The cell's pallets, by identity and name.
+  pallets() {
+    const side = { infeed: '투입', outfeed: '배출' };
+    return this.cell.components
+      .filter((c) => side[c.kind])
+      .map((c) => [c.object, `${side[c.kind]} ${c.name}`]);
+  }
+
+  // The pallet a point stands over: the one with a place nearest it, seen
+  // from above, within a pallet's reach.
+  palletNear(at) {
+    let best = null;
+    for (const c of this.cell.components) {
+      if (c.kind !== 'infeed' && c.kind !== 'outfeed') continue;
+      for (const s of c.slots || []) {
+        const d = Math.hypot(s[0] - at[0], s[1] - at[1]);
+        if (d < 0.3 && (!best || d < best.d)) best = { d, object: c.object };
+      }
+    }
+    return best?.object ?? null;
+  }
+
   // A new action of `type`, for the robot's first grip point or the cell's
   // first machine.
   newAction(r, type) {
     const gripper = this.grippersOf(r)[0]?.object;
     const machine = this.cell.components.find((c) => c.kind === 'cnc')?.object;
+    const pallet = this.pallets()[0]?.[0];
     switch (type) {
       case 'grip':
       case 'release':
@@ -542,6 +572,8 @@ export class RobotPanel {
         return machine ? { type, machine, signal: 'done' } : null;
       case 'delay':
         return { type, seconds: 1 };
+      case 'next':
+        return pallet ? { type, pallet } : null;
     }
     return null;
   }
@@ -872,6 +904,14 @@ export class RobotPanel {
       });
     } else if (act === 'clear') {
       if (confirm('이 로봇의 프로그램 지점을 모두 지울까요?')) this.programOp(r, { op: 'clear' });
+    } else if (act === 'pallet' && index != null) {
+      const point = this.programs[r.root]?.steps[index];
+      if (point?.pallet) this.programOp(r, { op: 'edit', index, pallet: null });
+      else if (point?.at) {
+        const pallet = this.palletNear(point.at);
+        if (!pallet) return this.ctx.toast('이 지점 가까이에 팔레트가 없습니다. 팔레트의 칸 위에서 티칭하세요');
+        this.programOp(r, { op: 'edit', index, pallet });
+      }
     } else if (act === 'kind' && index != null) {
       const point = this.programs[r.root]?.steps[index];
       if (point) this.programOp(r, { op: 'edit', index, kind: point.kind === 'linear' ? 'joint' : 'linear' });
@@ -917,7 +957,7 @@ export class RobotPanel {
     if (opt === 'newstep' && e.target.value) {
       const step = this.newAction(r, e.target.value);
       e.target.value = '';
-      if (!step) return this.ctx.toast('셀에 그리퍼나 CNC 장비가 없습니다. 먼저 셀 역할을 정하세요');
+      if (!step) return this.ctx.toast('셀에 그리퍼, CNC 장비나 팔레트가 없습니다. 먼저 셀 역할을 정하세요');
       this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });
       if (ui.cursor != null) ui.cursor += 1;
     }

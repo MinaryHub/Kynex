@@ -624,7 +624,7 @@ pub fn guess(doc: &Document) -> Vec<(u64, Kind)> {
 }
 
 /// Whether `id` hangs below `parent`, at any depth.
-fn is_below(doc: &Document, id: ObjectId, parent: ObjectId) -> bool {
+pub fn is_below(doc: &Document, id: ObjectId, parent: ObjectId) -> bool {
     let mut at = doc.object(id).and_then(|o| o.parent);
     for _ in 0..64 {
         match at {

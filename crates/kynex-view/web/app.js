@@ -766,7 +766,15 @@ canvas.addEventListener('pointerup', (e) => {
   const targets = [...gizmos.values()].filter((g) => g.visible);
   if (batch.mesh) targets.push(batch.mesh);
   const uidOf = (h) => (h.batchId !== undefined ? batch.uidAt(h.batchId) : h.object.userData.uid);
-  const hit = ray.intersectObjects(targets, true).find((h) => uidOf(h) != null);
+  const hits = ray.intersectObjects(targets, true);
+  const hit = hits.find((h) => uidOf(h) != null);
+  // Picking an edge to follow: the click is on a part's shape, not a
+  // choice of it, and not on a joint's marker.
+  if (robotPanel.picking()) {
+    const shape = hits.find((h) => h.batchId !== undefined && uidOf(h) != null);
+    if (shape) robotPanel.pickEdge(uidOf(shape), shape.point);
+    return;
+  }
   select(hit ? uidOf(hit) : null);
 });
 

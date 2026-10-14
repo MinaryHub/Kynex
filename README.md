@@ -84,6 +84,17 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   cannot keep an orientation everywhere, so for them it starts off.
 - **Handle**: **핸들** puts a move/rotate handle on the TCP in the scene.
   Dragging it sends the tool after the handle.
+- **Edges**: **모서리** turns clicks in the scene into picking an edge of
+  a part, from its mesh: where two faces meet at more than 30°, joined
+  end to end until three or more meet. The edge is drawn; **프로그램에
+  추가** puts a path along it into the program after the chosen step: a
+  MoveJ to a point clear of its start (50 mm by default), MoveL along it
+  at the speed given (50 mm/s by default, a deburring pace) through as
+  few points as keep within 0.5 mm of it, and a MoveL out again. The tool
+  points into the edge along the bisector of its two faces, its X along
+  the way it goes; each point is solved from the one before, and how
+  many it cannot reach is said. Pick the TCP the work is done with (the
+  tool's tip) first: the path is for it.
 - **Reach**: **범위** draws where the flange reaches within the joints'
   limits, see-through, swept round the first joint, with its section
   outlined; it follows the robot when moved. As a datasheet's working

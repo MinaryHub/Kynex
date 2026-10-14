@@ -564,6 +564,87 @@ impl Posing {
                 self.programs_changed = true;
             }
         }
+        // An edge of a part, picked near a point on it: shown, or followed
+        // with the tool (see `crate::edges`).
+        if op == "edge" || op == "edge_path" {
+            let object = uid(&req["object"]).ok_or("no object")?;
+            let at = vec3(&req["point"]).ok_or("no point")?;
+            let chain = crate::edges::picked(doc, object, at)?;
+            if op == "edge" {
+                let points: Vec<[f64; 3]> = chain.points.iter().map(|p| p.to_array()).collect();
+                return Ok(json!({
+                    "ok": true,
+                    "points": points,
+                    "closed": chain.closed,
+                    "length": chain.length(),
+                }));
+            }
+            let program = programs.active_mut();
+            let tool = program.tool(kin).ok_or("툴이 정해지지 않았습니다")?;
+            // Deburring's usual pace, and room to come in and go out.
+            let speed = req["speed"].as_f64().unwrap_or(0.05).clamp(0.001, 1.0);
+            let clear = req["approach"].as_f64().unwrap_or(0.05).clamp(0.0, 0.5);
+            let along = crate::edges::poses(&chain, crate::edges::TOLERANCE);
+            let (first, last) = (along[0], along[along.len() - 1]);
+            let back = |(p, turn): (DVec3, DQuat)| (p - turn * DVec3::Z * clear, turn);
+            // Each from the one before, so the arm keeps its posture; into
+            // the first by any way that reaches it.
+            let mut seed = now.to_vec();
+            let mut missed = 0;
+            let mut solved = Vec::new();
+            for (k, (p, turn)) in std::iter::once(back(first))
+                .chain(along.iter().copied())
+                .chain(std::iter::once(back(last)))
+                .enumerate()
+            {
+                let opts = Options {
+                    restarts: if k == 0 { 30 } else { 0 },
+                    ..Options::default()
+                };
+                let found = kin.solve(
+                    &tool,
+                    &Goal {
+                        position: p,
+                        rotation: Some(turn),
+                    },
+                    &seed,
+                    &opts,
+                );
+                missed += usize::from(!found.reached);
+                seed = found.positions.clone();
+                solved.push(found.positions);
+            }
+            let mut after = req["after"].as_u64().map(|i| i as usize);
+            let n = solved.len();
+            for (k, q) in solved.iter().enumerate() {
+                let (kind, pace) = match k {
+                    0 => (MoveKind::Joint, program::JOINT_SPEED),
+                    _ if k == n - 1 => (MoveKind::Linear, program::LINEAR_SPEED),
+                    _ => (MoveKind::Linear, speed),
+                };
+                let positions = kin
+                    .vars
+                    .iter()
+                    .map(|v| v.uid)
+                    .zip(q.iter().copied())
+                    .collect();
+                program.teach(kind, positions, None, after);
+                let i = after.map_or(program.steps.len() - 1, |a| {
+                    (a + 1).min(program.steps.len() - 1)
+                });
+                if let Some(point) = program.point_mut(i) {
+                    point.speed = pace;
+                }
+                after = Some(i);
+            }
+            self.programs_changed = true;
+            return Ok(json!({
+                "ok": true,
+                "added": n,
+                "missed": missed,
+                "length": chain.length(),
+            }));
+        }
         // Exported as it runs: its calls replaced by what they call, for
         // the controller of the vendor asked for (Universal Robots unless
         // another is).

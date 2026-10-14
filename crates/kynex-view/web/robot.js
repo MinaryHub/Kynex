@@ -123,6 +123,10 @@ export class RobotPanel {
     this.contacts = [];
     this.contactDots = null;
 
+    // Picking an edge to follow, for one robot at a time: its root, what
+    // was picked, and the edge drawn over the scene.
+    this.edge = null;
+
     // Where a robot reaches, shown for one at a time: its root, and the
     // shape, placed from the root's frame as the robot moves.
     this.reach = null;
@@ -423,6 +427,7 @@ export class RobotPanel {
             <button class="chip-btn" data-act="teach" data-kind="joint" title="현재 자세를 관절 이동(MoveJ) 지점으로 추가">+ MoveJ</button>
             <button class="chip-btn" data-act="teach" data-kind="linear" title="현재 자세를 직선 이동(MoveL) 지점으로 추가">+ MoveL</button>
             <button class="chip-btn" data-act="teach" data-kind="circular" title="원호 이동(MoveC): 경유점 자세에서 한 번, 끝 자세에서 한 번 누릅니다">+ MoveC</button>
+            <button class="chip-btn" data-act="edge" aria-pressed="false" title="장면에서 부품의 모서리 가까이를 눌러, 그 모서리를 따라가는 경로(디버링·실링·용접)를 만듭니다">모서리</button>
             <select class="step-pick" data-opt="newstep" aria-label="동작 추가" title="고른 단계 다음에 동작을 넣습니다">
               <option value="">+ 동작</option>
               <option value="grip">그리퍼 잡기</option>
@@ -437,6 +442,7 @@ export class RobotPanel {
             </select>
           </div>
           <div class="copy-bar" hidden></div>
+          <div class="edge-bar" hidden></div>
           <ol class="points"></ol>
           <div class="run-bar">
             <button class="chip-btn play" data-act="play" aria-pressed="false">▶ 실행</button>
@@ -860,6 +866,76 @@ export class RobotPanel {
     }
   }
 
+  // Whether a click in the scene picks an edge.
+  picking() {
+    return this.edge != null;
+  }
+
+  // An edge of object `uid` picked near `point`: drawn, and offered to be
+  // followed.
+  async pickEdge(uid, point) {
+    const r = this.robots.find((x) => x.root === this.edge?.root);
+    if (!r) return;
+    const ui = this.uiOf(r);
+    const request = {
+      op: 'edge',
+      robot: r.root,
+      tool: this.toolOf(r),
+      offset: [0, 0, ui.offset / 1000],
+      object: uid,
+      point: [point.x, point.y, point.z],
+    };
+    let answer;
+    try {
+      answer = await post(request);
+    } catch (err) {
+      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      return;
+    }
+    if (!answer.ok) {
+      this.ctx.toast(answer.error || '모서리를 찾지 못했습니다');
+      return;
+    }
+    if (this.edge.line) this.dropEdgeLine();
+    const geometry = new THREE.BufferGeometry().setFromPoints(answer.points.map((p) => new THREE.Vector3(...p)));
+    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0xff9a3c, depthTest: false }));
+    line.renderOrder = 11;
+    this.ctx.scene.add(line);
+    this.edge.line = line;
+    this.edge.picked = { object: uid, point: request.point };
+    const bar = this.host.querySelector(`.robot[data-root="${r.root}"] .edge-bar`);
+    bar.hidden = false;
+    bar.innerHTML = `
+      <span class="edge-what">모서리 ${(answer.length * 1000).toFixed(0)} mm${answer.closed ? ' (닫힘)' : ''}</span>
+      <label>속도 <input class="pspeed num" type="number" data-edge="speed" value="50" min="1" max="1000" step="5"><span class="unit">mm/s</span></label>
+      <label>접근 <input class="pspeed num" type="number" data-edge="approach" value="50" min="0" max="500" step="10"><span class="unit">mm</span></label>
+      <button class="text-btn" data-act="edge-add">프로그램에 추가</button>
+      <button class="text-btn quiet" data-act="edge-cancel">취소</button>`;
+  }
+
+  dropEdgeLine() {
+    this.ctx.scene.remove(this.edge.line);
+    this.edge.line.geometry.dispose();
+    this.edge.line.material.dispose();
+    this.edge.line = null;
+  }
+
+  stopEdge() {
+    if (!this.edge) return;
+    if (this.edge.line) this.dropEdgeLine();
+    const bar = this.host.querySelector(`.robot[data-root="${this.edge.root}"] .edge-bar`);
+    if (bar) {
+      bar.hidden = true;
+      bar.innerHTML = '';
+    }
+    this.setEdgeButton(this.edge.root, false);
+    this.edge = null;
+  }
+
+  setEdgeButton(root, on) {
+    this.host.querySelector(`.robot[data-root="${root}"] [data-act="edge"]`)?.setAttribute('aria-pressed', String(on));
+  }
+
   // Where robot `r` reaches: KYNEX's section of it, swept round the first
   // joint, see-through, with the section's edge drawn where it is cut by
   // the base frame's XZ plane.
@@ -1142,6 +1218,35 @@ export class RobotPanel {
       this.send(r, { op: 'release', robot: r.root });
     } else if (act === 'handle') {
       this.showHandle(this.handleRoot === r.root ? null : r.root);
+    } else if (act === 'edge') {
+      if (this.edge?.root === r.root) this.stopEdge();
+      else {
+        this.stopEdge();
+        this.edge = { root: r.root, picked: null, line: null };
+        this.setEdgeButton(r.root, true);
+        this.ctx.toast('부품의 모서리 가까이를 누르세요');
+      }
+    } else if (act === 'edge-cancel') {
+      this.stopEdge();
+    } else if (act === 'edge-add') {
+      const picked = this.edge?.picked;
+      if (!picked) return;
+      const bar = e.target.closest('.edge-bar');
+      const speed = Number(bar.querySelector('[data-edge="speed"]').value) / 1000;
+      const approach = Number(bar.querySelector('[data-edge="approach"]').value) / 1000;
+      this.programOp(
+        r,
+        { op: 'edge_path', object: picked.object, point: picked.point, speed, approach, after: ui.cursor ?? undefined },
+        (a) => {
+          if (ui.cursor != null) ui.cursor += a.added;
+          this.ctx.toast(
+            a.missed
+              ? `모서리 경로 ${a.added}개 지점을 넣었습니다. ${a.missed}개는 닿지 않습니다`
+              : `모서리 경로 ${a.added}개 지점을 넣었습니다`,
+          );
+          this.stopEdge();
+        },
+      );
     } else if (act === 'reach') {
       if (this.reach?.root === r.root) this.hideReach();
       else this.showReach(r);

@@ -1064,6 +1064,8 @@ pub fn is_op(op: &str) -> bool {
             | "routine_select"
             | "routine_rename"
             | "routine_delete"
+            | "edge"
+            | "edge_path"
     )
 }
 

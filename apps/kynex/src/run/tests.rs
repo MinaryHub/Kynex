@@ -1624,3 +1624,55 @@ fn a_program_turns_a_positioner_and_waits_for_it() {
         .unwrap();
     assert!(script.contains("# KYNEX: turn positioner"), "{script}");
 }
+
+/// A path along an edge of a part, from its mesh: the outfeed plate's near
+/// top edge, picked by a point beside it, followed with grip_a pointing
+/// into it at 45° from in front and above — in from a clear point, along
+/// it at 50 mm/s, and out again.
+#[test]
+fn a_path_follows_an_edge_picked_on_a_part() {
+    let mut c = cell1();
+    let (r, t) = (c.robot.to_string(), c.grip_a.to_string());
+    let plate = c.outfeed.to_string();
+    let near = DVec3::new(0.0, -0.57, 0.785);
+    let shown = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "edge", "robot": r, "tool": t, "object": plate, "point": near.to_array()}),
+    );
+    assert_eq!(shown["ok"], true, "{shown}");
+    assert!(
+        (shown["length"].as_f64().unwrap() - 0.55).abs() < 1e-6,
+        "{shown}"
+    );
+    let a = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "edge_path", "robot": r, "tool": t, "object": plate,
+               "point": near.to_array(), "speed": 0.05, "approach": 0.05}),
+    );
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(a["added"], 4, "{a}");
+    assert_eq!(a["missed"], 0, "{a}");
+
+    let program = c.posing.program(c.robot).unwrap().clone();
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let plan = program.plan(&kin).unwrap();
+    for s in &plan.segments {
+        assert!(s.problems.is_empty(), "{:?}", s.problems);
+    }
+    // Along the edge, 0.55 m at 50 mm/s.
+    let edge = &plan.segments[1];
+    assert!((edge.duration - 11.0).abs() < 0.5, "{}", edge.duration);
+    // Half way, the tool on the edge, pointing into it.
+    let tool = program.tool(&kin).unwrap();
+    let q = plan.at(edge.start + edge.duration / 2.0);
+    let pose = kin.pose(&q, &tool);
+    let edge_y = pose.translation.y;
+    assert!(pose.translation.x.abs() < 0.01, "{}", pose.translation);
+    let into = pose.matrix3 * DVec3::Z;
+    assert!(
+        (into - DVec3::new(0.0, -1.0, -1.0).normalize()).length() < 0.01,
+        "{into} at y {edge_y}"
+    );
+}

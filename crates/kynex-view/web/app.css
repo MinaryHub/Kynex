@@ -463,6 +463,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .tcp-status { font: 11px var(--mono); color: var(--ok); min-height: 15px; }
 .tcp-status.bad { color: var(--warn); }
 .tcp-sing { font: 11px var(--mono); color: var(--warn); }
+.edge-bar { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 6px 0; font-size: 12px; }
+.edge-bar label { display: inline-flex; gap: 4px; align-items: center; }
+.edge-what { color: #ff9a3c; font-family: var(--mono); }
 
 /* ---- the program: taught points, timed -------------------------------- */
 .program { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }

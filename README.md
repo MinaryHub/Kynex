@@ -95,6 +95,21 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   the way it goes; each point is solved from the one before, and how
   many it cannot reach is said. Pick the TCP the work is done with (the
   tool's tip) first: the path is for it.
+- **Measure, report, video** (the toolbar): the ruler (M) measures between
+  two points clicked on shapes — the distance and ΔX/ΔY/ΔZ in mm; the
+  report opens a page to print or keep as a PDF: the cell from above and
+  at an angle, every piece of equipment where it stands and its size,
+  the robots and their programs, every role and its settings; ● records
+  the 3D view as a WebM video until pressed again.
+- **Snapping**: a robot let go within 0.25 m of a pedestal's or an AMR's
+  top stands on it; a conveyor let go near another's end runs on from it,
+  in line, flowing the same way, its belt as high. Placing and letting go
+  of the move handle snap; hold Alt to let go where it is.
+- **My equipment**: **내 장비로 저장** in the inspector keeps the selected
+  object and everything below it — shapes, colours, roles and their
+  settings — in the library under 내 장비, saved with the project, to be
+  placed again like any template (✕ takes it out, once none is placed).
+  An object with a robot in it cannot be saved so.
 - **Reach**: **범위** draws where the flange reaches within the joints'
   limits, see-through, swept round the first joint, with its section
   outlined; it follows the robot when moved. As a datasheet's working
@@ -391,7 +406,9 @@ The **라이브러리** tab, beside the scene tree, lists equipment to place as
 thumbnails: each drawn from the piece at its usual size
 (`apps/kynex/src/library.rs`):
 
-- 로봇: UR10e + 이중 그리퍼, UR5e, ABB IRB 1600-10/1.45 + 이중 그리퍼,
+- 로봇: UR10e + 이중 그리퍼, UR5e, UR3e, UR16e (UR3e·UR16e·UR5e는 Universal
+  Robots의 `Universal_Robots_ROS2_Description` 기구학·관절 한계 값),
+  ABB IRB 1600-10/1.45 + 이중 그리퍼, ABB IRB 1600 + 주행 트랙,
   Doosan M1013 + 이중 그리퍼(두산 `dsr_description2`의 관절·범위·속도.
   에뮬레이터에서 영점 플랜지 `[0, 34.5, 1452.5]`와 대기 자세가 같음을 확인).
   IRB 1600은 ROS-Industrial `abb_irb1600_support`의 관절 원점과 축,

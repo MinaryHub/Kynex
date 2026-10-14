@@ -753,6 +753,27 @@ impl Cell {
 
     /// Gives `object` the role `kind` unless it has one: the role equipment
     /// from the library comes with. A role changed by hand is kept.
+    /// The roles of object `root` and everything below it in `doc`, each
+    /// with its settings: what equipment saved from them comes with.
+    pub fn roles_under(&self, doc: &Document, root: ObjectId) -> Vec<(ObjectId, Kind, Value)> {
+        self.components
+            .iter()
+            .filter_map(|c| {
+                let id = id_of(doc, c.object)?;
+                (id == root || is_below(doc, id, root)).then(|| (id, c.kind, c.props.to_json()))
+            })
+            .collect()
+    }
+
+    /// Sets the settings `v` names on object `object`'s role.
+    pub fn set_props(&mut self, object: u64, v: &Value) {
+        if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {
+            c.props.update(v);
+            self.changed = true;
+            self.roles_changed = true;
+        }
+    }
+
     pub fn ensure(&mut self, object: u64, name: String, kind: Kind) {
         if self.components.iter().any(|c| c.object == object) {
             return;

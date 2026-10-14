@@ -257,7 +257,9 @@ impl Stage {
             file.clone()
         };
         let (posing, saved) = Posing::with_file(&from, &file)?;
-        let counts = (posing.pending(), saved.cell.len(), saved.library.len());
+        // Equipment placed, not the user's own kinds of it.
+        let placed = saved.library.iter().filter(|v| v["id"].is_u64()).count();
+        let counts = (posing.pending(), saved.cell.len(), placed);
         println!(
             "프로젝트 파일: {}{}",
             file.display(),
@@ -357,6 +359,29 @@ impl Stage {
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
                 answer
+            } else if op == "save_custom" {
+                // An object of the scene, and what is below it, kept as
+                // equipment of the user's own, its roles with it.
+                let scene = self.base.as_ref().unwrap_or(doc);
+                let req: Value = serde_json::from_str(&request.body).unwrap_or(Value::Null);
+                let object = req["object"].as_str().and_then(|s| s.parse::<u64>().ok());
+                let name = req["name"].as_str().unwrap_or("");
+                let answer = match object.and_then(|o| {
+                    scene
+                        .object_by_uid(kreate_scene::Uid::from_raw(o))
+                        .map(|id| (o, id))
+                }) {
+                    Some((o, id)) => {
+                        let roles = self.cell.roles_under(scene, id);
+                        match self.library.save_custom(scene, o, name, &roles) {
+                            Ok(key) => serde_json::json!({ "ok": true, "key": key }),
+                            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+                        }
+                    }
+                    None => serde_json::json!({ "ok": false, "error": "no such object" }),
+                };
+                touched = true;
+                answer.to_string()
             } else if library::is_op(&op) {
                 // The scene before, to carry the parts on moved equipment
                 // with it, and take those on removed equipment away.
@@ -364,6 +389,9 @@ impl Stage {
                 let (reply, roles) = self.library.handle(&request.body);
                 for (uid, name, kind) in roles.added {
                     self.cell.ensure(uid, name, kind);
+                }
+                for (uid, props) in &roles.props {
+                    self.cell.set_props(*uid, props);
                 }
                 self.rebase(doc);
                 let after = self.base.as_ref().unwrap_or(doc);
@@ -642,7 +670,7 @@ impl Stage {
         }
         server.state("cell", &self.cell.to_json(scene));
         server.state("library", &self.library.to_json());
-        server.state("templates", Library::thumbnails());
+        server.state("templates", self.library.thumbnails());
         server.state("scenarios", &self.scenarios_json());
         let programs = self.posing.take_programs_changed();
         if programs {

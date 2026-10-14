@@ -554,3 +554,190 @@ fn the_abb_robot_on_a_track_moves_the_track_as_its_controller_does() {
         assert!(err.contains("RAPID"), "{err}");
     }
 }
+
+/// Connection points: a robot let go near a pedestal stands on its top; a
+/// conveyor let go near another's end runs on from it, in line; one let go
+/// far off stays where it was let go.
+#[test]
+fn equipment_snaps_to_what_it_connects_to() {
+    let mut library = Library::default();
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "pedestal", "at": [1.0, 1.0, 0.0]}),
+    );
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "ur10e_tending", "at": [1.1, 0.9, 0.0], "snap": true}),
+    );
+    assert_eq!(a["snapped"], "로봇 받침대 1", "{a}");
+    let robot = library.items.last().unwrap();
+    assert!(
+        (robot.at - DVec3::new(1.0, 1.0, 0.7)).length() < 1e-9,
+        "{}",
+        robot.at
+    );
+
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "ur5e", "at": [1.6, 1.0, 0.0], "snap": true}),
+    );
+    assert!(a["snapped"].is_null(), "too far: {a}");
+
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "conveyor", "at": [0.0, -2.0, 0.0]}),
+    );
+    // Its start some 0.15 m past the first's end, a little turned.
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "conveyor", "at": [2.2, -1.95, 0.0], "yaw": 0.2, "snap": true}),
+    );
+    assert_eq!(a["snapped"], "벨트 컨베이어 1", "{a}");
+    let second = library.items.last().unwrap();
+    assert!(
+        (second.at - DVec3::new(2.1, -2.0, 0.0)).length() < 1e-9,
+        "{}",
+        second.at
+    );
+    assert!(second.yaw.abs() < 1e-12);
+
+    // Moved off and back, it snaps again; moved without, it does not.
+    let id = second.id;
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "move", "item": id, "at": [2.15, -1.9, 0.0], "snap": false}),
+    );
+    assert!(a["snapped"].is_null());
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "move", "item": id, "at": [2.15, -1.9, 0.0], "snap": true}),
+    );
+    assert_eq!(a["snapped"], "벨트 컨베이어 1", "{a}");
+}
+
+/// The UR3e and UR16e as Universal Robots describes them: six joints, their
+/// top speeds (180 and 360°/s; 120 and 180°/s), the flange as far out as
+/// their links reach, and each a UR.
+#[test]
+fn the_other_urs_are_as_universal_robots_describes_them() {
+    for (template, speeds, reach) in [
+        (
+            "ur3e",
+            [180.0, 180.0, 180.0, 360.0, 360.0, 360.0],
+            (0.24355 + 0.2132, 0.13105),
+        ),
+        (
+            "ur16e",
+            [120.0, 120.0, 180.0, 180.0, 180.0, 180.0],
+            (0.4784 + 0.36, 0.17415),
+        ),
+        ("ur5e", [180.0; 6], (0.425 + 0.3922, 0.1333)),
+    ] {
+        let mut library = Library::default();
+        ask(&mut library, json!({"op": "place", "template": template}));
+        let (doc, _) = shown(&mut library);
+        let robot = &kynex_model::robots(&doc)[0];
+        assert_eq!(robot.vendor(), Some("ur"), "{template}");
+        let kin = Kinematics::of(&doc, robot.root).unwrap();
+        for (var, speed) in kin.vars.iter().zip(speeds) {
+            assert!(
+                (var.velocity.to_degrees() - speed).abs() < 0.01,
+                "{template} {}",
+                var.name
+            );
+        }
+        // Stretched out level, the wrist's first joint as far from the
+        // shoulder's axis as the upper arm and forearm reach, and d4 to
+        // the side.
+        let uid = |n: &str| doc.object_uid(named(&doc, n)).unwrap().raw();
+        let q = [0.0; 6];
+        let shoulder = kin.world_of(&q, uid("shoulder_link")).unwrap().translation;
+        let wrist = kin.world_of(&q, uid("wrist_1_link")).unwrap().translation;
+        let out = DVec3::new(wrist.x - shoulder.x, wrist.y - shoulder.y, 0.0).length();
+        assert!(
+            (out - f64::hypot(reach.0, reach.1)).abs() < 1e-6,
+            "{template}: {out}"
+        );
+    }
+}
+
+/// A vertical machining centre: a CNC machine, its vise where its part sits.
+#[test]
+fn a_machining_centre_holds_its_part_in_its_vise() {
+    let mut library = Library::default();
+    let (_, roles) = ask(&mut library, json!({"op": "place", "template": "cnc_vmc"}));
+    assert_eq!(roles.added.len(), 1);
+    assert_eq!(roles.added[0].2, Kind::Cnc);
+    let (doc, _) = shown(&mut library);
+    let vise = doc.world_transform(named(&doc, "chuck")).translation;
+    assert!(
+        (vise - DVec3::new(0.0, 0.45, 0.95)).length() < 1e-9,
+        "{vise}"
+    );
+}
+
+/// Equipment of the user's own: a lathe as placed and set up (its cycle
+/// 45 s) saved under a name of its own, placed again elsewhere with the
+/// same shape and role and settings, kept in the project file, and shown
+/// among the templates.
+#[test]
+fn equipment_saved_from_the_scene_places_again_with_its_role() {
+    let mut library = Library::default();
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "cnc_lathe", "at": [1.0, 2.0, 0.0], "yaw": 0.5}),
+    );
+    let (doc, _) = shown(&mut library);
+    let mut cell = crate::cell::Cell::default();
+    for (uid, name, kind) in library.roles() {
+        cell.ensure(uid, name, kind);
+    }
+    let machine = library.items[0].root_uid();
+    cell.set_props(machine, &json!({"cycle": 45.0}));
+    let root = doc.object_by_uid(Uid::from_raw(machine)).unwrap();
+    let roles = cell.roles_under(&doc, root);
+    assert_eq!(roles.len(), 1);
+    let key = library
+        .save_custom(&doc, machine, "내 선반", &roles)
+        .unwrap();
+
+    // Placed again, a metre on, not turned.
+    let (a, added) = ask(
+        &mut library,
+        json!({"op": "place", "template": key, "at": [4.0, 0.0, 0.0]}),
+    );
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(added.added.len(), 1);
+    assert_eq!(added.added[0].1, "내 선반 1");
+    assert_eq!(added.added[0].2, Kind::Cnc);
+    assert_eq!(added.props.len(), 1);
+    assert_eq!(added.props[0].1["cycle"], 45.0);
+    let (doc, _) = shown(&mut library);
+    let chucks: Vec<DVec3> = doc
+        .objects()
+        .filter(|(_, o)| o.name == "chuck")
+        .map(|(id, _)| doc.world_transform(id).translation)
+        .collect();
+    assert_eq!(chucks.len(), 2);
+    // Where the first stands from its origin, turned back by its 0.5.
+    let first = DQuat::from_rotation_z(-0.5) * (chucks[0] - DVec3::new(1.0, 2.0, 0.0));
+    let second = chucks[1] - DVec3::new(4.0, 0.0, 0.0);
+    assert!((first - second).length() < 1e-6, "{first} {second}");
+
+    // Kept, and read back.
+    let saved = library.to_saved();
+    let again = Library::from_saved(&saved);
+    assert_eq!(again.items.len(), 2);
+    assert_eq!(again.customs.len(), 1);
+    let mut again = again;
+    assert!(again.thumbnails().contains(&key));
+    let listed: Value = serde_json::from_str(&again.to_json()).unwrap();
+    assert!(listed["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t["key"] == key && t["group"] == "내 장비"));
+    // Not taken out while one of it stands.
+    let (a, _) = ask(&mut again, json!({"op": "delete_custom", "key": key}));
+    assert_eq!(a["ok"], false);
+}

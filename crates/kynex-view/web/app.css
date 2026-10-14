@@ -201,6 +201,23 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .toolbar button svg { width: 17px; height: 17px; }
 .toolbar button:hover { background: var(--panel-2); color: var(--text); }
 .toolbar button.on { color: var(--accent); background: var(--accent-soft); }
+.toolbar button[data-action="record"] { display: inline-flex; gap: 4px; }
+.toolbar .rec-dot { fill: currentColor; stroke: none; }
+.toolbar button.recording { color: #ff5a5a; background: rgba(255, 90, 90, 0.14); }
+.toolbar .rec-time { font: 11px var(--mono); }
+.measure-readout {
+  position: absolute;
+  left: 50%;
+  bottom: 58px;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: rgba(20, 23, 28, 0.9);
+  color: #ffd23c;
+  font: 12px var(--mono);
+  pointer-events: none;
+}
 .toolbar .sep { width: 1px; height: 18px; background: var(--line-2); margin: 0 4px; }
 
 .hint {
@@ -466,6 +483,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .edge-bar { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 6px 0; font-size: 12px; }
 .edge-bar label { display: inline-flex; gap: 4px; align-items: center; }
 .edge-what { color: #ff9a3c; font-family: var(--mono); }
+.insp-custom { display: flex; justify-content: flex-end; padding-top: 6px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.lib-template { position: relative; }
+.lib-del { position: absolute; top: 2px; right: 2px; border: 0; border-radius: 4px; background: rgba(0, 0, 0, 0.45); color: var(--muted); font-size: 10px; line-height: 1; padding: 2px 4px; cursor: pointer; }
+.lib-del:hover { color: var(--text); }
 
 /* ---- the program: taught points, timed -------------------------------- */
 .program { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }

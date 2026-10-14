@@ -15,7 +15,7 @@
     <!-- ur_description hangs the arm from base_link_inertia, turned half a turn:
          the same joint positions as the controller's point the same way. -->
     <origin xyz="0 0 0.1625" rpy="0 0 3.141592654"/><axis xyz="0 0 1"/>
-    <limit lower="-6.283" upper="6.283" effort="150" velocity="3.14"/>
+    <limit lower="-6.283" upper="6.283" effort="150" velocity="3.1416"/>
   </joint>
   <link name="shoulder_link">
     <visual><origin xyz="0 0 -0.04"/><geometry><cylinder radius="0.062" length="0.13"/></geometry><material name="ur_blue"/></visual>
@@ -23,7 +23,7 @@
   <joint name="shoulder_lift_joint" type="revolute">
     <parent link="shoulder_link"/><child link="upper_arm_link"/>
     <origin rpy="1.570796327 0 0"/><axis xyz="0 0 1"/>
-    <limit lower="-6.283" upper="6.283" effort="150" velocity="3.14"/>
+    <limit lower="-6.283" upper="6.283" effort="150" velocity="3.1416"/>
   </joint>
   <link name="upper_arm_link">
     <visual><origin xyz="-0.2125 0 0.135" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.048" length="0.425"/></geometry><material name="ur_grey"/></visual>
@@ -32,7 +32,7 @@
   <joint name="elbow_joint" type="revolute">
     <parent link="upper_arm_link"/><child link="forearm_link"/>
     <origin xyz="-0.425 0 0"/><axis xyz="0 0 1"/>
-    <limit lower="-3.1416" upper="3.1416" effort="150" velocity="3.14"/>
+    <limit lower="-3.1416" upper="3.1416" effort="150" velocity="3.1416"/>
   </joint>
   <link name="forearm_link">
     <visual><origin xyz="-0.196 0 0.02" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.038" length="0.392"/></geometry><material name="ur_grey"/></visual>
@@ -41,7 +41,7 @@
   <joint name="wrist_1_joint" type="revolute">
     <parent link="forearm_link"/><child link="wrist_1_link"/>
     <origin xyz="-0.3922 0 0.1333"/><axis xyz="0 0 1"/>
-    <limit lower="-6.283" upper="6.283" effort="28" velocity="6.28"/>
+    <limit lower="-6.283" upper="6.283" effort="28" velocity="3.1416"/>
   </joint>
   <link name="wrist_1_link">
     <visual><geometry><cylinder radius="0.04" length="0.11"/></geometry><material name="ur_blue"/></visual>
@@ -49,7 +49,7 @@
   <joint name="wrist_2_joint" type="revolute">
     <parent link="wrist_1_link"/><child link="wrist_2_link"/>
     <origin xyz="0 -0.0997 0" rpy="1.570796327 0 0"/><axis xyz="0 0 1"/>
-    <limit lower="-6.283" upper="6.283" effort="28" velocity="6.28"/>
+    <limit lower="-6.283" upper="6.283" effort="28" velocity="3.1416"/>
   </joint>
   <link name="wrist_2_link">
     <visual><geometry><cylinder radius="0.04" length="0.11"/></geometry><material name="ur_blue"/></visual>
@@ -57,7 +57,7 @@
   <joint name="wrist_3_joint" type="revolute">
     <parent link="wrist_2_link"/><child link="wrist_3_link"/>
     <origin xyz="0 0.0996 0" rpy="1.570796327 3.141592654 3.141592654"/><axis xyz="0 0 1"/>
-    <limit lower="-6.283" upper="6.283" effort="28" velocity="6.28"/>
+    <limit lower="-6.283" upper="6.283" effort="28" velocity="3.1416"/>
   </joint>
   <link name="wrist_3_link">
     <visual><origin xyz="0 0 -0.02"/><geometry><cylinder radius="0.038" length="0.04"/></geometry><material name="ur_dark"/></visual>

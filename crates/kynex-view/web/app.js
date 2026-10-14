@@ -11,6 +11,7 @@ import { RobotPanel } from '/robot.js';
 import { CellPanel } from '/cell.js';
 import { LibraryPanel } from '/library.js';
 import { TimelinePanel } from '/timeline.js';
+import { openReport } from '/report.js';
 
 // ---- state ------------------------------------------------------------------
 
@@ -26,7 +27,7 @@ const BENCH = new URLSearchParams(location.search).has('bench');
 let benchStarted = false;
 let benchUpdates = 0;
 const collapsed = new Set();
-const view = { joints: true, wire: false, grid: true, timeline: false };
+const view = { joints: true, wire: false, grid: true, timeline: false, measure: false };
 
 // ---- renderer, camera, lights ----------------------------------------------
 
@@ -734,6 +735,25 @@ function select(uid, { frame: andFrame = false } = {}) {
 const KIND_LABEL = { mesh: '메시', empty: '빈 객체', camera: '카메라', light: '조명', armature: '아마추어' };
 const ROLE_LABEL = { joint: '관절', link: '링크', collision: '충돌', rig: '리그' };
 
+// The selected object, and what is below it, kept in the library as
+// equipment of the user's own (see library.rs, `save_custom`).
+document.getElementById('save-custom').addEventListener('click', async () => {
+  if (selected == null) return;
+  const name = prompt('내 장비 이름', records.get(selected)?.name ?? '');
+  if (!name) return;
+  try {
+    const response = await fetch('/robot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'save_custom', object: selected, name }),
+    });
+    const answer = await response.json();
+    toast(answer.ok ? `"${name}"을(를) 라이브러리의 내 장비에 저장했습니다` : answer.error || '저장하지 못했습니다');
+  } catch (err) {
+    toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+  }
+});
+
 function showInspector(uid) {
   const rec = records.get(uid);
   if (!rec) return;
@@ -768,6 +788,12 @@ canvas.addEventListener('pointerup', (e) => {
   const uidOf = (h) => (h.batchId !== undefined ? batch.uidAt(h.batchId) : h.object.userData.uid);
   const hits = ray.intersectObjects(targets, true);
   const hit = hits.find((h) => uidOf(h) != null);
+  // Measuring: the click is a point on a shape.
+  if (view.measure) {
+    const shape = hits.find((h) => h.batchId !== undefined);
+    if (shape) measureAt(shape.point);
+    return;
+  }
   // Picking an edge to follow: the click is on a part's shape, not a
   // choice of it, and not on a joint's marker.
   if (robotPanel.picking()) {
@@ -836,6 +862,52 @@ function fitShadows() {
 
 // ---- toolbar and keys -------------------------------------------------------
 
+// ---- measuring ---------------------------------------------------------------
+
+// Two points clicked on shapes, the line between them, and how far apart:
+// a third click starts again.
+const measured = { points: [], group: new THREE.Group() };
+measured.group.renderOrder = 12;
+scene.add(measured.group);
+
+function clearMeasure() {
+  for (const child of [...measured.group.children]) {
+    child.removeFromParent();
+    child.geometry.dispose();
+    child.material.dispose();
+  }
+  measured.points = [];
+  document.getElementById('measure').hidden = true;
+}
+
+function measureAt(point) {
+  if (measured.points.length === 2) clearMeasure();
+  measured.points.push(point.clone());
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.008, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffd23c, depthTest: false }),
+  );
+  dot.position.copy(point);
+  dot.renderOrder = 12;
+  measured.group.add(dot);
+  const out = document.getElementById('measure');
+  out.hidden = false;
+  if (measured.points.length === 1) {
+    out.textContent = '두 번째 점을 누르세요';
+    return;
+  }
+  const [a, b] = measured.points;
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([a, b]),
+    new THREE.LineBasicMaterial({ color: 0xffd23c, depthTest: false }),
+  );
+  line.renderOrder = 12;
+  measured.group.add(line);
+  const d = b.clone().sub(a);
+  const f = (v) => (v * 1000).toFixed(1);
+  out.textContent = `거리 ${f(d.length())} mm · ΔX ${f(d.x)} · ΔY ${f(d.y)} · ΔZ ${f(d.z)}`;
+}
+
 function setToggle(name, on) {
   view[name] = on;
   document.querySelector(`[data-toggle="${name}"]`)?.classList.toggle('on', on);
@@ -849,11 +921,91 @@ function setToggle(name, on) {
     surface.wireframe = on;
     outline.enabled = !on;
   }
+  if (name === 'measure') {
+    clearMeasure();
+    if (on) {
+      document.getElementById('measure').hidden = false;
+      document.getElementById('measure').textContent = '첫 번째 점을 누르세요';
+    }
+  }
+}
+
+// The layout report (see report.js): the cell drawn without the joints'
+// markers and what is being measured.
+function report() {
+  const markers = [...gizmos.values()].filter((g) => g.visible);
+  openReport({
+    renderer,
+    scene,
+    escapeHtml,
+    toast,
+    project: document.getElementById('status-text').textContent.replace(/^파일 · /, ''),
+    bounds: () => {
+      const all = new THREE.Box3();
+      const one = new THREE.Box3();
+      for (const uid of records.keys()) if (batch.boxOf(uid, one)) all.union(one);
+      return all;
+    },
+    hide: () => {
+      for (const g of markers) g.visible = false;
+      measured.group.visible = false;
+    },
+    show: () => {
+      for (const g of markers) g.visible = true;
+      measured.group.visible = true;
+    },
+    library: libraryPanel.library,
+    robots: robotPanel.robots,
+    programs: robotPanel.programs,
+    cell: cellPanel.cell,
+  });
+}
+
+// The scene as a video, for a proposal: what the canvas draws, from the
+// press to the next, kept as a WebM file.
+let recording = null;
+function record(button) {
+  if (recording) {
+    recording.recorder.stop();
+    return;
+  }
+  const type = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
+  if (!type) return toast('이 브라우저는 화면 녹화를 지원하지 않습니다');
+  const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: type, videoBitsPerSecond: 8_000_000 });
+  const chunks = [];
+  const started = performance.now();
+  const time = button.querySelector('.rec-time');
+  const tick = setInterval(() => {
+    const s = Math.floor((performance.now() - started) / 1000);
+    time.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }, 250);
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = () => {
+    clearInterval(tick);
+    button.classList.remove('on', 'recording');
+    time.hidden = true;
+    recording = null;
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+    link.download = `kynex-${stamp}.webm`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    toast(`${link.download}을(를) 내려받았습니다`);
+  };
+  recorder.start(1000);
+  recording = { recorder };
+  button.classList.add('on', 'recording');
+  time.textContent = '0:00';
+  time.hidden = false;
+  toast('녹화를 시작했습니다. 녹화 버튼을 다시 누르면 끝납니다');
 }
 
 document.querySelector('.toolbar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
+  if (b.dataset.action === 'record') record(b);
+  if (b.dataset.action === 'report') report();
   if (b.dataset.action === 'frame') frame();
   if (b.dataset.view) frame(selected, b.dataset.view);
   if (b.dataset.toggle) setToggle(b.dataset.toggle, !view[b.dataset.toggle]);
@@ -866,6 +1018,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'j') setToggle('joints', !view.joints);
   else if (k === 'w') setToggle('wire', !view.wire);
   else if (k === 'g') setToggle('grid', !view.grid);
+  else if (k === 'm') setToggle('measure', !view.measure);
   else if (k === '0') frame(selected, 'iso');
   else if (k === '7') frame(selected, 'top');
   else if (k === '1') frame(selected, 'front');
@@ -873,6 +1026,7 @@ window.addEventListener('keydown', (e) => {
   else if (libraryPanel.key(k)) return e.preventDefault();
   else if (k === 'escape') {
     libraryPanel.arm(null);
+    if (view.measure) setToggle('measure', false);
     select(null);
   }
   else return;

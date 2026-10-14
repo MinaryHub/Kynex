@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use kreate_io::ir::{ImportScene, SourceMetadata};
-use kreate_math::{DQuat, DVec3, SceneRgb};
+use kreate_math::{DAffine3, DQuat, DVec3, SceneRgb};
 use kreate_scene::robot::RobotPart;
 use kreate_scene::{
     Changes, DatablockKind, Document, Material, MaterialId, Object, ObjectData, ObjectId, Uid,
@@ -79,6 +79,18 @@ pub const TEMPLATES: &[Template] = &[
         params: &[],
     },
     Template {
+        key: "ur3e",
+        name: "UR3e",
+        group: "로봇",
+        params: &[],
+    },
+    Template {
+        key: "ur16e",
+        name: "UR16e",
+        group: "로봇",
+        params: &[],
+    },
+    Template {
         key: "irb1600_tending",
         name: "ABB IRB 1600 + 이중 그리퍼",
         group: "로봇",
@@ -105,6 +117,18 @@ pub const TEMPLATES: &[Template] = &[
             p("depth", "깊이", 1.6, 1.0, 4.0),
             p("height", "높이", 1.9, 1.2, 3.0),
             p("opening", "문 폭", 0.6, 0.3, 1.5),
+        ],
+    },
+    Template {
+        key: "cnc_vmc",
+        name: "CNC 머시닝센터 (수직형)",
+        group: "공작기계",
+        // A vertical machining centre of the 800 mm-travel class.
+        params: &[
+            p("width", "폭", 2.4, 1.5, 4.0),
+            p("depth", "깊이", 2.3, 1.5, 4.0),
+            p("height", "높이", 2.6, 2.0, 3.5),
+            p("opening", "문 폭", 0.9, 0.5, 1.8),
         ],
     },
     Template {
@@ -205,6 +229,170 @@ pub fn template(key: &str) -> Option<&'static Template> {
     TEMPLATES.iter().find(|t| t.key == key)
 }
 
+/// Equipment of the user's own, saved from the scene: its objects, parents
+/// first, each where it stands from the equipment's origin (on the floor,
+/// under where it stood, turned as it was), with its shape and colour if it
+/// has one, and its role in the cell if it had one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Custom {
+    pub key: String,
+    pub name: String,
+    nodes: Vec<Node>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Node {
+    name: String,
+    parent: Option<usize>,
+    /// From the equipment's origin.
+    at: DAffine3,
+    shape: Option<Shape>,
+    role: Option<(Kind, Value)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Shape {
+    positions: Vec<[f32; 3]>,
+    triangles: Vec<[u32; 3]>,
+    colour: [f32; 3],
+}
+
+impl Custom {
+    fn to_json(&self) -> Value {
+        json!({
+            "key": self.key,
+            "name": self.name,
+            "nodes": self.nodes.iter().map(|n| json!({
+                "name": n.name,
+                "parent": n.parent,
+                "at": n.at.to_cols_array(),
+                "shape": n.shape.as_ref().map(|s| json!({
+                    "p": s.positions.iter().flatten().collect::<Vec<_>>(),
+                    "t": s.triangles.iter().flatten().collect::<Vec<_>>(),
+                    "c": s.colour,
+                })),
+                "role": n.role.as_ref().map(|(k, props)| json!({"kind": k.tag(), "props": props})),
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    fn of_json(v: &Value) -> Option<Self> {
+        let nodes = v["nodes"]
+            .as_array()?
+            .iter()
+            .map(|n| {
+                let at: Vec<f64> = n["at"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Value::as_f64)
+                    .collect();
+                let shape = match &n["shape"] {
+                    Value::Null => None,
+                    s => {
+                        let floats: Vec<f32> = s["p"]
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| Some(x.as_f64()? as f32))
+                            .collect();
+                        let ints: Vec<u32> = s["t"]
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| Some(x.as_u64()? as u32))
+                            .collect();
+                        let c: Vec<f32> = s["c"]
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| Some(x.as_f64()? as f32))
+                            .collect();
+                        Some(Shape {
+                            positions: floats.as_chunks::<3>().0.to_vec(),
+                            triangles: ints.as_chunks::<3>().0.to_vec(),
+                            colour: [*c.first()?, *c.get(1)?, *c.get(2)?],
+                        })
+                    }
+                };
+                let role = match &n["role"] {
+                    Value::Null => None,
+                    r => Some((Kind::of(r["kind"].as_str()?)?, r["props"].clone())),
+                };
+                Some(Node {
+                    name: n["name"].as_str()?.to_string(),
+                    parent: n["parent"].as_u64().map(|p| p as usize),
+                    at: DAffine3::from_cols_array(&at.try_into().ok()?),
+                    shape,
+                    role,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            key: v["key"].as_str()?.to_string(),
+            name: v["name"].as_str()?.to_string(),
+            nodes,
+        })
+    }
+
+    fn build(&self) -> Built {
+        let mut doc = Document::new();
+        let mut ids: Vec<ObjectId> = Vec::with_capacity(self.nodes.len());
+        let mut roles = Vec::new();
+        let mut props = Vec::new();
+        let mut colours: Vec<([f32; 3], MaterialId)> = Vec::new();
+        for n in &self.nodes {
+            let id = match &n.shape {
+                Some(s) => {
+                    let positions = s
+                        .positions
+                        .iter()
+                        .map(|p| kreate_math::Vec3::from_array(*p))
+                        .collect();
+                    let faces: Vec<Vec<u32>> = s.triangles.iter().map(|t| t.to_vec()).collect();
+                    let id = doc.add_mesh_object(
+                        &n.name,
+                        kreate_mesh::MeshData::from_faces(positions, &faces),
+                    );
+                    let colour = match colours.iter().find(|(c, _)| *c == s.colour) {
+                        Some((_, m)) => *m,
+                        None => {
+                            let m = doc.add_material(Material {
+                                name: format!("custom {}", colours.len()),
+                                base_color: SceneRgb::new(s.colour[0], s.colour[1], s.colour[2]),
+                                ..Material::default()
+                            });
+                            colours.push((s.colour, m));
+                            m
+                        }
+                    };
+                    paint(&mut doc, id, colour);
+                    id
+                }
+                None => doc.add_object(Object::new(n.name.clone(), ObjectData::Empty)),
+            };
+            let (scale, rotation, translation) = n.at.to_scale_rotation_translation();
+            let o = doc.object_mut(id).unwrap();
+            o.transform.translation = translation;
+            o.transform.rotation = rotation;
+            o.transform.scale = scale;
+            // Where it stands is kept: set_parent keeps the world transform.
+            if let Some(p) = n.parent.and_then(|p| ids.get(p).copied()) {
+                let _ = doc.set_parent(id, Some(p));
+            }
+            if let Some((kind, v)) = &n.role {
+                roles.push((id, *kind));
+                props.push((id, v.clone()));
+            }
+            ids.push(id);
+        }
+        let order = doc.hierarchy().into_iter().map(|(id, _)| id).collect();
+        Built {
+            doc,
+            order,
+            roles,
+            root_link: None,
+            props,
+        }
+    }
+}
+
 /// A placed piece of equipment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
@@ -236,6 +424,86 @@ impl Item {
     }
 }
 
+// --- connection points ------------------------------------------------------
+
+/// What a connection point takes: a robot's foot stands on a mount; a
+/// conveyor's end feeds another's start.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Plug {
+    /// Where a robot stands: a pedestal's top, an AMR's.
+    Mount,
+    /// A robot's foot: its base.
+    Foot,
+    /// A conveyor's start, and its end.
+    BeltIn,
+    BeltOut,
+}
+
+impl Plug {
+    fn fits(self, other: Plug) -> bool {
+        matches!(
+            (self, other),
+            (Plug::Foot, Plug::Mount)
+                | (Plug::Mount, Plug::Foot)
+                | (Plug::BeltIn, Plug::BeltOut)
+                | (Plug::BeltOut, Plug::BeltIn)
+        )
+    }
+}
+
+/// How far apart, across the floor, two connection points snap together,
+/// metres.
+pub const SNAP: f64 = 0.25;
+
+impl Item {
+    /// Its connection points, where it stands: what each takes, and where.
+    fn plugs(&self) -> Vec<(Plug, DVec3)> {
+        let local: Vec<(Plug, DVec3)> = match self.template.as_str() {
+            "pedestal" => vec![(Plug::Mount, DVec3::Z * self.param("height"))],
+            "amr" => vec![(Plug::Mount, DVec3::Z * self.param("height"))],
+            "conveyor" => {
+                let (l, h) = (self.param("length"), self.param("height"));
+                // Past each end by the frame's overhang: ends meet frame to
+                // frame.
+                vec![
+                    (Plug::BeltIn, DVec3::new(-l / 2.0 - 0.05, 0.0, h)),
+                    (Plug::BeltOut, DVec3::new(l / 2.0 + 0.05, 0.0, h)),
+                ]
+            }
+            t if template(t).is_some_and(|t| t.group == "로봇") => {
+                vec![(Plug::Foot, DVec3::ZERO)]
+            }
+            _ => Vec::new(),
+        };
+        let turn = DQuat::from_rotation_z(self.yaw);
+        local
+            .into_iter()
+            .map(|(plug, p)| (plug, self.at + turn * p))
+            .collect()
+    }
+
+    /// Moved so its connection point `mine` stands on `theirs` of `other`:
+    /// a robot on its mount, as it was turned; a conveyor on in line with
+    /// the other, flowing the same way, its belt as high.
+    fn snapped_to(&self, mine: Plug, other: &Item, at: DVec3) -> (DVec3, f64) {
+        match mine {
+            Plug::Foot => (at, self.yaw),
+            _ => {
+                let yaw = other.yaw;
+                let mut moved = self.clone();
+                moved.yaw = yaw;
+                moved.at = DVec3::ZERO;
+                let local = moved
+                    .plugs()
+                    .into_iter()
+                    .find(|(p, _)| *p == mine)
+                    .map_or(DVec3::ZERO, |(_, p)| p);
+                (at - local, yaw)
+            }
+        }
+    }
+}
+
 /// An item made at the origin, in a document of its own: copied into the
 /// scene each time it is shown.
 struct Built {
@@ -246,6 +514,9 @@ struct Built {
     /// takes the item's name.
     roles: Vec<(ObjectId, Kind)>,
     root_link: Option<ObjectId>,
+    /// The settings a role comes with, where it has its own: the user's
+    /// equipment's.
+    props: Vec<(ObjectId, Value)>,
 }
 
 /// What a request changed in the cell's roles: added with the equipment,
@@ -254,12 +525,19 @@ struct Built {
 pub struct RoleChanges {
     pub added: Vec<(u64, String, Kind)>,
     pub removed: Vec<u64>,
+    /// The settings roles added come with, where they have their own.
+    pub props: Vec<(u64, Value)>,
 }
 
 /// The placed equipment.
 #[derive(Default)]
 pub struct Library {
     items: Vec<Item>,
+    /// The user's own equipment, as saved from the scene.
+    customs: Vec<Custom>,
+    /// The `templates` event as last made: made again when the user's own
+    /// equipment changes.
+    thumbs: Option<String>,
     next: u64,
     /// Each item as made, with the parameters it was made for.
     built: HashMap<u64, (BTreeMap<String, f64>, Built)>,
@@ -272,12 +550,18 @@ pub struct Library {
 
 impl Library {
     pub fn from_saved(saved: &[Value]) -> Self {
-        let mut library = Self::default();
+        let mut library = Self {
+            customs: saved
+                .iter()
+                .filter_map(|v| Custom::of_json(&v["custom"]))
+                .collect(),
+            ..Self::default()
+        };
         for v in saved {
             let (Some(id), Some(key)) = (v["id"].as_u64(), v["template"].as_str()) else {
                 continue;
             };
-            if template(key).is_none() {
+            if template(key).is_none() && !library.customs.iter().any(|c| c.key == key) {
                 continue;
             }
             let at = match v["at"].as_array().map(Vec::as_slice) {
@@ -320,9 +604,10 @@ impl Library {
     }
 
     pub fn to_saved(&self) -> Vec<Value> {
-        self.items
+        self.customs
             .iter()
-            .map(|i| {
+            .map(|c| json!({ "custom": c.to_json() }))
+            .chain(self.items.iter().map(|i| {
                 json!({
                     "id": i.id,
                     "template": i.template,
@@ -331,7 +616,7 @@ impl Library {
                     "at": [i.at.x, i.at.y, i.at.z],
                     "yaw": i.yaw,
                 })
-            })
+            }))
             .collect()
     }
 
@@ -372,23 +657,54 @@ impl Library {
         };
         if op == "place" {
             let key = req["template"].as_str().ok_or("no template")?;
-            let t = template(key).ok_or("no such template")?;
+            let named = template(key)
+                .map(|t| t.name.to_string())
+                .or_else(|| {
+                    self.customs
+                        .iter()
+                        .find(|c| c.key == key)
+                        .map(|c| c.name.clone())
+                })
+                .ok_or("no such template")?;
             self.next += 1;
             let n = self.items.iter().filter(|i| i.template == key).count() + 1;
             let item = Item {
                 id: self.next,
                 template: key.to_string(),
-                name: format!("{} {n}", t.name),
+                name: format!("{named} {n}"),
                 params: params(&req["params"]),
                 at: point(&req["at"]).unwrap_or(DVec3::ZERO),
                 yaw: req["yaw"].as_f64().unwrap_or(0.0),
             };
-            let built = build(&item)?;
+            let mut item = item;
+            let snapped = if req["snap"] == true {
+                self.snap(&mut item)
+            } else {
+                None
+            };
+            let built = self.build(&item)?;
             roles.added = role_uids(&item, &built);
+            roles.props = role_props(&item, &built);
             self.built.insert(item.id, (item.params.clone(), built));
             self.items.push(item);
             self.items_changed = true;
-            return Ok(json!({ "ok": true, "item": self.next }));
+            return Ok(json!({ "ok": true, "item": self.next, "snapped": snapped }));
+        }
+        // Equipment of the user's own taken out of the library, if none
+        // placed is of it.
+        if op == "delete_custom" {
+            let key = req["key"].as_str().ok_or("no key")?;
+            if self.items.iter().any(|i| i.template == key) {
+                return Err("놓여 있는 장비가 있습니다: 먼저 지우세요".into());
+            }
+            let before = self.customs.len();
+            self.customs.retain(|c| c.key != key);
+            if self.customs.len() == before {
+                return Err("no such equipment".into());
+            }
+            self.thumbs = None;
+            self.items_changed = true;
+            return Ok(json!({ "ok": true }));
         }
         let id = req["item"].as_u64().ok_or("no item")?;
         let at = self
@@ -398,13 +714,21 @@ impl Library {
             .ok_or("no such item")?;
         match op {
             "move" => {
-                let item = &mut self.items[at];
+                let mut item = self.items[at].clone();
                 if let Some(p) = point(&req["at"]) {
                     item.at = p;
                 }
                 if let Some(yaw) = req["yaw"].as_f64() {
                     item.yaw = yaw;
                 }
+                let snapped = if req["snap"] == true {
+                    self.snap(&mut item)
+                } else {
+                    None
+                };
+                self.items[at] = item;
+                self.items_changed = true;
+                return Ok(json!({ "ok": true, "snapped": snapped }));
             }
             "resize" => {
                 let item = &mut self.items[at];
@@ -426,6 +750,33 @@ impl Library {
         Ok(json!({ "ok": true }))
     }
 
+    /// Moves `item` onto the connection point of another it is nearest,
+    /// across the floor, if one fits within [`SNAP`]; returns that one's
+    /// name.
+    fn snap(&self, item: &mut Item) -> Option<String> {
+        let flat = |v: DVec3| DVec3::new(v.x, v.y, 0.0).length();
+        let (mine, other, theirs, _) = item
+            .plugs()
+            .into_iter()
+            .flat_map(|(mine, here)| {
+                self.items
+                    .iter()
+                    .filter(|o| o.id != item.id)
+                    .flat_map(move |o| {
+                        o.plugs()
+                            .into_iter()
+                            .filter(move |(theirs, _)| mine.fits(*theirs))
+                            .map(move |(_, there)| (mine, o, there, flat(there - here)))
+                    })
+            })
+            .filter(|(.., gap)| *gap <= SNAP)
+            .min_by(|a, b| a.3.total_cmp(&b.3))?;
+        let (at, yaw) = item.snapped_to(mine, other, theirs);
+        item.at = at;
+        item.yaw = yaw;
+        Some(other.name.clone())
+    }
+
     /// Every item's roles, by the identities its objects have in the scene:
     /// for roles that are to be there whatever was saved.
     pub fn roles(&mut self) -> Vec<(u64, String, Kind)> {
@@ -445,7 +796,7 @@ impl Library {
             .get(&item.id)
             .is_some_and(|(params, _)| *params == item.params);
         if !fresh {
-            let built = build(item)?;
+            let built = self.build(item)?;
             self.built.insert(item.id, (item.params.clone(), built));
         }
         Ok(&self.built[&item.id].1)
@@ -486,9 +837,22 @@ impl Library {
     }
 
     /// The `templates` event: each template at its usual size, as coloured
-    /// triangles, for the page to draw its thumbnail by. Made once.
-    pub fn thumbnails() -> &'static str {
-        static THUMBNAILS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    /// triangles, for the page to draw its thumbnail by — the library's
+    /// made once, the user's own as they are.
+    pub fn thumbnails(&mut self) -> &str {
+        let customs = &self.customs;
+        self.thumbs.get_or_insert_with(|| {
+            let mut out = Self::builtin_thumbnails().clone();
+            for c in customs {
+                out.insert(c.key.clone(), triangles(&c.build().doc));
+            }
+            Value::Object(out).to_string()
+        })
+    }
+
+    fn builtin_thumbnails() -> &'static serde_json::Map<String, Value> {
+        static THUMBNAILS: std::sync::OnceLock<serde_json::Map<String, Value>> =
+            std::sync::OnceLock::new();
         THUMBNAILS.get_or_init(|| {
             let mut out = serde_json::Map::new();
             for t in TEMPLATES {
@@ -504,8 +868,90 @@ impl Library {
                     out.insert(t.key.to_string(), triangles(&built.doc));
                 }
             }
-            Value::Object(out).to_string()
+            out
         })
+    }
+
+    /// Item `item` as made: from the library's template, or the user's.
+    fn build(&self, item: &Item) -> Result<Built, String> {
+        match self.customs.iter().find(|c| c.key == item.template) {
+            Some(c) => Ok(c.build()),
+            None => build(item),
+        }
+    }
+
+    /// Saves object `object` of `doc` and everything below it as equipment
+    /// of the user's own, named `name`, with the roles `roles` they have
+    /// (by object, with their settings). Returns its template's key.
+    pub fn save_custom(
+        &mut self,
+        doc: &Document,
+        object: u64,
+        name: &str,
+        roles: &[(ObjectId, Kind, Value)],
+    ) -> Result<String, String> {
+        let root = doc
+            .object_by_uid(Uid::from_raw(object))
+            .ok_or("no such object")?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("이름을 정하세요".into());
+        }
+        let under: Vec<ObjectId> = doc
+            .hierarchy()
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| *id == root || crate::cell::is_below(doc, *id, root))
+            .collect();
+        if under
+            .iter()
+            .any(|id| doc.object(*id).is_some_and(|o| o.robot.is_some()))
+        {
+            return Err("로봇이 들어 있는 물체는 내 장비로 저장할 수 없습니다".into());
+        }
+        // Its origin: on the floor under where it stands, turned as it is.
+        let world = doc.world_transform(root);
+        let x = world.matrix3.x_axis;
+        let origin = DAffine3::from_rotation_translation(
+            DQuat::from_rotation_z(x.y.atan2(x.x)),
+            DVec3::new(world.translation.x, world.translation.y, 0.0),
+        );
+        let mut nodes = Vec::new();
+        for id in &under {
+            let o = doc.object(*id).ok_or("no such object")?;
+            let shape = o.mesh().and_then(|m| doc.mesh(m)).map(|mesh| Shape {
+                positions: mesh.positions().iter().map(|p| p.to_array()).collect(),
+                triangles: mesh.triangulate().indices.as_chunks::<3>().0.to_vec(),
+                colour: doc.material_at(*id, 0).map_or([0.7, 0.72, 0.75], |m| {
+                    [m.base_color.r, m.base_color.g, m.base_color.b]
+                }),
+            });
+            let parent = o.parent.and_then(|p| under.iter().position(|u| *u == p));
+            let role = roles
+                .iter()
+                .find(|(r, ..)| r == id)
+                .map(|(_, kind, props)| (*kind, props.clone()));
+            nodes.push(Node {
+                name: o.name.clone(),
+                parent: if *id == root { None } else { parent },
+                at: origin.inverse() * doc.world_transform(*id),
+                shape,
+                role,
+            });
+        }
+        let n = self.customs.len() + 1;
+        let key = (n..)
+            .map(|k| format!("custom_{k}"))
+            .find(|k| !self.customs.iter().any(|c| c.key == *k))
+            .unwrap();
+        self.customs.push(Custom {
+            key: key.clone(),
+            name: name.chars().take(40).collect(),
+            nodes,
+        });
+        self.thumbs = None;
+        self.items_changed = true;
+        Ok(key)
     }
 
     /// The `library` event: what can be placed, and what is.
@@ -518,7 +964,13 @@ impl Library {
                 "params": t.params.iter().map(|p| json!({
                     "key": p.key, "label": p.label, "default": p.default, "min": p.min, "max": p.max,
                 })).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
+            })).chain(self.customs.iter().map(|c| json!({
+                "key": c.key,
+                "name": c.name,
+                "group": "내 장비",
+                "params": [],
+                "custom": true,
+            }))).collect::<Vec<_>>(),
             "items": self.items.iter().map(|i| json!({
                 "id": i.id,
                 "template": i.template,
@@ -562,6 +1014,20 @@ fn triangles(doc: &Document) -> Value {
         parts.push(json!({ "c": colour, "p": corners }));
     }
     Value::Array(parts)
+}
+
+/// The settings the roles `built` comes with carry, by the identities their
+/// objects take in the scene.
+fn role_props(item: &Item, built: &Built) -> Vec<(u64, Value)> {
+    let uids = role_uids(item, built);
+    built
+        .props
+        .iter()
+        .filter_map(|(id, v)| {
+            let i = built.roles.iter().position(|(r, _)| r == id)?;
+            Some((uids.get(i)?.0, v.clone()))
+        })
+        .collect()
 }
 
 /// The roles `built` comes with, by the identities its objects take in the
@@ -665,10 +1131,13 @@ fn build(item: &Item) -> Result<Built, String> {
     let mut roles = Vec::new();
     let mut root_link = None;
     match item.template.as_str() {
-        "ur10e_tending" | "ur5e" | "irb1600_tending" | "irb1600_track" | "m1013_tending" => {
+        "ur10e_tending" | "ur5e" | "ur3e" | "ur16e" | "irb1600_tending" | "irb1600_track"
+        | "m1013_tending" => {
             // Each at rest, the tool down: the pose a tending robot waits in.
             let (urdf, rest): (&str, &[(&str, f64)]) = match item.template.as_str() {
                 "ur5e" => (include_str!("../library/ur5e.urdf"), UR_REST),
+                "ur3e" => (include_str!("../library/ur3e.urdf"), UR_REST),
+                "ur16e" => (include_str!("../library/ur16e.urdf"), UR_REST),
                 "irb1600_tending" => (
                     include_str!("../library/irb1600_tending.urdf"),
                     &[("joint_5", std::f64::consts::FRAC_PI_2)],
@@ -712,9 +1181,9 @@ fn build(item: &Item) -> Result<Built, String> {
                 }
             }
         }
-        "cnc_lathe" => {
+        "cnc_lathe" | "cnc_vmc" => {
             let c = Colours::new(&mut doc);
-            let machine = cnc(&mut doc, &c, item);
+            let machine = cnc(&mut doc, &c, item, item.template == "cnc_vmc");
             roles.push((machine, Kind::Cnc));
         }
         "infeed_station" | "outfeed_station" => {
@@ -819,6 +1288,7 @@ fn build(item: &Item) -> Result<Built, String> {
         order,
         roles,
         root_link,
+        props: Vec::new(),
     })
 }
 
@@ -933,7 +1403,7 @@ fn paint(doc: &mut Document, id: ObjectId, colour: MaterialId) {
 /// cabinet with a working space open at the front behind a sliding door,
 /// and a chuck on the working space's floor. The machine is the returned
 /// empty; its door and chuck are named so (see `crate::cell`).
-fn cnc(doc: &mut Document, c: &Colours, item: &Item) -> ObjectId {
+fn cnc(doc: &mut Document, c: &Colours, item: &Item, vise: bool) -> ObjectId {
     let machine = doc.add_object(Object::new("machine", ObjectData::Empty));
     let m = Some(machine);
     let (w, d, h) = (
@@ -1000,15 +1470,37 @@ fn cnc(doc: &mut Document, c: &Colours, item: &Item) -> ObjectId {
         c.dark,
         m,
     );
-    post(
-        doc,
-        "chuck",
-        0.09,
-        0.12,
-        [0.0, 0.35, floor + 0.06],
-        c.steel,
-        m,
-    );
+    if vise {
+        // A machining centre: its table, and the vise on it the part is
+        // clamped in (where a lathe has its chuck).
+        let table = (opening - 0.1).min(0.9);
+        block(
+            doc,
+            "table",
+            [table, 0.45, 0.05],
+            [0.0, 0.45, floor + 0.025],
+            c.steel,
+            m,
+        );
+        block(
+            doc,
+            "chuck",
+            [0.25, 0.15, 0.1],
+            [0.0, 0.45, floor + 0.1],
+            c.dark,
+            m,
+        );
+    } else {
+        post(
+            doc,
+            "chuck",
+            0.09,
+            0.12,
+            [0.0, 0.35, floor + 0.06],
+            c.steel,
+            m,
+        );
+    }
     block(
         doc,
         "door",
@@ -1370,7 +1862,7 @@ fn fence(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
 
 /// The requests [`Library`] takes.
 pub fn is_op(op: &str) -> bool {
-    matches!(op, "place" | "move" | "resize" | "remove")
+    matches!(op, "place" | "move" | "resize" | "remove" | "delete_custom")
 }
 
 #[cfg(test)]

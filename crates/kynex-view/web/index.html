@@ -77,7 +77,13 @@
         <svg viewBox="0 0 20 20"><path d="M3 5h8M3 10h12M3 15h6M14 5h3M8 15h9"/></svg>
       </button>
       <button data-toggle="grid" class="on" title="그리드 (G)"><svg viewBox="0 0 20 20"><path d="M3 3h14v14H3zM3 8h14M3 12.5h14M8 3v14M12.5 3v14"/></svg></button>
+      <span class="sep"></span>
+      <button data-toggle="measure" title="측정: 장면에서 두 점을 누르면 거리를 잽니다 (M)"><svg viewBox="0 0 20 20"><path d="M3 14L14 3l3 3L6 17zM6 11l1.5 1.5M8.5 8.5l2 2M11 6l1.5 1.5"/></svg></button>
+      <button data-action="report" title="배치 보고서: 그림, 장비, 로봇, 셀 역할을 한 장에 (인쇄 또는 PDF로 저장)"><svg viewBox="0 0 20 20"><path d="M5 2.5h7l3 3v12H5zM12 2.5v3h3M7.5 9h5M7.5 12h5M7.5 15h3"/></svg></button>
+      <button data-action="record" title="화면 녹화: 다시 누르면 영상(WebM)으로 내려받습니다"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="5" class="rec-dot"/></svg><span class="rec-time" hidden></span></button>
     </div>
+
+    <div class="measure-readout num" id="measure" hidden></div>
 
     <div class="inspector" id="inspector" hidden>
       <div class="insp-head">
@@ -100,6 +106,9 @@
           <summary>I/O 연결 <span class="muted">URScript로 내보낼 때</span></summary>
           <div id="cell-io"></div>
         </details>
+      </div>
+      <div class="insp-custom">
+        <button class="text-btn quiet" id="save-custom" title="이 물체와 그 아래 부품을 형상·셀 역할·설정과 함께 라이브러리의 &quot;내 장비&quot;로 저장합니다">내 장비로 저장</button>
       </div>
     </div>
 

@@ -101,8 +101,18 @@ export class LibraryPanel {
     this.handle.addEventListener('dragging-changed', (e) => {
       ctx.controls.enabled = !e.value;
       this.dragging = e.value;
-      if (!e.value) this.draggedAt = performance.now();
+      if (!e.value) {
+        this.draggedAt = performance.now();
+        // Let go: onto what it connects to, if near (unless Alt is held).
+        if (this.handleItem != null && !this.alt) {
+          const z = new THREE.Euler().setFromQuaternion(this.proxy.quaternion, 'ZYX').z;
+          this.send({ op: 'move', item: this.handleItem, at: this.proxy.position.toArray(), yaw: z, snap: true }, (a) => this.saySnapped(a));
+        }
+      }
     });
+    // Alt held: let go where it is, connected to nothing.
+    this.alt = false;
+    for (const type of ['keydown', 'keyup']) window.addEventListener(type, (e) => (this.alt = e.altKey));
     this.handle.addEventListener('objectChange', () => {
       if (!this.dragging || this.handleItem == null) return;
       // Turned about Z only: the floor stays the floor.
@@ -116,6 +126,12 @@ export class LibraryPanel {
       if (key) e.dataTransfer.setData('text/kynex-template', key);
     });
     this.list.addEventListener('click', (e) => {
+      const gone = e.target.closest('[data-delete-custom]')?.dataset.deleteCustom;
+      if (gone) {
+        e.stopPropagation();
+        if (confirm('이 장비를 내 장비에서 지울까요?')) this.send({ op: 'delete_custom', key: gone });
+        return;
+      }
       const t = e.target.closest('[data-template]');
       if (t) return this.arm(this.armed === t.dataset.template ? null : t.dataset.template);
       const item = e.target.closest('[data-item]');
@@ -128,6 +144,7 @@ export class LibraryPanel {
       const key = e.dataTransfer.getData('text/kynex-template');
       if (!key) return;
       e.preventDefault();
+      this.alt = e.altKey;
       this.placeAt(key, e.clientX, e.clientY);
     });
     this.box.addEventListener('change', (e) => this.edited(e));
@@ -198,9 +215,13 @@ export class LibraryPanel {
     // usually stands: (sin ψ, −cos ψ) along (−x, −y).
     const t = this.library.templates.find((t) => t.key === key);
     const yaw = t?.group === '공작기계' || t?.group === '성형기' ? Math.atan2(-hit.x, hit.y) : 0;
-    this.send({ op: 'place', template: key, at: [hit.x, hit.y, hit.z], yaw }, () =>
-      this.ctx.toast(`${t?.name ?? key}을(를) 놓았습니다`),
+    this.send({ op: 'place', template: key, at: [hit.x, hit.y, hit.z], yaw, snap: !this.alt }, (a) =>
+      this.ctx.toast(`${t?.name ?? key}을(를) 놓았습니다${a.snapped ? ` · ${a.snapped}에 맞붙였습니다` : ''}`),
     );
+  }
+
+  saySnapped(answer) {
+    if (answer.snapped) this.ctx.toast(`${answer.snapped}에 맞붙였습니다`);
   }
 
   itemById(id) {
@@ -253,6 +274,7 @@ export class LibraryPanel {
         html += `<div class="lib-template${t.key === this.armed ? ' armed' : ''}" draggable="true" data-template="${escapeHtml(t.key)}" title="${escapeHtml(t.name)} · 장면으로 끌어 놓거나, 누른 뒤 장면을 누르세요">
           ${thumb ? `<img class="lib-thumb" src="${thumb}" alt="" draggable="false">` : '<span class="lib-thumb"></span>'}
           <span class="lib-name">${escapeHtml(t.name)}</span>
+          ${t.custom ? `<button class="lib-del" data-delete-custom="${escapeHtml(t.key)}" title="내 장비에서 지우기">✕</button>` : ''}
         </div>`;
       }
       html += '</li>';

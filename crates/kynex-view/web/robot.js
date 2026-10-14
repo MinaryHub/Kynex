@@ -16,6 +16,23 @@ const STEPS = [
   { label: '10 mm · 5°', m: 0.01, rad: (5 * Math.PI) / 180 },
   { label: '50 mm · 15°', m: 0.05, rad: (15 * Math.PI) / 180 },
 ];
+// What a step can tell a CNC machine, and what it can wait for.
+const COMMANDS = [
+  ['open', '문 열기'],
+  ['close', '문 닫기'],
+  ['clamp', '척 물림'],
+  ['unclamp', '척 풀기'],
+  ['start', '가공 시작'],
+];
+const SIGNALS = [
+  ['door_open', '문 열림'],
+  ['door_closed', '문 닫힘'],
+  ['clamped', '척 물림'],
+  ['idle', '가공 대기'],
+  ['done', '가공 완료'],
+];
+const SPEEDS = [1, 2, 5, 10, 20];
+
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
 
 // A held jog button steps again after this long, then this often.
@@ -75,7 +92,9 @@ export class RobotPanel {
     this.cell = { components: [], parts: [] };
     // By robot root, as the `programs` event has them.
     this.programs = {};
-    this.playing = null;
+    // The program running, and the clock, as the `pose` event has them.
+    this.running = null;
+    this.clock = { speed: 1, time: 0 };
     // The tool paths and taught points, drawn over the scene.
     this.paths = new THREE.Group();
     ctx.scene.add(this.paths);
@@ -127,30 +146,48 @@ export class RobotPanel {
     return ui;
   }
 
-  // The `pose` event: the robots held here, and the program playing.
+  // The `pose` event: the robots held here, the program running, and the
+  // simulation's clock.
   setPose(pose) {
     this.held = new Set(pose.held);
-    this.playing = pose.playing;
+    this.running = pose.running ?? null;
+    if (pose.clock) this.clock = pose.clock;
     for (const section of this.host.querySelectorAll('.robot')) {
       const root = section.dataset.root;
       const held = this.held.has(root);
       section.classList.toggle('held', held);
       section.querySelector('.robot-local').hidden = !held;
-      const playing = this.playing?.robot === root ? this.playing : null;
-      const play = section.querySelector('[data-act="play"]');
-      if (play) {
-        play.textContent = playing ? '■ 정지' : '▶ 재생';
-        play.setAttribute('aria-pressed', String(!!playing));
-      }
-      const bar = section.querySelector('.prog-progress');
-      if (bar) {
-        bar.hidden = !playing;
-        if (playing) {
-          const share = playing.duration > 0 ? playing.t / playing.duration : 1;
-          bar.firstElementChild.style.width = `${(share * 100).toFixed(1)}%`;
-          bar.lastElementChild.textContent = `${playing.t.toFixed(2)} / ${playing.duration.toFixed(2)} s`;
-        }
-      }
+      this.showRun(section, this.running?.robot === root ? this.running : null);
+    }
+  }
+
+  // A robot's run: its button, its state, and the step it is at.
+  showRun(section, run) {
+    const play = section.querySelector('[data-act="play"]');
+    if (!play) return;
+    const going = run && run.state !== 'done' && run.state !== 'alarm';
+    play.textContent = going ? '■ 정지' : '▶ 실행';
+    play.setAttribute('aria-pressed', String(!!going));
+    const speed = section.querySelector('[data-opt="clock"]');
+    if (speed && document.activeElement !== speed) speed.value = String(this.clock.speed);
+    const state = section.querySelector('.run-state');
+    let text = '';
+    if (run) {
+      const what = {
+        running: '실행 중',
+        moving: `이동 ${run.detail}`,
+        waiting: `대기: ${run.detail}`,
+        pausing: `잠시 ${run.detail}`,
+        done: '끝',
+        alarm: `알람: ${run.detail}`,
+      }[run.state];
+      const cycles = run.cycles ? ` · 사이클 ${run.cycles}회, 직전 ${run.last_cycle.toFixed(1)} s` : '';
+      text = run.state === 'done' ? `${what}${cycles}` : `${run.step + 1}단계 · ${what}${cycles}`;
+    }
+    state.textContent = text;
+    state.classList.toggle('alarm', run?.state === 'alarm');
+    for (const row of section.querySelectorAll('.point[data-index]')) {
+      row.classList.toggle('running', !!going && Number(row.dataset.index) === run.step);
     }
   }
 
@@ -241,7 +278,7 @@ export class RobotPanel {
     if (host.dataset.shape !== shape) {
       host.dataset.shape = shape;
       host.innerHTML = this.robots.map((r) => this.markup(r, escapeHtml)).join('');
-      this.setPose({ held: [...this.held], playing: this.playing });
+      this.setPose({ held: [...this.held], running: this.running, clock: this.clock });
       this.renderPrograms();
       this.renderContacts();
     }
@@ -286,7 +323,7 @@ export class RobotPanel {
         <div class="robot-local" hidden>
           <span class="local-badge">로컬 자세</span>
           <span class="local-note">Kreate에는 반영되지 않습니다</span>
-          <button class="text-btn" data-act="release">세션 자세로</button>
+          <button class="text-btn" data-act="session">세션 자세로</button>
         </div>
         <ul class="joints">
           ${r.joints
@@ -347,10 +384,23 @@ export class RobotPanel {
           <div class="prog-actions">
             <button class="chip-btn" data-act="teach" data-kind="joint" title="현재 자세를 관절 이동(MoveJ) 지점으로 추가">+ MoveJ</button>
             <button class="chip-btn" data-act="teach" data-kind="linear" title="현재 자세를 직선 이동(MoveL) 지점으로 추가">+ MoveL</button>
-            <button class="chip-btn play" data-act="play" aria-pressed="false">▶ 재생</button>
+            <select class="step-pick" data-opt="newstep" aria-label="동작 추가" title="고른 단계 다음에 동작을 넣습니다">
+              <option value="">+ 동작</option>
+              <option value="grip">그리퍼 잡기</option>
+              <option value="release">그리퍼 놓기</option>
+              <option value="command">장비 명령</option>
+              <option value="wait">신호 대기</option>
+              <option value="delay">시간 대기</option>
+            </select>
           </div>
           <ol class="points"></ol>
-          <div class="prog-progress" hidden><span></span><em class="num"></em></div>
+          <div class="run-bar">
+            <button class="chip-btn play" data-act="play" aria-pressed="false">▶ 실행</button>
+            <select data-opt="clock" aria-label="배속" title="시뮬레이션 배속">
+              ${SPEEDS.map((v) => `<option value="${v}">${v}배속</option>`).join('')}
+            </select>
+            <span class="run-state"></span>
+          </div>
           <div class="prog-foot">
             <label class="check" title="마지막 지점에서 첫 지점으로 돌아와 반복합니다"><input type="checkbox" data-opt="close"> 순환 재생</label>
             <button class="text-btn quiet" data-act="urscript" title="UR 컨트롤러용 URScript 파일로 내려받기">URScript</button>
@@ -372,9 +422,13 @@ export class RobotPanel {
       const list = section.querySelector('.points');
       if (!list) continue;
       const program = this.programs[section.dataset.root];
-      const points = program?.points || [];
+      const r = this.robots.find((x) => x.root === section.dataset.root);
+      const ui = r ? this.uiOf(r) : {};
+      const points = program?.steps || [];
+      const moves = points.filter((p) => p.type === 'move');
+      // With actions the cycle is what a run measures; this is the moves'.
       section.querySelector('.prog-cycle').textContent =
-        program?.cycle != null && points.length > 1 ? `사이클 ${seconds(program.cycle)}` : '';
+        program?.cycle != null && moves.length > 1 ? `이동 ${seconds(program.cycle)}` : '';
       section.querySelector('[data-opt="close"]').checked = !!program?.close;
       section.querySelector('[data-act="clear"]').hidden = !points.length;
       section.querySelector('[data-act="urscript"]').hidden = !points.length;
@@ -383,21 +437,23 @@ export class RobotPanel {
           '<li class="points-empty">로봇을 원하는 자세로 옮긴 뒤 <b>+ MoveJ</b> 또는 <b>+ MoveL</b>로 지점을 추가하세요.</li>';
         continue;
       }
+      const firstMove = points.findIndex((p) => p.type === 'move');
       const rows = points.map((p, i) => {
+        if (p.type !== 'move') return this.actionRow(r, p, i, i === ui.cursor);
         const linear = p.kind === 'linear';
         const speed = linear ? Math.round(p.speed * 1000) : Math.round(p.speed * 100);
         const bad = p.move?.problems?.length;
         // The first point is where the program starts: nothing moves into it,
         // unless the program comes back round to it.
-        const into = i > 0 || program.close;
+        const into = i > firstMove || program.close;
         return `
-          <li class="point${bad ? ' bad' : ''}" data-index="${i}">
+          <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}" data-index="${i}">
             <span class="pidx num">${i + 1}</span>
             <span class="pname">${escapeHtml(p.name)}</span>
             <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${linear ? 'L' : 'J'}</button>
             <input class="pspeed num" type="number" data-opt="speed" value="${speed}" min="1" step="${linear ? 10 : 5}"${into ? '' : ' disabled'} aria-label="속도">
             <span class="unit">${linear ? 'mm/s' : '%'}</span>
-            <span class="ptime num">${p.move ? seconds(p.move.duration) : i === 0 ? '시작' : ''}</span>
+            <span class="ptime num">${p.move ? seconds(p.move.duration) : i === firstMove ? '시작' : ''}</span>
             <span class="pacts">
               <button class="icon-mini" data-act="goto" title="이 지점으로 이동">→</button>
               <button class="icon-mini" data-act="retouch" title="현재 자세로 다시 지정">⟳</button>
@@ -410,13 +466,84 @@ export class RobotPanel {
         rows.push(`
           <li class="point back${program.back.problems.length ? ' bad' : ''}">
             <span class="pidx num">↩</span>
-            <span class="pname muted">${escapeHtml(points[0].name)}(으)로 복귀 · ${points[0].kind === 'linear' ? 'L' : 'J'}</span>
+            <span class="pname muted">${escapeHtml(moves[0].name)}(으)로 복귀 · ${moves[0].kind === 'linear' ? 'L' : 'J'}</span>
             <span class="ptime num">${seconds(program.back.duration)}</span>
             ${problems(program.back)}
           </li>`);
       }
       list.innerHTML = rows.join('');
+      this.showRun(section, this.running?.robot === section.dataset.root ? this.running : null);
     }
+  }
+
+  // An action's row: what it is, and what it is for, to be changed in
+  // place.
+  actionRow(r, step, i, cursor) {
+    const { escapeHtml } = this.ctx;
+    const pick = (field, options, value) =>
+      `<select data-field="${field}">${options
+        .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+        .join('')}</select>`;
+    const grippers = (r ? this.grippersOf(r) : []).map((g) => [g.object, this.ctx.records.get(g.object)?.name ?? g.name]);
+    const machines = this.cell.components.filter((c) => c.kind === 'cnc').map((c) => [c.object, c.name]);
+    // One that has gone from the cell still shows by its name.
+    const keep = (list, uid, name) => (list.some(([v]) => v === uid) ? list : [[uid, `${name} (없음)`], ...list]);
+    let icon = '';
+    let body = '';
+    switch (step.type) {
+      case 'grip':
+      case 'release':
+        icon = step.type === 'grip' ? '잡기' : '놓기';
+        body = pick('gripper', keep(grippers, step.gripper, step.gripper_name), step.gripper);
+        break;
+      case 'command':
+        icon = '명령';
+        body = pick('machine', keep(machines, step.machine, step.machine_name), step.machine) + pick('command', COMMANDS, step.command);
+        break;
+      case 'wait':
+        icon = '대기';
+        body = pick('machine', keep(machines, step.machine, step.machine_name), step.machine) + pick('signal', SIGNALS, step.signal);
+        break;
+      case 'delay':
+        icon = '대기';
+        body = `<input class="pspeed num" type="number" data-field="seconds" value="${step.seconds}" min="0" step="0.5"><span class="unit">s</span>`;
+        break;
+    }
+    return `
+          <li class="point action${cursor ? ' cursor' : ''}" data-index="${i}" data-type="${step.type}">
+            <span class="pidx num">${i + 1}</span>
+            <span class="act-icon act-${step.type}">${icon}</span>
+            <span class="act-body">${body}</span>
+            <span class="pacts"><button class="icon-mini" data-act="delete" title="삭제">✕</button></span>
+          </li>`;
+  }
+
+  // The action in row `row`, as its fields have it now.
+  actionOf(row) {
+    const step = { type: row.dataset.type };
+    for (const field of row.querySelectorAll('[data-field]')) {
+      step[field.dataset.field] = field.dataset.field === 'seconds' ? Number(field.value) : field.value;
+    }
+    return step;
+  }
+
+  // A new action of `type`, for the robot's first grip point or the cell's
+  // first machine.
+  newAction(r, type) {
+    const gripper = this.grippersOf(r)[0]?.object;
+    const machine = this.cell.components.find((c) => c.kind === 'cnc')?.object;
+    switch (type) {
+      case 'grip':
+      case 'release':
+        return gripper ? { type, gripper } : null;
+      case 'command':
+        return machine ? { type, machine, command: 'open' } : null;
+      case 'wait':
+        return machine ? { type, machine, signal: 'done' } : null;
+      case 'delay':
+        return { type, seconds: 1 };
+    }
+    return null;
   }
 
   // Each program's tool path, and its taught points, over the scene.
@@ -437,7 +564,7 @@ export class RobotPanel {
         line.renderOrder = 9;
         this.paths.add(line);
       }
-      const at = program.points.filter((p) => p.at).flatMap((p) => p.at);
+      const at = program.steps.filter((p) => p.type === 'move' && p.at).flatMap((p) => p.at);
       if (at.length) {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(at, 3));
@@ -713,7 +840,14 @@ export class RobotPanel {
     const act = e.target.closest('[data-act]')?.dataset.act;
     const row = e.target.closest('.point[data-index]');
     const index = row ? Number(row.dataset.index) : null;
-    if (act === 'release') {
+    // A click on a step's row (not its controls) picks it: what is taught
+    // or added next goes after it.
+    if (row && !e.target.closest('button, input, select')) {
+      ui.cursor = ui.cursor === index ? null : index;
+      this.renderPrograms();
+      return;
+    }
+    if (act === 'session') {
       this.send(r, { op: 'release', robot: r.root });
     } else if (act === 'handle') {
       this.showHandle(this.handleRoot === r.root ? null : r.root);
@@ -721,9 +855,11 @@ export class RobotPanel {
       const gripper = e.target.closest('[data-gripper]').dataset.gripper;
       this.programOp(r, { op: act, gripper });
     } else if (act === 'teach') {
-      this.programOp(r, { op: 'teach', kind: e.target.closest('[data-kind]').dataset.kind });
+      this.programOp(r, { op: 'teach', kind: e.target.closest('[data-kind]').dataset.kind, after: ui.cursor ?? undefined });
+      if (ui.cursor != null) ui.cursor += 1;
     } else if (act === 'play') {
-      this.programOp(r, { op: this.playing?.robot === r.root ? 'stop' : 'play' });
+      const going = this.running?.robot === r.root && !['done', 'alarm'].includes(this.running.state);
+      this.programOp(r, { op: going ? 'stop' : 'play' });
     } else if (act === 'urscript') {
       this.programOp(r, { op: 'urscript' }, (answer) => {
         // Handed to the browser as a file to keep.
@@ -737,9 +873,10 @@ export class RobotPanel {
     } else if (act === 'clear') {
       if (confirm('이 로봇의 프로그램 지점을 모두 지울까요?')) this.programOp(r, { op: 'clear' });
     } else if (act === 'kind' && index != null) {
-      const point = this.programs[r.root]?.points[index];
+      const point = this.programs[r.root]?.steps[index];
       if (point) this.programOp(r, { op: 'edit', index, kind: point.kind === 'linear' ? 'joint' : 'linear' });
     } else if (['goto', 'retouch', 'delete'].includes(act) && index != null) {
+      if (act === 'delete' && ui.cursor != null && ui.cursor >= index) ui.cursor = ui.cursor > 0 ? ui.cursor - 1 : null;
       this.programOp(r, { op: act, index });
     }
     const frame = e.target.closest('[data-frame]');
@@ -776,9 +913,21 @@ export class RobotPanel {
       // The program's lines are drawn with the tool point: again for this one.
       if (this.programs[r.root]) this.programOp(r, { op: 'program' });
     }
+    if (opt === 'clock') this.programOp(r, { op: 'speed', speed: Number(e.target.value) });
+    if (opt === 'newstep' && e.target.value) {
+      const step = this.newAction(r, e.target.value);
+      e.target.value = '';
+      if (!step) return this.ctx.toast('셀에 그리퍼나 CNC 장비가 없습니다. 먼저 셀 역할을 정하세요');
+      this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });
+      if (ui.cursor != null) ui.cursor += 1;
+    }
+    if (e.target.dataset.field) {
+      const row = e.target.closest('.point.action');
+      this.programOp(r, { op: 'edit', index: Number(row.dataset.index), step: this.actionOf(row) });
+    }
     if (opt === 'speed') {
       const index = Number(e.target.closest('.point').dataset.index);
-      const point = this.programs[r.root]?.points[index];
+      const point = this.programs[r.root]?.steps[index];
       const v = Number(e.target.value);
       if (point && Number.isFinite(v) && v > 0) {
         this.programOp(r, { op: 'edit', index, speed: point.kind === 'linear' ? v / 1000 : v / 100 });

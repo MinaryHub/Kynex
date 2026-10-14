@@ -525,10 +525,38 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 }
 .icon-mini:hover { background: var(--panel); color: var(--text); }
 .pprob { grid-column: 2 / -1; color: var(--warn); font-size: 11px; line-height: 1.35; }
-.prog-progress { position: relative; height: 16px; border-radius: 4px; background: var(--line); overflow: hidden; }
-.prog-progress[hidden] { display: none; }
-.prog-progress span { position: absolute; inset: 0 auto 0 0; background: rgba(255, 138, 61, 0.35); }
-.prog-progress em { position: relative; display: block; text-align: center; font: normal 10.5px/16px var(--mono); color: var(--text); }
+.prog-actions .step-pick {
+  height: 24px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 0 6px;
+}
+.point.cursor { box-shadow: inset 2px 0 0 var(--info); background: rgba(90, 169, 255, 0.07); }
+.point.running { box-shadow: inset 2px 0 0 var(--ok); background: rgba(63, 207, 142, 0.1); }
+.point.action { grid-template-columns: 18px 32px minmax(0, 1fr) auto; }
+.act-icon { font-size: 10.5px; font-weight: 600; text-align: center; border-radius: 4px; padding: 1px 0; color: var(--muted); background: var(--line); }
+.act-grip, .act-release { color: var(--accent); background: var(--accent-soft); }
+.act-command { color: var(--info); background: rgba(90, 169, 255, 0.14); }
+.act-body { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.act-body select {
+  min-width: 0;
+  flex: 1;
+  height: 22px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11.5px;
+}
+.act-body .pspeed { width: 56px; flex: none; }
+.run-bar { display: flex; align-items: center; gap: 8px; }
+.run-bar .chip-btn { margin-left: 0; }
+.run-bar select { height: 24px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 11.5px; }
+.run-state { font: 11px var(--mono); color: var(--ok); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-state.alarm { color: var(--bad); white-space: normal; }
 .prog-foot { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
 .prog-foot .check { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .text-btn.quiet { border-color: var(--line-2); color: var(--muted); }

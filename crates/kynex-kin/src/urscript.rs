@@ -105,6 +105,10 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     let _ = writeln!(out, "def {name}():");
     let _ = writeln!(out, "  set_tcp({})", pose(&tcp));
     for g in &export.globals {
+        // One line each: nothing smuggled in on another.
+        if g.contains(['\n', '\r']) {
+            return Err("URScript: a global spans lines".into());
+        }
         let _ = writeln!(out, "  {g}");
     }
     let notes = |out: &mut String, indent: &str, notes: &[Line]| {
@@ -270,6 +274,13 @@ fn function_name(name: &str) -> String {
 }
 
 /// Text for a comment: the controller reads ASCII.
+/// `text` safe in a comment: ASCII, and no control character — a name with
+/// a line break in it would otherwise end the comment and put its own
+/// script into the program.
+pub fn comment(text: &str) -> String {
+    ascii(text)
+}
+
 fn ascii(text: &str) -> String {
     text.chars()
         .map(|c| {

@@ -1011,3 +1011,32 @@ fn ursim_wired_program() {
     )
     .unwrap();
 }
+
+#[test]
+fn a_name_cannot_put_script_into_an_export() {
+    let mut c = cell1();
+    tending(&mut c);
+    let infeed = c.infeed;
+    for i in [0, 1, 3] {
+        edit_step(&mut c, i, "pallet", infeed);
+    }
+    c.act(json!({"type": "next", "pallet": infeed.to_string()}));
+    // The pallet renamed, as a session's participant could: a line break
+    // and a move of its own.
+    let id = c
+        .doc
+        .object_by_uid(kreate_scene::Uid::from_raw(infeed))
+        .unwrap();
+    c.doc.object_mut(id).unwrap().name = "pallet\nmovej([0,0,0,0,0,0])\n#".into();
+    let program = c.posing.program(c.robot).unwrap().clone();
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let io = c.cell.export(&c.doc);
+    let (script, _) = program.urscript(c.robot, &c.doc, &kin, false, &io).unwrap();
+    assert!(
+        !script
+            .lines()
+            .any(|l| l.trim_start().starts_with("movej([0,0,0,0,0,0])")),
+        "{script}"
+    );
+    assert!(script.contains("# The places of pallet?movej"), "{script}");
+}

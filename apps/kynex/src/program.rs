@@ -580,7 +580,10 @@ impl Program {
                     format!("p[{:.6}, {:.6}, {:.6}, 0, 0, 0]", p.x, p.y, p.z)
                 })
                 .collect();
-            globals.push(format!("# The places of {}", ascii_name(&name(*pallet))));
+            globals.push(format!(
+                "# The places of {}",
+                urscript::comment(&name(*pallet))
+            ));
             globals.push(format!("kynex_places_{k} = [{}]", places.join(", ")));
             globals.push(format!("kynex_place_{k} = 0"));
         }
@@ -856,13 +859,6 @@ fn get_in(n: u32) -> String {
 /// URScript waiting until `condition` holds.
 fn wait_until(condition: &str) -> String {
     format!("while (not {condition}):\n  sync()\nend")
-}
-
-/// Text for a comment: the controller reads ASCII.
-fn ascii_name(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii() { c } else { '?' })
-        .collect()
 }
 
 /// Action `a` as script where the cell is wired for it, or as a comment.

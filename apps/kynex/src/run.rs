@@ -64,9 +64,12 @@ impl Clock {
 enum State {
     /// About to start the step.
     Begin,
+    /// Through the moves `chain` (by step), one plan: blended where their
+    /// points say.
     Moving {
         plan: Plan,
         from: f64,
+        chain: Vec<usize>,
     },
     /// For the machine to say what the step waits for.
     Waiting,
@@ -169,9 +172,11 @@ impl Runner {
                         Err(why) => State::Alarm(why),
                     };
                 }
-                State::Moving { plan, from } => {
+                State::Moving { plan, from, chain } => {
                     let t = time - *from;
                     let ended = t >= plan.duration;
+                    // The step shown running: the move under way.
+                    self.step = chain[plan.segment_at(t).min(chain.len() - 1)];
                     let due = self
                         .last_frame
                         .is_none_or(|f| now.duration_since(f) >= FRAME);
@@ -183,6 +188,7 @@ impl Runner {
                     if !ended {
                         break;
                     }
+                    self.step = chain[chain.len() - 1];
                     self.next();
                 }
                 State::Waiting => {
@@ -221,21 +227,41 @@ impl Runner {
     ) -> Result<State, String> {
         let step = self.program.steps[self.step].clone();
         Ok(match step {
-            Step::Move(point) => {
-                let here = posing.positions(&self.kin, self.root);
-                let positions = self.target(&point, cell, scene)?;
-                let to = Waypoint {
-                    kind: point.kind,
-                    positions,
-                    speed: point.speed,
-                };
-                let from = Waypoint {
+            Step::Move(_) => {
+                // This move and those straight after it, up to the next
+                // action: planned together, to blend from one to the next.
+                let mut chain = vec![self.step];
+                while let Some(Step::Move(_)) = self.program.steps.get(chain[chain.len() - 1] + 1) {
+                    chain.push(chain[chain.len() - 1] + 1);
+                }
+                let mut waypoints = vec![Waypoint {
                     kind: MoveKind::Joint,
-                    positions: here,
+                    positions: posing.positions(&self.kin, self.root),
                     speed: 1.0,
-                };
-                let plan = path::plan(&self.kin, &self.tool, &[from, to], false);
-                State::Moving { plan, from: time }
+                    blend: 0.0,
+                }];
+                for (k, i) in chain.iter().enumerate() {
+                    let Step::Move(point) = &self.program.steps[*i] else {
+                        unreachable!("a chain of moves");
+                    };
+                    waypoints.push(Waypoint {
+                        kind: point.kind,
+                        positions: self.target(point, cell, scene)?,
+                        speed: point.speed,
+                        // The last stops: an action comes next.
+                        blend: if k + 1 < chain.len() {
+                            point.blend
+                        } else {
+                            0.0
+                        },
+                    });
+                }
+                let plan = path::plan(&self.kin, &self.tool, &waypoints, false);
+                State::Moving {
+                    plan,
+                    from: time,
+                    chain,
+                }
             }
             Step::Do(Action::Grip { gripper }) => {
                 // Where the gripper is: the robot as it stands now.
@@ -386,7 +412,7 @@ impl Runner {
     pub fn to_json(&self, time: f64) -> Value {
         let (state, detail) = match &self.state {
             State::Begin => ("running", String::new()),
-            State::Moving { plan, from } => (
+            State::Moving { plan, from, .. } => (
                 "moving",
                 format!(
                     "{:.1} / {:.1} s",

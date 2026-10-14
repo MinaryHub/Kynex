@@ -88,12 +88,18 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     let step = |out: &mut String, indent: &str, m: &Move, kind: MoveKind| {
         let w = m.waypoint;
         let _ = writeln!(out, "{indent}# {}", ascii(m.name));
+        // Passed without stopping, within the blend radius.
+        let r = if w.blend > 0.0 {
+            format!(", r={:.4}", w.blend)
+        } else {
+            String::new()
+        };
         match kind {
             MoveKind::Joint => {
                 let v = w.speed.clamp(0.01, 1.0) * slowest;
                 let _ = writeln!(
                     out,
-                    "{indent}movej({}, a={:.4}, v={:.4})",
+                    "{indent}movej({}, a={:.4}, v={:.4}{r})",
                     joints(&w.positions),
                     path::JOINT_ACCELERATION * slowest,
                     v
@@ -103,7 +109,7 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
                 let at = base.inverse() * kin.pose(&w.positions, tool);
                 let _ = writeln!(
                     out,
-                    "{indent}movel({}, a={:.4}, v={:.4})",
+                    "{indent}movel({}, a={:.4}, v={:.4}{r})",
                     pose(&at),
                     path::LINEAR_ACCELERATION,
                     w.speed

@@ -154,6 +154,13 @@ KYNEX times the moves (`kynex_kin::path`):
   - The place a point was taught over is the one nearest the tool point
     or a grip point, so a double gripper's offset grip points count too.
   - A place the arm cannot reach stops the run with an alarm.
+- **Blend**: a picked point shows its blend radius (**블렌드**, mm). A
+  point with one is passed without stopping: the next move starts while
+  the tool is still that close to it, and the tool rounds the corner
+  within about the radius (`◠50` beside its name). Only into another
+  move: before an action the robot stops, as it must to grip or wait.
+  The moves' time and a run both count the time saved. URScript writes
+  it as the move's `r=`.
 - **Order**: a picked step, or a span picked with Shift-click, moves up
   or down past its neighbour with ↑ and ↓ under the add buttons. Tending
   two machines in turn is laid out this way: load one, load the other,

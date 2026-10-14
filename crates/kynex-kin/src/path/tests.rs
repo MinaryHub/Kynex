@@ -52,6 +52,7 @@ fn wp(kind: MoveKind, positions: &[f64], speed: f64) -> Waypoint {
         kind,
         positions: positions.to_vec(),
         speed,
+        blend: 0.0,
     }
 }
 
@@ -291,4 +292,69 @@ fn one_waypoint_or_none_is_no_move() {
     assert_eq!(one.at(3.0), vec![0.4]);
     let none = plan(&kin, &tool, &[], true);
     assert_eq!(none.at(0.0), kin.current);
+}
+
+#[test]
+fn a_blended_waypoint_is_passed_without_stopping() {
+    // 20 cm along X, then 20 cm along Y: a corner between.
+    let (kin, tool) = robot(UR5E, "base_link");
+    let start = kin.current.clone();
+    let p0 = kin.pose(&start, &tool);
+    let line = |dx: f64, dy: f64, seed: &[f64]| {
+        let goal = Goal {
+            position: p0.translation + DVec3::new(dx, dy, 0.0),
+            rotation: Some(p0.to_scale_rotation_translation().1),
+        };
+        let found = kin.solve(&tool, &goal, seed, &Options::default());
+        assert!(found.reached);
+        found.positions
+    };
+    let a = line(0.0, 0.0, &start);
+    let b = line(0.2, 0.0, &a);
+    let c = line(0.2, 0.2, &b);
+    let mut corner = wp(MoveKind::Linear, &b, 0.25);
+    let stop = plan(
+        &kin,
+        &tool,
+        &[
+            wp(MoveKind::Joint, &a, 1.0),
+            corner.clone(),
+            wp(MoveKind::Linear, &c, 0.25),
+        ],
+        false,
+    );
+    corner.blend = 0.05;
+    let blended = plan(
+        &kin,
+        &tool,
+        &[
+            wp(MoveKind::Joint, &a, 1.0),
+            corner,
+            wp(MoveKind::Linear, &c, 0.25),
+        ],
+        false,
+    );
+    // Quicker by the overlap, and the moves overlap.
+    assert!(
+        blended.duration < stop.duration - 0.05,
+        "{} against {}",
+        blended.duration,
+        stop.duration
+    );
+    let (s1, s2) = (&blended.segments[0], &blended.segments[1]);
+    assert!(s2.start < s1.start + s1.duration);
+    // It ends where it is taught, and cuts the corner by no more than the
+    // radius.
+    let end = blended.at(blended.duration);
+    for (x, y) in end.iter().zip(&c) {
+        assert!((x - y).abs() < 1e-9);
+    }
+    let corner_at = kin.pose(&b, &tool).translation;
+    let nearest = (0..=400)
+        .map(|k| {
+            let q = blended.at(blended.duration * k as f64 / 400.0);
+            kin.pose(&q, &tool).translation.distance(corner_at)
+        })
+        .fold(f64::INFINITY, f64::min);
+    assert!(nearest > 0.002 && nearest < 0.05, "{nearest}");
 }

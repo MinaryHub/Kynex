@@ -16,6 +16,12 @@
 //! Each move speeds up, cruises and slows down (a trapezoid). Where a line
 //! would need a joint faster than it goes, the move is slowed to what the
 //! joint allows and the plan says so.
+//!
+//! A waypoint with a blend radius is passed without stopping: the next move
+//! starts while the tool is still that close to the waypoint, and for as
+//! long as both run, the joints move by the sum of both moves' changes. The
+//! tool rounds the corner within about the radius, and the time the two
+//! overlap is saved (as a controller's blend radius does).
 
 use kreate_math::{DQuat, DVec3};
 
@@ -57,6 +63,9 @@ pub struct Waypoint {
     /// For a joint move, the share of each joint's top speed (0 to 1]; for a
     /// linear move, the tool's speed in metres a second.
     pub speed: f64,
+    /// Metres: how close the tool comes to this waypoint before the next
+    /// move takes over, without stopping. Zero stops at it.
+    pub blend: f64,
 }
 
 /// What is wrong with a move. The move is still planned, as near as it
@@ -166,6 +175,14 @@ pub struct Segment {
 }
 
 impl Segment {
+    /// The joint positions it starts from.
+    fn origin(&self) -> &[f64] {
+        match &self.path {
+            Path::Joint { from, .. } => from,
+            Path::Linear { samples } => &samples[0],
+        }
+    }
+
     fn at(&self, t: f64) -> Vec<f64> {
         match &self.path {
             Path::Joint { from, to, profile } => {
@@ -201,17 +218,30 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// The joint positions `t` seconds in, held to the plan's ends.
+    /// The joint positions `t` seconds in, held to the plan's ends: where
+    /// it starts, moved on by every move started by then — two at once
+    /// where they blend.
     pub fn at(&self, t: f64) -> Vec<f64> {
         let t = t.clamp(0.0, self.duration);
+        let mut q = self.start.clone();
         for seg in &self.segments {
-            if t <= seg.start + seg.duration {
-                return seg.at(t - seg.start);
+            if seg.start > t {
+                break;
+            }
+            let now = seg.at((t - seg.start).min(seg.duration));
+            for ((q, a), o) in q.iter_mut().zip(&now).zip(seg.origin()) {
+                *q += a - o;
             }
         }
+        q
+    }
+
+    /// The move under way `t` seconds in, by its index: the latest begun.
+    pub fn segment_at(&self, t: f64) -> usize {
         self.segments
-            .last()
-            .map_or_else(|| self.start.clone(), |s| s.at(s.duration))
+            .iter()
+            .rposition(|s| s.start <= t)
+            .unwrap_or(0)
     }
 }
 
@@ -226,7 +256,7 @@ pub fn plan(kin: &Kinematics, tool: &Tool, waypoints: &[Waypoint], close: bool) 
     if close && waypoints.len() >= 2 {
         moves.push((waypoints.len() - 1, 0));
     }
-    let mut segments = Vec::new();
+    let mut segments: Vec<Segment> = Vec::new();
     let mut at = 0.0;
     for (from, to) in moves {
         let (a, b) = (&waypoints[from], &waypoints[to]);
@@ -234,16 +264,60 @@ pub fn plan(kin: &Kinematics, tool: &Tool, waypoints: &[Waypoint], close: bool) 
             MoveKind::Joint => joint_move(kin, &a.positions, &b.positions, b.speed),
             MoveKind::Linear => linear_move(kin, tool, &a.positions, &b.positions, b.speed),
         };
+        // Through the waypoint between, if it blends: this move starts
+        // before the last one ends.
+        if let Some(last) = segments.last() {
+            at -= overlap(kin, tool, last, &seg, a.blend);
+        }
         seg.to = to;
         seg.start = at;
         at += seg.duration;
         segments.push(seg);
     }
+    let duration = segments
+        .iter()
+        .map(|s| s.start + s.duration)
+        .fold(0.0, f64::max);
     Plan {
         start,
         segments,
-        duration: at,
+        duration,
     }
+}
+
+/// How long move `a` and the move after it, `b`, run at once through the
+/// waypoint between them blended with radius `radius`: while the tool is
+/// still within the radius of it on `a`'s way in, and not yet out of it on
+/// `b`'s way out. Never more than half of either, so that no three moves
+/// run at once.
+fn overlap(kin: &Kinematics, tool: &Tool, a: &Segment, b: &Segment, radius: f64) -> f64 {
+    if radius <= 0.0 || a.duration <= 0.0 || b.duration <= 0.0 {
+        return 0.0;
+    }
+    let corner = kin.pose(b.origin(), tool).translation;
+    let near = |q: &[f64]| kin.pose(q, tool).translation.distance(corner) <= radius;
+    // In from the end of `a`, out from the start of `b`, by the sampled time.
+    let within = |seg: &Segment, from_end: bool| {
+        let n = 60;
+        let dt = seg.duration / n as f64;
+        let mut k = 0;
+        while k < n {
+            let t = if from_end {
+                seg.duration - dt * (k + 1) as f64
+            } else {
+                dt * (k + 1) as f64
+            };
+            if !near(&seg.at(t)) {
+                break;
+            }
+            k += 1;
+        }
+        dt * k as f64
+    };
+    within(a, true)
+        .min(within(b, false))
+        .min(a.duration / 2.0)
+        .min(b.duration / 2.0)
 }
 
 fn joint_move(kin: &Kinematics, from: &[f64], to: &[f64], speed: f64) -> Segment {

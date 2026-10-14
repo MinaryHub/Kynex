@@ -38,6 +38,9 @@ pub const JOINT_SPEED: f64 = 0.5;
 /// A new linear move's speed, metres a second.
 pub const LINEAR_SPEED: f64 = 0.25;
 
+/// The largest blend radius, metres.
+pub const MAX_BLEND: f64 = 0.5;
+
 /// The spacing of a drawn path, seconds.
 const TRACE_STEP: f64 = 0.02;
 
@@ -64,6 +67,9 @@ pub struct Point {
     pub pallet: Option<u64>,
     /// The equipment it is taught in, if any.
     pub frame: Option<Frame>,
+    /// See [`Waypoint::blend`]: metres. Only into another move; before an
+    /// action the robot stops.
+    pub blend: f64,
 }
 
 /// What the robot does between moves.
@@ -117,6 +123,7 @@ impl Program {
             positions,
             pallet: None,
             frame: None,
+            blend: 0.0,
         };
         self.insert(Step::Move(point), after);
     }
@@ -308,6 +315,7 @@ impl Program {
                     "frame": p.frame.map(|f| f.object.to_string()),
                     "frame_name": p.frame.map(|f| name(f.object)),
                     "frame_at": p.frame.map(|f| affine_json(&f.taught_in)),
+                    "blend": p.blend,
                 }),
                 Step::Do(a) => action_json(a, &|u| name(u)),
             }).collect::<Vec<_>>(),
@@ -365,7 +373,7 @@ impl Program {
                             positions.insert(var, position);
                         }
                     }
-                    Step::Move(Point {
+                    let mut point = Point {
                         name: text(&s["name"]).unwrap_or_else(|| format!("P{}", steps.len() + 1)),
                         kind: kind_of(s["kind"].as_str().unwrap_or("joint"))?,
                         speed: s["speed"].as_f64().unwrap_or(JOINT_SPEED),
@@ -382,7 +390,19 @@ impl Program {
                         } else {
                             None
                         },
-                    })
+                        blend: s["blend"].as_f64().unwrap_or(0.0).clamp(0.0, MAX_BLEND),
+                    };
+                    // Saved before points had frames: a pallet point is in
+                    // its pallet's frame, where the pallet stands now.
+                    if let (Some(pallet), None) = (point.pallet, point.frame) {
+                        point.frame =
+                            doc.object_by_uid(kreate_scene::Uid::from_raw(pallet))
+                                .map(|id| Frame {
+                                    object: pallet,
+                                    taught_in: doc.world_transform(id),
+                                });
+                    }
+                    Step::Move(point)
                 }
                 "grip" => Step::Do(Action::Grip {
                     gripper: object(s, "gripper")?,
@@ -512,10 +532,15 @@ impl Program {
     /// The moves as the planner takes them, in order.
     pub fn waypoints(&self, kin: &Kinematics) -> Vec<Waypoint> {
         self.moves()
-            .map(|(_, p)| Waypoint {
+            .map(|(i, p)| Waypoint {
                 kind: p.kind,
                 positions: kin.with(&p.positions),
                 speed: p.speed,
+                // A blend into the next move only: an action stops the robot.
+                blend: match self.steps.get(i + 1) {
+                    Some(Step::Move(_)) => p.blend,
+                    _ => 0.0,
+                },
             })
             .collect()
     }
@@ -624,6 +649,7 @@ impl Program {
                         "pallet_name": p.pallet.map(name),
                         "frame": p.frame.map(|f| f.object.to_string()),
                         "frame_name": p.frame.map(|f| name(f.object)),
+                        "blend": p.blend,
                     })
                 }
                 Step::Do(a) => action_json(a, &name),

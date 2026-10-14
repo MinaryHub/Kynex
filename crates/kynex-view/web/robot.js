@@ -460,7 +460,7 @@ export class RobotPanel {
         return `
           <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}">
             <span class="pidx num">${i + 1}</span>
-            <span class="pname">${escapeHtml(p.name)}</span>
+            <span class="pname">${escapeHtml(p.name)}${p.blend ? ` <span class="pblend" title="블렌드 반경: 멈추지 않고 지나감">◠${Math.round(p.blend * 1000)}</span>` : ''}</span>
             <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${linear ? 'L' : 'J'}</button>
             <input class="pspeed num" type="number" data-opt="speed" value="${speed}" min="1" step="${linear ? 10 : 5}"${into ? '' : ' disabled'} aria-label="속도">
             <span class="unit">${linear ? 'mm/s' : '%'}</span>
@@ -472,6 +472,7 @@ export class RobotPanel {
               <button class="icon-mini" data-act="delete" title="삭제">✕</button>
             </span>
             ${p.frame ? this.frameLine(p) : ''}
+            ${i === ui.cursor ? `<div class="pslot">블렌드 <input class="pblend-in num" type="number" data-opt="blend" value="${Math.round((p.blend || 0) * 1000)}" min="0" max="500" step="10" aria-label="블렌드 반경"> mm <span class="muted">${points[i + 1]?.type === 'move' ? '0이면 멈춤' : '다음이 동작이라 멈춤'}</span></div>` : ''}
             ${problems(p.move)}
           </li>`;
       });
@@ -1043,6 +1044,11 @@ export class RobotPanel {
     if (e.target.dataset.field) {
       const row = e.target.closest('.point.action');
       this.programOp(r, { op: 'edit', index: Number(row.dataset.index), step: this.actionOf(row) });
+    }
+    if (opt === 'blend') {
+      const index = Number(e.target.closest('.point').dataset.index);
+      const v = Number(e.target.value);
+      if (Number.isFinite(v) && v >= 0) this.programOp(r, { op: 'edit', index, blend: v / 1000 });
     }
     if (opt === 'frame') {
       const index = Number(e.target.closest('.point').dataset.index);

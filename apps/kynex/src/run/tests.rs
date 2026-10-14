@@ -702,3 +702,33 @@ fn steps_move_up_and_down_past_their_neighbours() {
     assert!(!p.shift(0, 0, true));
     assert!(!p.shift(4, 4, false));
 }
+
+#[test]
+fn blended_points_shorten_the_cycle_and_the_parts_still_go_round() {
+    let mut plain = cell1();
+    tending(&mut plain);
+    let (runner, slow) = plain.run(120.0);
+    assert_eq!(runner.to_json(slow)["state"], "done");
+
+    let mut blended = cell1();
+    tending(&mut blended);
+    // Through the points between moves: over the chuck on the way out,
+    // and on to the outfeed.
+    for i in [9, 22, 23] {
+        let a = ask_posing(
+            &mut blended.posing,
+            &blended.doc,
+            json!({"op": "edit", "robot": blended.robot.to_string(), "index": i, "blend": 0.05}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+    }
+    let (runner, fast) = blended.run(120.0);
+    let state = runner.to_json(fast);
+    assert_eq!(state["state"], "done", "{state}");
+    assert!(fast < slow - 0.2, "{fast} s against {slow} s");
+    let cell: serde_json::Value =
+        serde_json::from_str(&blended.cell.to_json(&blended.doc)).unwrap();
+    let parts = cell["parts"].as_array().unwrap();
+    assert_eq!(parts.iter().filter(|p| p["finished"] == true).count(), 1);
+    assert!(parts.iter().all(|p| p["held"].is_null()));
+}

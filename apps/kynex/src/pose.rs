@@ -445,6 +445,9 @@ impl Posing {
                         point.name = name.chars().take(32).collect();
                     }
                 }
+                if let Some(blend) = req["blend"].as_f64() {
+                    point.blend = blend.clamp(0.0, program::MAX_BLEND);
+                }
                 // The equipment it is taught in, or none (`null`, ""): where
                 // that stands now is where the point was taught in it.
                 let frame_of = |object: u64| {

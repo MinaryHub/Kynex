@@ -3,6 +3,10 @@
 //! does to the cell — grip, release, tell a machine to open or start, wait
 //! for it to say it is done (see [`Action`]).
 //!
+//! A point may stand on a pallet (see [`Point::pallet`]): taught over one
+//! of its places, it is run over the place the pallet's count has reached,
+//! and [`Action::Next`] moves the count on — one program for every place.
+//!
 //! Positions are kept by joint identity, so a program outlives the session
 //! scene being rebuilt around it; a joint it does not name stands where the
 //! robot stands.
@@ -41,6 +45,10 @@ pub struct Point {
     /// See [`Waypoint::speed`].
     pub speed: f64,
     pub positions: BTreeMap<u64, f64>,
+    /// The pallet the point is taught over, if it is: run, the tool goes
+    /// as far from the place the pallet's count has reached as it was
+    /// taught from the place nearest it, turned as taught.
+    pub pallet: Option<u64>,
 }
 
 /// What the robot does between moves.
@@ -56,6 +64,9 @@ pub enum Action {
     Wait { machine: u64, signal: Signal },
     /// Wait this many seconds.
     Delay { seconds: f64 },
+    /// Move pallet `pallet`'s count on to its next place, from its last
+    /// back to its first.
+    Next { pallet: u64 },
 }
 
 /// One line of a program: a move to a point, or an action.
@@ -89,6 +100,7 @@ impl Program {
                 MoveKind::Linear => LINEAR_SPEED,
             },
             positions,
+            pallet: None,
         };
         self.insert(Step::Move(point), after);
     }
@@ -105,6 +117,20 @@ impl Program {
             Step::Move(p) => Some((i, p)),
             Step::Do(_) => None,
         })
+    }
+
+    /// The pallets it goes through place by place: those it moves on.
+    pub fn counted_pallets(&self) -> Vec<u64> {
+        let mut out: Vec<u64> = self
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Do(Action::Next { pallet }) => Some(*pallet),
+                _ => None,
+            })
+            .collect();
+        out.dedup();
+        out
     }
 
     /// The point step `i` moves to, if it is a move.
@@ -149,6 +175,8 @@ impl Program {
                         "name": var_name.get(uid).copied().unwrap_or(""),
                         "position": q,
                     })).collect::<Vec<_>>(),
+                    "pallet": p.pallet.map(|u| u.to_string()),
+                    "pallet_name": p.pallet.map(name),
                 }),
                 Step::Do(a) => action_json(a, &|u| name(u)),
             }).collect::<Vec<_>>(),
@@ -211,6 +239,11 @@ impl Program {
                         kind: kind_of(s["kind"].as_str().unwrap_or("joint"))?,
                         speed: s["speed"].as_f64().unwrap_or(JOINT_SPEED),
                         positions,
+                        pallet: if s["pallet"].is_string() {
+                            object(s, "pallet")
+                        } else {
+                            None
+                        },
                     })
                 }
                 "grip" => Step::Do(Action::Grip {
@@ -229,6 +262,9 @@ impl Program {
                 }),
                 "delay" => Step::Do(Action::Delay {
                     seconds: s["seconds"].as_f64().unwrap_or(1.0),
+                }),
+                "next" => Step::Do(Action::Next {
+                    pallet: object(s, "pallet")?,
                 }),
                 _ => continue,
             };
@@ -300,6 +336,8 @@ impl Program {
                         Action::Wait { machine, signal } =>
                             format!("wait for {} to say {}", name(*machine), signal.tag()),
                         Action::Delay { seconds } => format!("sleep({seconds})"),
+                        Action::Next { pallet } =>
+                            format!("move pallet {} on to its next place", name(*pallet)),
                     }
                 )),
             }
@@ -444,6 +482,8 @@ impl Program {
                         "speed": p.speed,
                         "at": at,
                         "move": into.get(&i).map(|s| move_json(*s)),
+                        "pallet": p.pallet.map(|u| u.to_string()),
+                        "pallet_name": p.pallet.map(name),
                     })
                 }
                 Step::Do(a) => action_json(a, &name),
@@ -507,6 +547,11 @@ fn action_json(a: &Action, name: &dyn Fn(u64) -> String) -> Value {
             "signal": signal.tag(),
         }),
         Action::Delay { seconds } => json!({ "type": "delay", "seconds": seconds }),
+        Action::Next { pallet } => json!({
+            "type": "next",
+            "pallet": pallet.to_string(),
+            "pallet_name": name(*pallet),
+        }),
     }
 }
 
@@ -541,6 +586,9 @@ pub fn action_of(v: &Value) -> Result<Action, String> {
         },
         "delay" => Action::Delay {
             seconds: v["seconds"].as_f64().unwrap_or(1.0).clamp(0.0, 3600.0),
+        },
+        "next" => Action::Next {
+            pallet: uid("pallet")?,
         },
         other => return Err(format!("unknown step {other:?}")),
     })

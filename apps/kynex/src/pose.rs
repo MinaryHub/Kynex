@@ -441,6 +441,10 @@ impl Posing {
                         point.name = name.chars().take(32).collect();
                     }
                 }
+                // The pallet it stands on, or none (`null`, "").
+                if let Some(pallet) = req.get("pallet") {
+                    point.pallet = uid(pallet);
+                }
             }
             "delete" => {
                 program.steps.remove(index()?);

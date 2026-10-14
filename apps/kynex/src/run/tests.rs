@@ -477,3 +477,78 @@ fn a_second_machine_nearly_doubles_the_parts_an_hour() {
     assert!(wait(&a) > wait(&b), "{a}\n{b}");
     println!("{a}\n{b}\n{took:?}");
 }
+
+/// Binds the move at step `index` to `pallet`.
+fn on_pallet(c: &mut Cell1, index: usize, pallet: u64) {
+    let a = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "edit", "robot": c.robot.to_string(), "index": index, "pallet": pallet.to_string()}),
+    );
+    assert_eq!(a["ok"], true, "{a}");
+}
+
+#[test]
+fn points_on_a_pallet_go_from_place_to_place() {
+    let mut c = cell1();
+    let g = c.grip_a.to_string();
+    let up = DVec3::Z * 0.15;
+    // Taught over the first place of each pallet: down, grip or let go, up,
+    // and the count on.
+    let raw = c.slot(c.infeed, 0);
+    let out = c.slot(c.outfeed, 0);
+    c.teach(raw + up, "joint");
+    c.teach(raw, "linear");
+    c.act(json!({"type": "grip", "gripper": g}));
+    c.teach(raw + up, "linear");
+    c.teach(out + up, "joint");
+    c.teach(out, "linear");
+    c.act(json!({"type": "release", "gripper": g}));
+    c.teach(out + up, "linear");
+    c.act(json!({"type": "next", "pallet": c.infeed.to_string()}));
+    c.act(json!({"type": "next", "pallet": c.outfeed.to_string()}));
+    let (infeed, outfeed) = (c.infeed, c.outfeed);
+    for i in [0, 1, 3] {
+        on_pallet(&mut c, i, infeed);
+    }
+    for i in [4, 5, 7] {
+        on_pallet(&mut c, i, outfeed);
+    }
+    ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "close", "robot": c.robot.to_string(), "close": true}),
+    );
+    // Saved and read back, it keeps its pallets.
+    let saved = c.posing.saved_programs(&c.doc);
+    let (_, again) = crate::program::Program::from_saved(&saved[0], &c.doc).unwrap();
+    assert_eq!(&again, c.posing.program(c.robot).unwrap());
+
+    let (runner, t) = c.run(40.0);
+    let state = runner.to_json(t);
+    assert_ne!(state["state"], "alarm", "{state}");
+    let cycles = state["cycles"].as_u64().unwrap() as usize;
+    assert!(cycles >= 3, "{state}");
+    // Raw parts taken from the first places of the infeed, in order, and
+    // set down on the first places of the outfeed: none on another.
+    let cell: serde_json::Value = serde_json::from_str(&c.cell.to_json(&c.doc)).unwrap();
+    let parts = cell["parts"].as_array().unwrap();
+    let at = |p: &serde_json::Value| {
+        DVec3::new(
+            p["at"][0].as_f64().unwrap(),
+            p["at"][1].as_f64().unwrap(),
+            p["at"][2].as_f64().unwrap(),
+        )
+    };
+    let near = |place: DVec3| {
+        parts
+            .iter()
+            .any(|p| p["held"].is_null() && (at(p) - place).truncate().length() < 0.01)
+    };
+    for i in 0..cycles {
+        assert!(!near(c.slot(c.infeed, i)), "infeed {i} still full");
+        assert!(near(c.slot(c.outfeed, i)), "outfeed {i} empty");
+    }
+    assert!(near(c.slot(c.infeed, cycles + 1)));
+    assert!(!near(c.slot(c.outfeed, cycles + 1)));
+}

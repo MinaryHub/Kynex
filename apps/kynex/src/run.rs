@@ -10,16 +10,18 @@
 //! The clock can run faster than real time ([`Clock::speed`]): a 90 s
 //! machining cycle need not be watched for 90 s.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use kreate_math::DVec3;
 use kreate_scene::Document;
 use kynex_kin::path::{self, MoveKind, Plan, Waypoint};
-use kynex_kin::{Kinematics, Tool};
+use kynex_kin::{Goal, Kinematics, Options, Tool};
 use serde_json::{json, Value};
 
 use crate::cell::{Cell, Signal};
 use crate::pose::Posing;
-use crate::program::{Action, Program, Step};
+use crate::program::{Action, Point, Program, Step};
 
 /// How often a moving robot is shown at a new pose, in real time.
 const FRAME: Duration = Duration::from_millis(33);
@@ -89,6 +91,8 @@ pub struct Runner {
     cycles: u32,
     last_cycle: Option<f64>,
     last_frame: Option<Instant>,
+    /// Each pallet's count: the place its points go to, from 0.
+    places: BTreeMap<u64, usize>,
 }
 
 impl Runner {
@@ -110,12 +114,18 @@ impl Runner {
             cycles: 0,
             last_cycle: None,
             last_frame: None,
+            places: BTreeMap::new(),
         })
     }
 
     /// Whether its program runs round and round.
     pub fn looping(&self) -> bool {
         self.program.close
+    }
+
+    /// The pallets its program goes through place by place.
+    pub fn counted_pallets(&self) -> Vec<u64> {
+        self.program.counted_pallets()
     }
 
     /// Whether it has stopped: at its end, or on an alarm.
@@ -213,9 +223,13 @@ impl Runner {
         Ok(match step {
             Step::Move(point) => {
                 let here = posing.positions(&self.kin, self.root);
+                let positions = match point.pallet {
+                    Some(pallet) => self.on_pallet(&point, pallet, cell, scene)?,
+                    None => self.kin.with(&point.positions),
+                };
                 let to = Waypoint {
                     kind: point.kind,
-                    positions: self.kin.with(&point.positions),
+                    positions,
                     speed: point.speed,
                 };
                 let from = Waypoint {
@@ -244,7 +258,83 @@ impl Runner {
             }
             Step::Do(Action::Wait { .. }) => State::Waiting,
             Step::Do(Action::Delay { seconds }) => State::Until(time + seconds),
+            Step::Do(Action::Next { pallet }) => {
+                let count = cell.pallet_slots(scene, pallet).len();
+                if count == 0 {
+                    return Err("팔레트가 셀에 없습니다".into());
+                }
+                let at = self.places.entry(pallet).or_default();
+                *at = (*at + 1) % count;
+                self.step += 1;
+                State::Begin
+            }
         })
+    }
+
+    /// Where `point`, taught over a place of `pallet`, is run: over the
+    /// place the pallet's count has reached, as far from it and turned as
+    /// it was taught. The joints come from the taught ones, so the arm
+    /// keeps the posture it was taught in.
+    fn on_pallet(
+        &self,
+        point: &Point,
+        pallet: u64,
+        cell: &Cell,
+        scene: &Document,
+    ) -> Result<Vec<f64>, String> {
+        let taught = self.kin.with(&point.positions);
+        let slots = cell.pallet_slots(scene, pallet);
+        if slots.is_empty() {
+            return Err(format!("{}의 기준 팔레트가 셀에 없습니다", point.name));
+        }
+        let pose = self.kin.pose(&taught, &self.tool);
+        // The place it was taught over: the one nearest, seen from above,
+        // the tool point or a grip point of this robot's — on a double
+        // gripper, the grip point holding the part stands off the tool's.
+        let points: Vec<DVec3> = std::iter::once(pose.translation)
+            .chain(
+                cell.grippers()
+                    .into_iter()
+                    .filter_map(|g| self.kin.tool(g, kreate_math::DAffine3::IDENTITY))
+                    .map(|g| self.kin.pose(&taught, &g).translation),
+            )
+            .collect();
+        let flat = |v: DVec3| DVec3::new(v.x, v.y, 0.0).length();
+        let gap = |i: usize| {
+            points
+                .iter()
+                .map(|p| flat(slots[i] - *p))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let from = (0..slots.len())
+            .min_by(|a, b| gap(*a).total_cmp(&gap(*b)))
+            .expect("a place");
+        let to = self.places.get(&pallet).copied().unwrap_or(0) % slots.len();
+        if to == from {
+            return Ok(taught);
+        }
+        let (_, rotation, _) = pose.to_scale_rotation_translation();
+        let goal = Goal {
+            position: pose.translation + (slots[to] - slots[from]),
+            rotation: Some(rotation),
+        };
+        let found = self.kin.solve(
+            &self.tool,
+            &goal,
+            &taught,
+            &Options {
+                restarts: 8,
+                ..Options::default()
+            },
+        );
+        if !found.reached {
+            return Err(format!(
+                "{}: 팔레트 {}번 칸에 닿지 않습니다",
+                point.name,
+                to + 1
+            ));
+        }
+        Ok(found.positions)
     }
 
     /// What the robot is doing, for the timeline: `move`, `wait` (for a
@@ -288,6 +378,7 @@ impl Runner {
             "detail": detail,
             "cycles": self.cycles,
             "last_cycle": self.last_cycle,
+            "places": self.places.iter().map(|(p, i)| (p.to_string(), json!(i + 1))).collect::<serde_json::Map<_, _>>(),
             "cycle_time": time - self.cycle_from,
         })
     }

@@ -398,13 +398,10 @@ impl Stage {
         }
         touched |= self.cell.tick(scene, time, now);
         // A program going round is kept supplied, as an operator would:
-        // raw parts on the infeed, finished parts off the outfeed.
-        if self
-            .runner
-            .as_ref()
-            .is_some_and(|r| r.looping() && !r.stopped())
-        {
-            self.cell.supply(scene);
+        // raw parts on the infeed, finished parts off the outfeed — whole
+        // pallets at a time for the pallets it goes through place by place.
+        if let Some(runner) = self.runner.as_ref().filter(|r| r.looping() && !r.stopped()) {
+            self.cell.swap_pallets(scene, &runner.counted_pallets());
             touched |= self.cell.take_changed();
         }
         // A comparison done.

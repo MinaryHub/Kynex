@@ -535,6 +535,58 @@ impl Cell {
         taken
     }
 
+    /// The same, as an operator changes whole pallets, for the pallets in
+    /// `swapped` — those a program goes through place by place: an infeed
+    /// is filled again once it has no raw part left, and an outfeed
+    /// emptied once it has no free place. The other pallets are kept
+    /// supplied place by place, as [`Cell::supply`] does.
+    pub fn swap_pallets(&mut self, doc: &Document, swapped: &[u64]) {
+        let pallets: Vec<Component> = self
+            .components
+            .iter()
+            .filter(|c| c.kind.pallet())
+            .cloned()
+            .collect();
+        for c in pallets {
+            let slots = self.slots(doc, &c);
+            let on = |p: &Part| {
+                p.held.is_none()
+                    && slots
+                        .iter()
+                        .any(|at| p.world.translation.distance(*at) < SNAP)
+            };
+            let swap = swapped.contains(&c.object);
+            if c.kind == Kind::Infeed {
+                let empty = !self.parts.iter().any(|p| !p.finished && on(p));
+                if !swap || empty {
+                    for at in slots.clone() {
+                        let free = !self
+                            .parts
+                            .iter()
+                            .any(|p| p.held.is_none() && p.world.translation.distance(at) < SNAP);
+                        if free {
+                            self.add_part(at, false);
+                        }
+                    }
+                }
+            } else {
+                let full = slots.iter().all(|at| {
+                    self.parts
+                        .iter()
+                        .any(|p| p.held.is_none() && p.world.translation.distance(*at) < SNAP)
+                });
+                if !swap || full {
+                    let (gone, kept): (Vec<Part>, Vec<Part>) = std::mem::take(&mut self.parts)
+                        .into_iter()
+                        .partition(|p| p.finished && on(p));
+                    self.parts = kept;
+                    self.removed.extend(gone.iter().map(|p| p.uid));
+                    self.changed |= !gone.is_empty();
+                }
+            }
+        }
+    }
+
     /// Puts a raw part on every free place of every infeed pallet: as a run
     /// starts, so that it has parts to take. Returns how many were put.
     pub fn stock(&mut self, doc: &Document) -> usize {
@@ -626,6 +678,25 @@ impl Cell {
             }
         }
         out
+    }
+
+    /// Every grip point, by identity.
+    pub fn grippers(&self) -> Vec<u64> {
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Gripper)
+            .map(|c| c.object)
+            .collect()
+    }
+
+    /// The places of pallet `pallet`, by its identity: none if it is not
+    /// one.
+    pub fn pallet_slots(&self, doc: &Document, pallet: u64) -> Vec<DVec3> {
+        self.components
+            .iter()
+            .find(|c| c.object == pallet && c.kind.pallet())
+            .map(|c| self.slots(doc, c))
+            .unwrap_or_default()
     }
 
     /// Where a part's centre stands in a CNC machine's chuck.
@@ -1268,6 +1339,7 @@ impl Cell {
                 "uid": p.uid.to_string(),
                 "finished": p.finished,
                 "held": p.held.map(|h| h.0.to_string()),
+                "at": [p.world.translation.x, p.world.translation.y, p.world.translation.z],
             })).collect::<Vec<_>>(),
         })
         .to_string()

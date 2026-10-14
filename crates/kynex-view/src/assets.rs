@@ -6,7 +6,14 @@
 pub fn build_id() -> String {
     // FNV-1a over every file the page runs: a page differs when they do.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for path in ["/", "/app.js", "/batch.js", "/outline.js", "/app.css"] {
+    for path in [
+        "/",
+        "/app.js",
+        "/batch.js",
+        "/outline.js",
+        "/robot.js",
+        "/app.css",
+    ] {
         for b in get(path).map(|(_, body)| body).unwrap_or_default() {
             h ^= u64::from(*b);
             h = h.wrapping_mul(0x0100_0000_01b3);
@@ -25,9 +32,13 @@ pub fn get(path: &str) -> Option<(&'static str, &'static [u8])> {
         "/app.js" => (JS, include_bytes!("../web/app.js")),
         "/batch.js" => (JS, include_bytes!("../web/batch.js")),
         "/outline.js" => (JS, include_bytes!("../web/outline.js")),
+        "/robot.js" => (JS, include_bytes!("../web/robot.js")),
         "/app.css" => ("text/css; charset=utf-8", include_bytes!("../web/app.css")),
         "/vendor/three.module.min.js" => (JS, include_bytes!("../web/vendor/three.module.min.js")),
         "/vendor/OrbitControls.js" => (JS, include_bytes!("../web/vendor/OrbitControls.js")),
+        "/vendor/TransformControls.js" => {
+            (JS, include_bytes!("../web/vendor/TransformControls.js"))
+        }
         "/favicon.svg" => ("image/svg+xml", include_bytes!("../web/favicon.svg")),
         _ => return None,
     })

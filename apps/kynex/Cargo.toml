@@ -13,4 +13,6 @@ kreate-scene.workspace = true
 kreate-io.workspace = true
 kreate-math.workspace = true
 kreate-mesh.workspace = true
+kynex-kin.workspace = true
+kynex-collide.workspace = true
 serde_json.workspace = true

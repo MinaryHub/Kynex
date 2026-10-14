@@ -27,11 +27,14 @@ use kynex_view::json as vjson;
 use serde_json::{json, Value};
 
 mod bench;
+mod collide;
+mod pose;
+mod program;
 mod view;
 
 const USAGE: &str = "\
-kynex view [ADDRESS] [--key KEY] [--name NAME] [--port 8090] [--lan] [--open]
-kynex view --file FILE.kreate [--port 8090] [--lan] [--open]
+kynex view [ADDRESS] [--key KEY] [--name NAME] [--port 8090] [--lan] [--open] [--programs FILE]
+kynex view --file FILE.kreate [--port 8090] [--lan] [--open] [--programs FILE]
 kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 kynex inspect FILE.kreate [--json]
 kynex bench [--tier cell|line|factory|factory-xl|all] [--browser] [--port 8091]";

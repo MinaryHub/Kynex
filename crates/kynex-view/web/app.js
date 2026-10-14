@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 import { Batch } from '/batch.js';
 import { Outline } from '/outline.js';
+import { RobotPanel } from '/robot.js';
 
 // ---- state ------------------------------------------------------------------
 
@@ -101,6 +102,9 @@ scene.add(content);
 
 const DEFAULT_COLOR = new THREE.Color().setRGB(0.62, 0.64, 0.67, THREE.LinearSRGBColorSpace);
 const ACCENT = new THREE.Color(0xff8a3d);
+// Parts in contact: a robot's link and what it runs into.
+const CONTACT = new THREE.Color(0xff3b3b);
+let contacted = new Set();
 // The parts' one material: each part's own colour is its instance colour.
 const surface = new THREE.MeshStandardMaterial({
   color: 0xffffff,
@@ -231,7 +235,8 @@ function place(rec) {
   const visible = rec.visible && rec.role !== 'collision';
   if (rec.kind === 'mesh' && rec.mesh != null && batch.hasGeometry(rec.mesh)) {
     batch.set(rec.uid, rec.mesh, rec.matrix, colorOf(rec), visible);
-    if (selected === rec.uid) batch.tint(rec.uid, colorOf(rec).lerp(ACCENT, 0.55));
+    const tint = tintOf(rec);
+    if (tint) batch.tint(rec.uid, tint);
   } else {
     batch.remove(rec.uid);
   }
@@ -269,7 +274,7 @@ function setRobots(list) {
     const rec = records.get(uid);
     if (rec) setGizmo(rec);
   }
-  renderRobots();
+  robotPanel.setRobots(list);
 }
 
 // ---- the stream -------------------------------------------------------------
@@ -392,6 +397,7 @@ function onUpdate(data) {
   }
   for (const uid of data.removed) removeObject(uid);
   if (data.robots) setRobots(data.robots);
+  else robotPanel.refresh();
   if (treeChanged) renderTree();
   if (selected != null) showInspector(selected);
   touched();
@@ -454,6 +460,9 @@ function connect() {
   source.addEventListener('update', () => benchUpdates++);
   source.addEventListener('update', (e) => takeUpdate(JSON.parse(e.data)));
   source.addEventListener('status', (e) => onStatus(JSON.parse(e.data)));
+  source.addEventListener('pose', (e) => robotPanel.setPose(JSON.parse(e.data)));
+  source.addEventListener('programs', (e) => robotPanel.setPrograms(JSON.parse(e.data)));
+  source.addEventListener('contacts', (e) => setContacts(JSON.parse(e.data)));
   // A page served by one KYNEX that reconnects to a newer one would read
   // its stream wrongly: it reloads instead.
   source.addEventListener('hello', (e) => {
@@ -611,86 +620,17 @@ document.getElementById('tree').addEventListener('dblclick', (e) => {
 });
 document.getElementById('search').addEventListener('input', renderTree);
 
-const KIND_CHIP = { revolute: 'R', continuous: 'C', prismatic: 'P', fixed: 'F', floating: '6', planar: '2' };
-
-function jointValue(j) {
-  return j.slides ? `${(j.position * 1000).toFixed(1)} mm` : `${((j.position * 180) / Math.PI).toFixed(1)}°`;
-}
-function limitText(j, v) {
-  return j.slides ? `${(v * 1000).toFixed(0)}` : `${((v * 180) / Math.PI).toFixed(0)}°`;
-}
-
-function renderRobots() {
-  const host = document.getElementById('robots');
-  document.getElementById('robot-count').textContent = robots.length;
-  if (!robots.length) {
-    host.innerHTML = '<p class="muted pad">장면에 로봇이 없습니다. Kreate에서 URDF를 불러오면 관절이 여기에 나타납니다.</p>';
-    return;
-  }
-  // Same robots and joints as drawn: update the numbers in place, so a pose
-  // streaming in does not rebuild the panel under the pointer.
-  const shape = robots.map((r) => r.root + ':' + r.joints.map((j) => j.uid + j.kind).join(',')).join('|');
-  if (host.dataset.shape !== shape) {
-    host.dataset.shape = shape;
-    host.innerHTML = robots
-      .map(
-        (r) => `
-      <section class="robot">
-        <div class="robot-head">
-          <span class="robot-name">${escapeHtml(r.name)}</span>
-          <span class="robot-meta">${r.joints.filter((j) => j.moves).length} DOF${r.mass ? ` · ${r.mass.toFixed(1)} kg` : ''}</span>
-        </div>
-        <ul class="joints">
-          ${r.joints
-            .map(
-              (j) => `
-            <li class="joint" data-uid="${escapeHtml(j.uid)}">
-              <span class="kind ${j.kind === 'fixed' ? 'fixed' : ''}" title="${j.kind}">${KIND_CHIP[j.kind] || '?'}</span>
-              <span class="jname">${escapeHtml(j.name)}</span>
-              <span class="jval"></span>
-              ${j.moves ? '<span class="track"><span class="fill"></span><span class="mark"></span></span><span class="limits"><span class="lo"></span><span class="hi"></span></span>' : ''}
-            </li>`,
-            )
-            .join('')}
-        </ul>
-      </section>`,
-      )
-      .join('');
-  }
-  for (const r of robots) {
-    for (const j of r.joints) {
-      const row = host.querySelector(`.joint[data-uid="${j.uid}"]`);
-      if (!row) continue;
-      row.querySelector('.jval').textContent = j.moves ? jointValue(j) + (j.out_of_limits ? ' ⚠' : '') : '고정';
-      row.classList.toggle('bad', j.out_of_limits);
-      row.classList.toggle('selected', j.uid === selected);
-      row.title = j.out_of_limits ? '한계를 벗어났습니다' : '';
-      const track = row.querySelector('.track');
-      if (!track) continue;
-      const limited = j.limited && j.upper > j.lower;
-      row.classList.toggle('unlimited', !limited);
-      let lo = j.lower, hi = j.upper;
-      if (!limited) {
-        lo = j.slides ? -1 : -Math.PI;
-        hi = j.slides ? 1 : Math.PI;
-      }
-      // The bar spans the limits with a little room either side, so a joint
-      // past one shows where it went.
-      const pad = (hi - lo) * 0.08;
-      const a = lo - pad, b = hi + pad;
-      const at = (v) => `${(Math.min(Math.max((v - a) / (b - a), 0), 1) * 100).toFixed(2)}%`;
-      const fill = track.querySelector('.fill');
-      fill.style.display = limited ? '' : 'none';
-      fill.style.left = at(lo);
-      fill.style.width = `calc(${at(hi)} - ${at(lo)})`;
-      let pos = j.position;
-      if (!limited && !j.slides) pos = Math.atan2(Math.sin(pos), Math.cos(pos));
-      track.querySelector('.mark').style.left = at(pos);
-      row.querySelector('.lo').textContent = limited ? limitText(j, j.lower) : '';
-      row.querySelector('.hi').textContent = limited ? limitText(j, j.upper) : '';
-    }
-  }
-}
+const robotPanel = new RobotPanel({
+  host: document.getElementById('robots'),
+  records,
+  scene,
+  camera,
+  canvas,
+  controls,
+  selected: () => selected,
+  toast,
+  escapeHtml,
+});
 
 document.getElementById('robots').addEventListener('click', (e) => {
   const row = e.target.closest('.joint');
@@ -703,11 +643,26 @@ document.getElementById('robots').addEventListener('dblclick', (e) => {
 
 // ---- selection --------------------------------------------------------------
 
-function highlight(uid, on) {
+// A part's colour over its own: red in contact, orange selected.
+function tintOf(rec) {
+  if (contacted.has(rec.uid)) return colorOf(rec).lerp(CONTACT, 0.75);
+  if (selected === rec.uid) return colorOf(rec).lerp(ACCENT, 0.55);
+  return null;
+}
+
+function highlight(uid) {
   const rec = records.get(uid);
   if (!rec) return;
-  batch.tint(uid, on ? colorOf(rec).lerp(ACCENT, 0.55) : null);
+  batch.tint(uid, tintOf(rec));
   if (gizmos.has(uid)) setGizmo(rec);
+}
+
+// The `contacts` event: every robot part in contact now, and with what.
+function setContacts(list) {
+  const was = contacted;
+  contacted = new Set(list.flatMap((c) => [c.part, c.other]));
+  for (const uid of new Set([...was, ...contacted])) highlight(uid);
+  robotPanel.setContacts(list);
 }
 
 function select(uid, { frame: andFrame = false } = {}) {
@@ -715,8 +670,8 @@ function select(uid, { frame: andFrame = false } = {}) {
   selected = uid != null && records.has(uid) ? uid : null;
   // The selected part is kept whole and in view: see Batch.updateLevels.
   levelsDirty = true;
-  if (was != null) highlight(was, false);
-  if (selected != null) highlight(selected, true);
+  if (was != null) highlight(was);
+  if (selected != null) highlight(selected);
   document.querySelectorAll('.node.selected, .joint.selected').forEach((n) => n.classList.remove('selected'));
   if (selected != null) {
     revealInTree(selected);
@@ -754,6 +709,7 @@ let down = null;
 canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
 canvas.addEventListener('pointerup', (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4 || e.button !== 0) return;
+  if (robotPanel.ownsPointer()) return;
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   const targets = [...gizmos.values()].filter((g) => g.visible);
@@ -858,18 +814,18 @@ window.addEventListener('keydown', (e) => {
 
 // Narrow screens: the panels are drawers.
 const treePanel = document.getElementById('tree-panel');
-const robotPanel = document.getElementById('robot-panel');
+const robotDrawer = document.getElementById('robot-panel');
 document.getElementById('toggle-tree').addEventListener('click', () => {
-  robotPanel.classList.remove('open');
+  robotDrawer.classList.remove('open');
   treePanel.classList.toggle('open');
 });
 document.getElementById('toggle-robots').addEventListener('click', () => {
   treePanel.classList.remove('open');
-  robotPanel.classList.toggle('open');
+  robotDrawer.classList.toggle('open');
 });
 canvas.addEventListener('pointerdown', () => {
   treePanel.classList.remove('open');
-  robotPanel.classList.remove('open');
+  robotDrawer.classList.remove('open');
 });
 
 // ---- small things -----------------------------------------------------------

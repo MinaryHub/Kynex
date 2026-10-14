@@ -6,7 +6,7 @@
 //! standard library to serve. One thread per open browser tab; a studio or a
 //! cell has a handful.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -39,6 +39,20 @@ const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
 /// How long a write may wait on a peer that is not reading.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a robot request may wait for its answer.
+const ROBOT_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The most bytes a robot request may carry.
+const ROBOT_LIMIT: usize = 64 * 1024;
+
+/// Something the page asked of the robots — a joint moved, a tool sent
+/// somewhere: the JSON it posted, and where the answer goes. The answer is
+/// JSON too, and goes back to the page as it is.
+pub struct RobotRequest {
+    pub body: String,
+    pub reply: Sender<String>,
+}
 
 /// Where the scene the viewer shows comes from, and how that is going.
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +96,12 @@ struct Hub {
     viewers: Vec<Sender<Arc<str>>>,
     /// Where a benchmark page's report goes, when one was asked for.
     bench: Option<Sender<String>>,
+    /// Where the page's robot requests go, when something takes them.
+    robot: Option<Sender<RobotRequest>>,
+    /// What KYNEX keeps beside the scene — the robots posed here, their
+    /// programs — as the last event of each name said: a tab that opens
+    /// later is told too.
+    states: BTreeMap<String, String>,
     /// The scene as `/scene.bin` serves it, made when first asked for after
     /// a change and shared by every viewer that asks before the next.
     bin: Option<Arc<Vec<u8>>>,
@@ -118,6 +138,8 @@ impl Server {
             .to_json(),
             viewers: Vec::new(),
             bench: None,
+            robot: None,
+            states: BTreeMap::new(),
             bin: None,
         }));
         {
@@ -193,6 +215,25 @@ impl Server {
         let (tx, rx) = mpsc::channel();
         self.hub.lock().expect("viewer hub").bench = Some(tx);
         rx
+    }
+
+    /// Takes the page's robot requests (`POST /robot`). Until this is
+    /// called the server turns them away.
+    pub fn robot_requests(&self) -> Receiver<RobotRequest> {
+        let (tx, rx) = mpsc::channel();
+        self.hub.lock().expect("viewer hub").robot = Some(tx);
+        rx
+    }
+
+    /// Tells every viewer, now and later, something KYNEX keeps beside the
+    /// scene: the JSON goes out as the `event` event when it differs from
+    /// the last of that name. `pose` and `programs` are what the page reads.
+    pub fn state(&self, event: &str, json: &str) {
+        let mut hub = self.hub.lock().expect("viewer hub");
+        if hub.states.get(event).map(String::as_str) != Some(json) {
+            hub.states.insert(event.to_string(), json.to_string());
+            hub.broadcast(event, json);
+        }
     }
 
     pub fn status(&self, status: &Status) {
@@ -275,6 +316,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let mut request = String::new();
     let mut length = 0usize;
     let mut host = None;
+    let mut json_body = false;
     {
         let mut head = (&mut reader).take(HEAD_LIMIT);
         head.read_line(&mut request)?;
@@ -291,6 +333,11 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
                     length = value.trim().parse().unwrap_or(0);
                 } else if name.eq_ignore_ascii_case("host") {
                     host = Some(value.trim().to_string());
+                } else if name.eq_ignore_ascii_case("content-type") {
+                    json_body = value
+                        .trim()
+                        .to_ascii_lowercase()
+                        .starts_with("application/json");
                 }
             }
         }
@@ -319,6 +366,49 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         reader.read_exact(&mut body)?;
         let _ = bench.send(String::from_utf8_lossy(&body).into_owned());
         return respond(&mut out, "204 No Content", "text/plain", b"");
+    }
+    if method == "POST" && path == "/robot" {
+        // Only JSON: a page elsewhere can post a form here without asking,
+        // but not JSON, which the browser first asks this server about —
+        // and this server never says yes.
+        if !json_body {
+            return respond(
+                &mut out,
+                "415 Unsupported Media Type",
+                "text/plain",
+                b"JSON only",
+            );
+        }
+        if length > ROBOT_LIMIT {
+            return respond(
+                &mut out,
+                "413 Payload Too Large",
+                "text/plain",
+                b"too large",
+            );
+        }
+        let Some(robot) = hub.lock().expect("viewer hub").robot.clone() else {
+            return respond(&mut out, "404 Not Found", "text/plain", b"no robots here");
+        };
+        let mut body = vec![0u8; length];
+        reader.read_exact(&mut body)?;
+        let (tx, rx) = mpsc::channel();
+        let asked = robot.send(RobotRequest {
+            body: String::from_utf8_lossy(&body).into_owned(),
+            reply: tx,
+        });
+        return match asked
+            .ok()
+            .and_then(|_| rx.recv_timeout(ROBOT_DEADLINE).ok())
+        {
+            Some(answer) => respond(&mut out, "200 OK", "application/json", answer.as_bytes()),
+            None => respond(
+                &mut out,
+                "503 Service Unavailable",
+                "text/plain",
+                b"no answer",
+            ),
+        };
     }
     if method != "GET" {
         return respond(
@@ -404,6 +494,9 @@ fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             &format!("{{\"build\":\"{}\"}}", assets::build_id()),
         );
         opening.push_str(&frame("status", &hub.status));
+        for (event, json) in &hub.states {
+            opening.push_str(&frame(event, json));
+        }
         if hub.has_scene {
             opening.push_str(&frame("scene", &scene_notice(&hub.view)));
         }
@@ -443,6 +536,40 @@ mod tests {
         assert!(page.contains("text/html"));
         assert!(get(server.addr(), "/vendor/three.module.min.js").contains("javascript"));
         assert!(get(server.addr(), "/nope").starts_with("HTTP/1.1 404"));
+    }
+
+    fn post(addr: SocketAddr, path: &str, mime: &str, body: &str) -> String {
+        let mut s = TcpStream::connect(addr).unwrap();
+        write!(
+            s,
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: {mime}\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn a_robot_request_is_answered_by_whatever_takes_them() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let json = "application/json";
+        assert!(post(addr, "/robot", json, "{}").starts_with("HTTP/1.1 404"));
+        let requests = server.robot_requests();
+        let answering = thread::spawn(move || {
+            let r = requests.recv().unwrap();
+            r.reply.send(format!("{{\"echo\":{}}}", r.body)).unwrap();
+        });
+        let out = post(addr, "/robot", json, "{\"op\":\"jog\"}");
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        assert!(out.ends_with("{\"echo\":{\"op\":\"jog\"}}"), "{out}");
+        answering.join().unwrap();
+        // A form, which any page may send here unasked, is not taken.
+        let form = "application/x-www-form-urlencoded";
+        assert!(post(addr, "/robot", form, "op=jog").starts_with("HTTP/1.1 415"));
     }
 
     #[test]

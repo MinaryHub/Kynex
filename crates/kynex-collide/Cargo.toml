@@ -1,0 +1,10 @@
+[package]
+name = "kynex-collide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+kreate-math.workspace = true
+kreate-mesh.workspace = true

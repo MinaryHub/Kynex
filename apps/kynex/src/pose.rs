@@ -1,0 +1,864 @@
+//! Robots posed in the viewer: a joint dragged, a tool sent to a point, a
+//! program taught and played.
+//!
+//! The pose is KYNEX's own. Nothing goes to Kreate — the link is read-only —
+//! so the viewer shows the session's scene with these robots set as asked,
+//! until they are let go and take the session's pose again.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use kreate_math::{DAffine3, DQuat, DVec3};
+use kreate_scene::{Changes, DatablockKind, Document, Uid};
+use kynex_kin::path::{MoveKind, Plan};
+use kynex_kin::{Goal, Kinematics, Options};
+use serde_json::{json, Value};
+
+use crate::collide::{self, Collider};
+use crate::program::{self, Program};
+
+/// How often a program being played moves the robot shown.
+const FRAME: Duration = Duration::from_millis(33);
+
+/// What the viewer has asked of the robots and not let go.
+#[derive(Debug, Default)]
+pub struct Posing {
+    /// By robot root: joint positions, by joint.
+    held: BTreeMap<u64, BTreeMap<u64, f64>>,
+    /// By robot root.
+    programs: BTreeMap<u64, Program>,
+    playing: Option<Playback>,
+    /// The programs changed since the viewers were last told.
+    programs_changed: bool,
+    /// Where the programs are kept between runs, if anywhere.
+    file: Option<PathBuf>,
+    /// Programs read from the file whose robot is not in the scene (yet):
+    /// kept, and written back, as they were.
+    pending: Vec<Value>,
+    /// Each program as last saved, for a robot that has since left the
+    /// scene: still written back.
+    saved: BTreeMap<u64, Value>,
+}
+
+/// A program being played: the robot shown follows its plan by the clock.
+#[derive(Debug)]
+struct Playback {
+    root: u64,
+    plan: Plan,
+    /// The plan's variables, by joint, and every joint they move.
+    vars: Vec<u64>,
+    joints: Vec<u64>,
+    started: Instant,
+    /// Round again at the end: a closed program is a cycle.
+    repeat: bool,
+    last: Option<Instant>,
+    /// Seconds into the plan, as last shown.
+    t: f64,
+}
+
+impl Posing {
+    /// Programs kept in `file`: read from it now, if it is there, and
+    /// written to it whenever they change.
+    pub fn with_file(file: &Path) -> Result<Self, String> {
+        let pending = match std::fs::read_to_string(file) {
+            Ok(text) => {
+                let all: Value =
+                    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+                all["programs"].as_array().cloned().unwrap_or_default()
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(format!("{}: {e}", file.display())),
+        };
+        Ok(Self {
+            file: Some(file.to_path_buf()),
+            pending,
+            ..Self::default()
+        })
+    }
+
+    /// How many programs the file held that are waiting for their robot.
+    pub fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Takes on the programs from the file whose robots are in `doc` now.
+    pub fn adopt(&mut self, doc: &Document) {
+        let mut waiting = Vec::new();
+        for saved in std::mem::take(&mut self.pending) {
+            match Program::from_saved(&saved, doc) {
+                Some((root, program)) => {
+                    // A program made in this run wins over the file's.
+                    if let std::collections::btree_map::Entry::Vacant(slot) =
+                        self.programs.entry(root)
+                    {
+                        slot.insert(program);
+                        self.programs_changed = true;
+                    }
+                }
+                None => waiting.push(saved),
+            }
+        }
+        self.pending = waiting;
+    }
+
+    /// Writes every program to the file, if there is one: whole, to a file
+    /// beside it first, so a crash midway leaves the old one.
+    pub fn save(&mut self, doc: &Document) -> Result<(), String> {
+        let Some(file) = &self.file else {
+            return Ok(());
+        };
+        for (root, program) in &self.programs {
+            if let Some(kin) = Kinematics::of(doc, *root) {
+                self.saved.insert(*root, program.to_saved(*root, doc, &kin));
+            }
+        }
+        self.saved
+            .retain(|root, _| self.programs.contains_key(root));
+        let programs: Vec<&Value> = self.saved.values().chain(&self.pending).collect();
+        let text = serde_json::to_string_pretty(&json!({
+            "version": program::FILE_VERSION,
+            "programs": programs,
+        }))
+        .expect("programs serialise");
+        let next = file.with_extension("json.new");
+        std::fs::write(&next, text)
+            .and_then(|_| std::fs::rename(&next, file))
+            .map_err(|e| format!("{}: {e}", file.display()))
+    }
+
+    /// `doc` with the held robots posed, or `None` when none are and `doc`
+    /// is the scene as it is.
+    pub fn shown(&mut self, doc: &Document) -> Option<Document> {
+        if self.held.is_empty() {
+            return None;
+        }
+        let mut shown = doc.clone();
+        // A robot no longer in the scene is let go of.
+        self.held
+            .retain(|root, positions| match Kinematics::of(&shown, *root) {
+                Some(kin) => {
+                    kin.apply(&mut shown, &kin.with(positions));
+                    true
+                }
+                None => false,
+            });
+        Some(shown)
+    }
+
+    /// What the `pose` event says: the robots held here, and the program
+    /// playing.
+    pub fn to_json(&self) -> String {
+        json!({
+            "held": self.held.keys().map(u64::to_string).collect::<Vec<_>>(),
+            "playing": self.playing.as_ref().map(|p| json!({
+                "robot": p.root.to_string(),
+                "t": p.t,
+                "duration": p.plan.duration,
+                "repeat": p.repeat,
+            })),
+        })
+        .to_string()
+    }
+
+    /// Whether the programs changed since this was last asked.
+    pub fn take_programs_changed(&mut self) -> bool {
+        std::mem::take(&mut self.programs_changed)
+    }
+
+    /// Says the programs need telling again: the scene they are timed in
+    /// changed.
+    pub fn programs_changed(&mut self) {
+        self.programs_changed = true;
+    }
+
+    /// What the `programs` event says: every robot's program, timed in
+    /// `doc` and checked for collisions with the rest of it.
+    pub fn programs_json(&self, doc: &Document, collider: &mut Collider) -> String {
+        let mut out = serde_json::Map::new();
+        for (root, program) in &self.programs {
+            let Some(kin) = Kinematics::of(doc, *root) else {
+                continue;
+            };
+            let plan = program.plan(&kin);
+            let hits: Vec<Vec<String>> = match &plan {
+                Some(plan) => collider
+                    .along(doc, *root, plan)
+                    .into_iter()
+                    .map(|hit| {
+                        hit.map(|(t, c)| {
+                            format!(
+                                "충돌: {} ↔ {} ({:.2} s)",
+                                collide::label(doc, c.part),
+                                collide::label(doc, c.other),
+                                t
+                            )
+                        })
+                        .into_iter()
+                        .collect()
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            out.insert(
+                root.to_string(),
+                program.to_json(&kin, plan.as_ref(), &hits),
+            );
+        }
+        Value::Object(out).to_string()
+    }
+
+    /// Moves the robot being played on to where its program is now, at most
+    /// once a frame. Returns what the viewers need to look at again.
+    pub fn tick(&mut self, now: Instant) -> Changes {
+        let mut touched = Changes::default();
+        let Some(play) = &mut self.playing else {
+            return touched;
+        };
+        if play.last.is_some_and(|last| now - last < FRAME) {
+            return touched;
+        }
+        play.last = Some(now);
+        let mut t = (now - play.started).as_secs_f64();
+        let done = !play.repeat && t >= play.plan.duration;
+        if play.repeat && play.plan.duration > 0.0 {
+            t %= play.plan.duration;
+        }
+        play.t = t.min(play.plan.duration);
+        let q = play.plan.at(play.t);
+        self.held
+            .insert(play.root, play.vars.iter().copied().zip(q).collect());
+        mark_joints(play.joints.iter().copied(), &mut touched);
+        if done {
+            self.playing = None;
+        }
+        touched
+    }
+
+    /// Whether a program is playing: the loop then wakes for its frames.
+    pub fn is_playing(&self) -> bool {
+        self.playing.is_some()
+    }
+
+    fn stop(&mut self, root: u64) {
+        if self.playing.as_ref().is_some_and(|p| p.root == root) {
+            self.playing = None;
+        }
+    }
+
+    /// Takes one request from the page, `doc` being the session's scene.
+    /// Returns the answer, and what the viewers need to look at again.
+    pub fn handle(&mut self, doc: &Document, body: &str) -> (String, Changes) {
+        let mut touched = Changes::default();
+        let answer = match self.take(doc, body, &mut touched) {
+            Ok(answer) => answer,
+            Err(e) => json!({ "ok": false, "error": e }),
+        };
+        (answer.to_string(), touched)
+    }
+
+    fn take(&mut self, doc: &Document, body: &str, touched: &mut Changes) -> Result<Value, String> {
+        let req: Value = serde_json::from_str(body).map_err(|e| format!("not JSON: {e}"))?;
+        let op = req["op"].as_str().ok_or("no op")?;
+        if op == "release" && req["robot"].is_null() {
+            self.playing = None;
+            for root in std::mem::take(&mut self.held).into_keys() {
+                mark(doc, root, touched);
+            }
+            return Ok(json!({ "ok": true }));
+        }
+        let root = uid(&req["robot"]).ok_or("no robot")?;
+        // From the pose shown, not the session's: a second drag goes on from
+        // where the first left the arm.
+        let kin = Kinematics::of(doc, root).ok_or("no such robot")?;
+        let held = self.held.get(&root).cloned().unwrap_or_default();
+        let now = kin.with(&held);
+        // Anything else asked of a robot stops its program.
+        if !matches!(op, "program" | "play" | "urscript") {
+            self.stop(root);
+        }
+        if program::is_op(op) {
+            return self.program_op(op, &req, doc, &kin, root, &now, touched);
+        }
+        match op {
+            "release" => {
+                self.held.remove(&root);
+                mark(doc, root, touched);
+                Ok(json!({ "ok": true }))
+            }
+            "jog" => {
+                let joint = uid(&req["joint"]).ok_or("no joint")?;
+                let position = req["position"].as_f64().ok_or("no position")?;
+                let var = kin
+                    .vars
+                    .iter()
+                    .find(|v| v.uid == joint)
+                    .ok_or("not a joint that moves on its own")?;
+                let position = var.clamp(position);
+                self.hold(&kin, root, &now).insert(joint, position);
+                mark(doc, root, touched);
+                Ok(json!({ "ok": true, "position": position }))
+            }
+            "ik" => {
+                let tool_uid = uid(&req["tool"]).ok_or("no tool")?;
+                let offset = vec3(&req["offset"]).unwrap_or(DVec3::ZERO);
+                let tool = kin
+                    .tool(tool_uid, DAffine3::from_translation(offset))
+                    .ok_or("the tool is not part of the robot")?;
+                let goal = Goal {
+                    position: vec3(&req["position"]).ok_or("no position")?,
+                    rotation: quat(&req["rotation"]),
+                };
+                let opts = Options {
+                    restarts: req["restarts"].as_u64().unwrap_or(0).min(64) as usize,
+                    ..Options::default()
+                };
+                let found = kin.solve(&tool, &goal, &now, &opts);
+                let positions = self.hold(&kin, root, &now);
+                for (var, q) in kin.vars.iter().zip(&found.positions) {
+                    positions.insert(var.uid, *q);
+                }
+                mark(doc, root, touched);
+                Ok(json!({
+                    "ok": true,
+                    "reached": found.reached,
+                    "position_error": found.position_error,
+                    "rotation_error": found.rotation_error,
+                    "iterations": found.iterations,
+                }))
+            }
+            other => Err(format!("unknown op {other:?}")),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn program_op(
+        &mut self,
+        op: &str,
+        req: &Value,
+        doc: &Document,
+        kin: &Kinematics,
+        root: u64,
+        now: &[f64],
+        touched: &mut Changes,
+    ) -> Result<Value, String> {
+        let here: BTreeMap<u64, f64> = kin
+            .vars
+            .iter()
+            .map(|v| v.uid)
+            .zip(now.iter().copied())
+            .collect();
+        let program = self.programs.entry(root).or_default();
+        // The tool its lines are drawn with, as the page has it now.
+        if let Some(tool) = uid(&req["tool"]) {
+            if !kin.contains(tool) {
+                return Err("the tool is not part of the robot".into());
+            }
+            let offset = vec3(&req["offset"]).unwrap_or(DVec3::ZERO);
+            if program.tool != Some(tool) || program.offset != offset {
+                program.tool = Some(tool);
+                program.offset = offset;
+                self.programs_changed = true;
+            }
+        }
+        let count = program.points.len();
+        let index = || -> Result<usize, String> {
+            let i = req["index"].as_u64().ok_or("no index")? as usize;
+            (i < count)
+                .then_some(i)
+                .ok_or_else(|| format!("no point {i}"))
+        };
+        match op {
+            "program" => return Ok(json!({ "ok": true })),
+            "teach" => {
+                let kind = program::kind_of(req["kind"].as_str().unwrap_or("joint"))
+                    .ok_or("kind is joint or linear")?;
+                let after = req["after"].as_u64().map(|i| i as usize);
+                program.teach(kind, here, after);
+            }
+            "retouch" => program.points[index()?].positions = here,
+            "edit" => {
+                let point = &mut program.points[index()?];
+                if let Some(kind) = req["kind"].as_str() {
+                    let kind = program::kind_of(kind).ok_or("kind is joint or linear")?;
+                    if kind != point.kind {
+                        point.kind = kind;
+                        point.speed = match kind {
+                            MoveKind::Joint => program::JOINT_SPEED,
+                            MoveKind::Linear => program::LINEAR_SPEED,
+                        };
+                    }
+                }
+                if let Some(speed) = req["speed"].as_f64() {
+                    point.speed = match point.kind {
+                        MoveKind::Joint => speed.clamp(0.01, 1.0),
+                        MoveKind::Linear => speed.clamp(0.001, 5.0),
+                    };
+                }
+                if let Some(name) = req["name"].as_str() {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        point.name = name.chars().take(32).collect();
+                    }
+                }
+            }
+            "delete" => {
+                program.points.remove(index()?);
+            }
+            "close" => {
+                program.close = req["close"].as_bool().ok_or("close is true or false")?;
+            }
+            "clear" => program.clear(),
+            "goto" => {
+                let q = kin.with(&program.points[index()?].positions);
+                self.held
+                    .insert(root, kin.vars.iter().map(|v| v.uid).zip(q).collect());
+                mark_joints(kin.joints(), touched);
+                return Ok(json!({ "ok": true }));
+            }
+            "play" => {
+                if count < 2 {
+                    return Err("재생하려면 지점이 둘 이상 있어야 합니다".into());
+                }
+                let plan = program.plan(kin).ok_or("no tool")?;
+                self.playing = Some(Playback {
+                    root,
+                    plan,
+                    vars: kin.vars.iter().map(|v| v.uid).collect(),
+                    joints: kin.joints().collect(),
+                    started: Instant::now(),
+                    repeat: program.close,
+                    last: None,
+                    t: 0.0,
+                });
+                return Ok(json!({ "ok": true }));
+            }
+            "urscript" => {
+                let (script, file) = program.urscript(root, doc, kin)?;
+                return Ok(json!({ "ok": true, "script": script, "file": file }));
+            }
+            // Stopped above, where it stands.
+            "stop" => return Ok(json!({ "ok": true })),
+            _ => unreachable!("program::is_op lists {op}"),
+        }
+        self.programs_changed = true;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// The robot's held positions, every variable of it, starting from `now`.
+    fn hold(&mut self, kin: &Kinematics, root: u64, now: &[f64]) -> &mut BTreeMap<u64, f64> {
+        self.held
+            .entry(root)
+            .or_insert_with(|| kin.vars.iter().zip(now).map(|(v, q)| (v.uid, *q)).collect())
+    }
+}
+
+/// Every joint of the robot, for the viewers to look at again: what a
+/// joint carries follows from it.
+fn mark(doc: &Document, root: u64, touched: &mut Changes) {
+    if let Some(kin) = Kinematics::of(doc, root) {
+        mark_joints(kin.joints(), touched);
+    }
+}
+
+fn mark_joints(joints: impl Iterator<Item = u64>, touched: &mut Changes) {
+    touched
+        .changed
+        .extend(joints.map(|j| (DatablockKind::Object, Uid::from_raw(j))));
+}
+
+/// An identity, sent as text (see kynex-view's scene module).
+fn uid(v: &Value) -> Option<u64> {
+    v.as_str()?.parse().ok()
+}
+
+fn vec3(v: &Value) -> Option<DVec3> {
+    let a = v.as_array()?;
+    match a.as_slice() {
+        [x, y, z] => Some(DVec3::new(x.as_f64()?, y.as_f64()?, z.as_f64()?)),
+        _ => None,
+    }
+}
+
+fn quat(v: &Value) -> Option<DQuat> {
+    let a = v.as_array()?;
+    match a.as_slice() {
+        [x, y, z, w] => {
+            let q = DQuat::from_xyzw(x.as_f64()?, y.as_f64()?, z.as_f64()?, w.as_f64()?);
+            (q.length() > 1e-9).then(|| q.normalize())
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kreate_math::DTransform;
+    use kreate_scene::robot::RobotPart;
+    use kreate_scene::robot::{Joint, JointKind};
+    use kreate_scene::{Object, ObjectData};
+
+    /// A base, a shoulder turning about Z 1 m up, and an arm reaching 1 m
+    /// along X from it.
+    fn arm() -> (Document, u64, u64, u64) {
+        arm_in(Document::new())
+    }
+
+    /// The arm, added to what `doc` already holds.
+    fn arm_in(mut doc: Document) -> (Document, u64, u64, u64) {
+        let mut base = Object::new("base", ObjectData::Empty);
+        base.robot = Some(RobotPart::Link { inertial: None });
+        let base = doc.add_object(base);
+        let rest = DTransform::from_translation(DVec3::new(0.0, 0.0, 1.0));
+        let mut joint = Object::new("shoulder", ObjectData::Empty);
+        joint.transform = rest;
+        joint.robot = Some(RobotPart::Joint(Joint {
+            kind: JointKind::Revolute,
+            rest,
+            lower: -1.0,
+            upper: 1.0,
+            ..Joint::default()
+        }));
+        let joint = doc.add_object(joint);
+        doc.set_parent(joint, Some(base)).unwrap();
+        // Placed in the world: parenting keeps it where it is.
+        let mut tip = Object::new("tool0", ObjectData::Empty);
+        tip.transform.translation = DVec3::new(1.0, 0.0, 1.0);
+        tip.robot = Some(RobotPart::Link { inertial: None });
+        let tip = doc.add_object(tip);
+        doc.set_parent(tip, Some(joint)).unwrap();
+        let raw = |id| doc.object_uid(id).unwrap().raw();
+        let (b, j, t) = (raw(base), raw(joint), raw(tip));
+        (doc, b, j, t)
+    }
+
+    fn ask(p: &mut Posing, doc: &Document, req: Value) -> (Value, Changes) {
+        let (answer, touched) = p.handle(doc, &req.to_string());
+        (serde_json::from_str(&answer).unwrap(), touched)
+    }
+
+    #[test]
+    fn a_jog_poses_the_robot_shown_and_not_the_session() {
+        let (doc, base, joint, tip) = arm();
+        let mut p = Posing::default();
+        assert!(p.shown(&doc).is_none(), "nothing held, nothing to copy");
+        let (answer, touched) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "jog", "robot": base.to_string(), "joint": joint.to_string(), "position": 5.0}),
+        );
+        assert_eq!(answer["position"], 1.0, "held to its limit");
+        assert!(touched
+            .changed
+            .contains(&(DatablockKind::Object, Uid::from_raw(joint))));
+        let shown = p.shown(&doc).unwrap();
+        let at = |d: &Document| {
+            d.world_transform(d.object_by_uid(Uid::from_raw(tip)).unwrap())
+                .translation
+        };
+        assert!((at(&shown) - DVec3::new(1f64.cos(), 1f64.sin(), 1.0)).length() < 1e-9);
+        assert!(
+            (at(&doc) - DVec3::new(1.0, 0.0, 1.0)).length() < 1e-9,
+            "the session's scene is as it was"
+        );
+        assert_eq!(
+            p.to_json(),
+            json!({"held": [base.to_string()], "playing": null}).to_string()
+        );
+
+        ask(
+            &mut p,
+            &doc,
+            json!({"op": "release", "robot": base.to_string()}),
+        );
+        assert!(p.shown(&doc).is_none());
+    }
+
+    #[test]
+    fn ik_sends_the_tool_to_a_point_it_can_reach() {
+        let (doc, base, _, tip) = arm();
+        let mut p = Posing::default();
+        let goal = DVec3::new(0.6f64.cos(), 0.6f64.sin(), 1.0);
+        let (answer, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "ik", "robot": base.to_string(), "tool": tip.to_string(),
+                   "position": [goal.x, goal.y, goal.z], "rotation": null}),
+        );
+        assert_eq!(answer["reached"], true, "{answer}");
+        let shown = p.shown(&doc).unwrap();
+        let at = shown
+            .world_transform(shown.object_by_uid(Uid::from_raw(tip)).unwrap())
+            .translation;
+        assert!((at - goal).length() < 1e-4);
+
+        // Past the limit: as near as it goes, and said so.
+        let (answer, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "ik", "robot": base.to_string(), "tool": tip.to_string(),
+                   "position": [-1.0, 0.0, 1.0]}),
+        );
+        assert_eq!(answer["reached"], false);
+        assert!(answer["position_error"].as_f64().unwrap() > 0.5);
+    }
+
+    #[test]
+    fn a_bad_request_is_answered_not_dropped() {
+        let (doc, base, _, _) = arm();
+        let mut p = Posing::default();
+        for req in [
+            json!({"op": "jog"}),
+            json!({"op": "fly", "robot": base.to_string()}),
+            json!({"op": "jog", "robot": "999", "joint": "1", "position": 0.0}),
+            json!({"op": "ik", "robot": base.to_string(), "tool": "999", "position": [0, 0, 0]}),
+        ] {
+            let (answer, touched) = ask(&mut p, &doc, req);
+            assert_eq!(answer["ok"], false, "{answer}");
+            assert!(touched.changed.is_empty());
+        }
+        let (answer, _) = p.handle(&doc, "not json");
+        assert!(answer.contains("not JSON"));
+    }
+
+    #[test]
+    fn a_program_is_taught_timed_and_played() {
+        let (doc, base, joint, tip) = arm();
+        let (b, j, t) = (base.to_string(), joint.to_string(), tip.to_string());
+        let mut p = Posing::default();
+        let teach = |p: &mut Posing, at: f64, kind: &str| {
+            ask(
+                p,
+                &doc,
+                json!({"op": "jog", "robot": b, "joint": j, "position": at}),
+            );
+            let (answer, _) = ask(
+                p,
+                &doc,
+                json!({"op": "teach", "robot": b, "tool": t, "offset": [0, 0, 0], "kind": kind}),
+            );
+            assert_eq!(answer["ok"], true, "{answer}");
+        };
+        teach(&mut p, -0.5, "joint");
+        teach(&mut p, 0.5, "joint");
+        teach(&mut p, 0.2, "linear");
+        assert!(p.take_programs_changed());
+        assert!(!p.take_programs_changed(), "told once");
+
+        let programs: Value =
+            serde_json::from_str(&p.programs_json(&doc, &mut Collider::default())).unwrap();
+        let program = &programs[&b];
+        let points = program["points"].as_array().unwrap();
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0]["name"], "P1");
+        assert!(
+            points[0]["move"].is_null(),
+            "the first point is where it starts"
+        );
+        // A turn of 1 rad at half of the joint's default 1 rad/s.
+        let first = points[1]["move"]["duration"].as_f64().unwrap();
+        assert!(first > 2.0 && first < 2.5, "{first}");
+        // The line from 0.5 to 0.2 rad cuts inside the tool's circle.
+        assert!(points[2]["move"]["problems"][0]
+            .as_str()
+            .unwrap()
+            .contains("도달 불가"));
+        assert!(!program["trace"].as_array().unwrap().is_empty());
+        let cycle = program["cycle"].as_f64().unwrap();
+
+        // Edits: the third point becomes a joint move, the second goes.
+        ask(
+            &mut p,
+            &doc,
+            json!({"op": "edit", "robot": b, "index": 2, "kind": "joint", "speed": 1.0}),
+        );
+        ask(
+            &mut p,
+            &doc,
+            json!({"op": "delete", "robot": b, "index": 1}),
+        );
+        ask(
+            &mut p,
+            &doc,
+            json!({"op": "close", "robot": b, "close": true}),
+        );
+        let programs: Value =
+            serde_json::from_str(&p.programs_json(&doc, &mut Collider::default())).unwrap();
+        let program = &programs[&b];
+        assert_eq!(program["points"].as_array().unwrap().len(), 2);
+        assert_eq!(program["points"][1]["name"], "P3");
+        assert_eq!(program["points"][1]["kind"], "joint");
+        assert!(!program["back"].is_null(), "closed: a move back to P1");
+        assert!(program["cycle"].as_f64().unwrap() < cycle);
+
+        // Playing moves the robot shown along the plan, frame by frame.
+        let (answer, _) = ask(&mut p, &doc, json!({"op": "play", "robot": b}));
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert!(p.is_playing());
+        let start = Instant::now();
+        let touched = p.tick(start + Duration::from_millis(500));
+        assert!(touched
+            .changed
+            .contains(&(DatablockKind::Object, Uid::from_raw(joint))));
+        assert!(
+            p.tick(start + Duration::from_millis(510))
+                .changed
+                .is_empty(),
+            "within a frame"
+        );
+        let pose: Value = serde_json::from_str(&p.to_json()).unwrap();
+        assert_eq!(pose["playing"]["robot"], b);
+        assert_eq!(pose["playing"]["repeat"], true);
+
+        // Jogging the robot stops it, where it is.
+        ask(
+            &mut p,
+            &doc,
+            json!({"op": "jog", "robot": b, "joint": j, "position": 0.0}),
+        );
+        assert!(!p.is_playing());
+
+        // Going to a point poses the robot there.
+        ask(&mut p, &doc, json!({"op": "goto", "robot": b, "index": 1}));
+        let shown = p.shown(&doc).unwrap();
+        let kin = Kinematics::of(&shown, base).unwrap();
+        assert!((kin.current[0] - 0.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_program_too_short_to_play_says_so() {
+        let (doc, base, _, tip) = arm();
+        let mut p = Posing::default();
+        let (b, t) = (base.to_string(), tip.to_string());
+        ask(&mut p, &doc, json!({"op": "teach", "robot": b, "tool": t}));
+        let (answer, _) = ask(&mut p, &doc, json!({"op": "play", "robot": b}));
+        assert_eq!(answer["ok"], false);
+        let (answer, _) = ask(&mut p, &doc, json!({"op": "edit", "robot": b, "index": 5}));
+        assert_eq!(answer["ok"], false, "no fifth point");
+    }
+
+    /// A file of its own in the temporary directory, gone when dropped.
+    struct TempFile(PathBuf);
+
+    impl TempFile {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "kynex-{name}-{}-{:?}.json",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            Self(path)
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(self.0.with_extension("json.new"));
+        }
+    }
+
+    fn teach_two(p: &mut Posing, doc: &Document, base: u64, joint: u64, tip: u64) {
+        let (b, j, t) = (base.to_string(), joint.to_string(), tip.to_string());
+        for (at, kind) in [(-0.4, "joint"), (0.6, "joint")] {
+            ask(
+                p,
+                doc,
+                json!({"op": "jog", "robot": b, "joint": j, "position": at}),
+            );
+            ask(
+                p,
+                doc,
+                json!({"op": "teach", "robot": b, "tool": t, "offset": [0, 0, 0.05], "kind": kind}),
+            );
+        }
+        ask(p, doc, json!({"op": "close", "robot": b, "close": true}));
+    }
+
+    #[test]
+    fn programs_are_kept_in_their_file_between_runs() {
+        let file = TempFile::new("programs");
+        let (doc, base, joint, tip) = arm();
+        let mut p = Posing::with_file(&file.0).unwrap();
+        assert_eq!(p.pending(), 0, "no file yet");
+        teach_two(&mut p, &doc, base, joint, tip);
+        assert!(p.take_programs_changed());
+        p.save(&doc).unwrap();
+        let before: Value =
+            serde_json::from_str(&p.programs_json(&doc, &mut Collider::default())).unwrap();
+
+        // The next run reads it, and takes it on once its robot is there.
+        let mut again = Posing::with_file(&file.0).unwrap();
+        assert_eq!(again.pending(), 1);
+        again.adopt(&Document::new());
+        assert_eq!(again.pending(), 1, "no robot, still waiting");
+        again.adopt(&doc);
+        assert_eq!(again.pending(), 0);
+        let after: Value =
+            serde_json::from_str(&again.programs_json(&doc, &mut Collider::default())).unwrap();
+        assert_eq!(before, after);
+
+        // Its next point is numbered on from the file's.
+        ask(
+            &mut again,
+            &doc,
+            json!({"op": "teach", "robot": base.to_string(), "tool": tip.to_string()}),
+        );
+        let now: Value =
+            serde_json::from_str(&again.programs_json(&doc, &mut Collider::default())).unwrap();
+        assert_eq!(now[base.to_string()]["points"][2]["name"], "P3");
+    }
+
+    #[test]
+    fn a_saved_program_finds_its_robot_by_name_in_a_scene_built_anew() {
+        let file = TempFile::new("renumbered");
+        let (doc, base, joint, tip) = arm();
+        let mut p = Posing::with_file(&file.0).unwrap();
+        teach_two(&mut p, &doc, base, joint, tip);
+        p.save(&doc).unwrap();
+
+        // The same robot, every object numbered differently.
+        let mut other = Document::new();
+        other.add_object(Object::new("Floor", ObjectData::Empty));
+        other.add_object(Object::new("Fence", ObjectData::Empty));
+        let (other, base2, joint2, _) = arm_in(other);
+        assert_ne!(base, base2);
+        let mut again = Posing::with_file(&file.0).unwrap();
+        again.adopt(&other);
+        let programs: Value =
+            serde_json::from_str(&again.programs_json(&other, &mut Collider::default())).unwrap();
+        let program = &programs[base2.to_string()];
+        assert_eq!(program["points"].as_array().unwrap().len(), 2);
+        assert_eq!(program["close"], true);
+        // Joint and tool found by name: P2 is at 0.6 rad, the tool 50 mm out.
+        ask(
+            &mut again,
+            &other,
+            json!({"op": "goto", "robot": base2.to_string(), "index": 1}),
+        );
+        let shown = again.shown(&other).unwrap();
+        let kin = Kinematics::of(&shown, base2).unwrap();
+        assert_eq!(kin.vars[0].uid, joint2);
+        assert!((kin.current[0] - 0.6).abs() < 1e-12);
+        assert!(
+            !program["trace"].as_array().unwrap().is_empty(),
+            "the tool was found"
+        );
+    }
+
+    #[test]
+    fn urscript_is_refused_for_an_arm_that_is_not_a_ur() {
+        let (doc, base, joint, tip) = arm();
+        let mut p = Posing::default();
+        teach_two(&mut p, &doc, base, joint, tip);
+        let (answer, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "urscript", "robot": base.to_string()}),
+        );
+        assert_eq!(answer["ok"], false);
+        assert!(answer["error"].as_str().unwrap().contains("6"));
+    }
+}

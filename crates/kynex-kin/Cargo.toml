@@ -1,0 +1,13 @@
+[package]
+name = "kynex-kin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+kreate-scene.workspace = true
+kreate-math.workspace = true
+
+[dev-dependencies]
+kreate-io.workspace = true

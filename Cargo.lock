@@ -408,10 +408,29 @@ dependencies = [
  "kreate-math",
  "kreate-mesh",
  "kreate-scene",
+ "kynex-collide",
+ "kynex-kin",
  "kynex-link",
  "kynex-model",
  "kynex-view",
  "serde_json",
+]
+
+[[package]]
+name = "kynex-collide"
+version = "0.1.0"
+dependencies = [
+ "kreate-math",
+ "kreate-mesh",
+]
+
+[[package]]
+name = "kynex-kin"
+version = "0.1.0"
+dependencies = [
+ "kreate-io",
+ "kreate-math",
+ "kreate-scene",
 ]
 
 [[package]]

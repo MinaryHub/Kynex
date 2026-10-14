@@ -105,7 +105,14 @@ pub struct Robot {
     pub joints: Vec<JointState>,
     /// The sum of its links' masses, where the description gives them.
     pub mass: f64,
+    /// The link its tool hangs from, by identity: see [`TOOL_NAMES`].
+    pub tool: Option<u64>,
 }
+
+/// Names a robot description gives the link a tool is fitted to, the most
+/// telling first. A robot with none of them uses its link the most moving
+/// joints out from the root, the first such.
+pub const TOOL_NAMES: [&str; 6] = ["tcp", "tool0", "tool", "flange", "ee_link", "end_effector"];
 
 /// A scene as KYNEX simulates it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -252,21 +259,40 @@ pub fn robots(doc: &Document) -> Vec<Robot> {
             name: object.name.clone(),
             joints: Vec::new(),
             mass: 0.0,
+            tool: None,
         };
+        // The tool so far: by name, then by how many moving joints out.
+        let mut tool: Option<(usize, u32, u64)> = None;
         // Depth first from the root, so a joint comes after the one it hangs from.
-        let mut stack = vec![root];
+        let mut stack = vec![(root, 0u32)];
         let mut seen = 0usize;
-        while let Some(at) = stack.pop() {
+        while let Some((at, depth)) = stack.pop() {
             seen += 1;
             if seen > doc.object_count() {
                 break;
             }
             let Some(o) = doc.object(at) else { continue };
+            let mut below = depth;
             match &o.robot {
                 Some(RobotPart::Link { inertial }) => {
                     robot.mass += inertial.as_ref().map_or(0.0, |i| i.mass);
+                    let lower = o.name.to_lowercase();
+                    let named = TOOL_NAMES
+                        .iter()
+                        .position(|n| lower == *n)
+                        .unwrap_or(TOOL_NAMES.len());
+                    if let Some(own) = uid(at) {
+                        let better =
+                            tool.is_none_or(|(n, d, _)| named < n || (named == n && depth > d));
+                        if better {
+                            tool = Some((named, depth, own));
+                        }
+                    }
                 }
                 Some(RobotPart::Joint(joint)) => {
+                    if joint.kind.moves() && joint.mimic.is_none() {
+                        below += 1;
+                    }
                     let world = doc.world_transform(at);
                     let child_link = children.get(&at).and_then(|list| {
                         list.iter()
@@ -297,9 +323,10 @@ pub fn robots(doc: &Document) -> Vec<Robot> {
                 _ => {}
             }
             if let Some(list) = children.get(&at) {
-                stack.extend(list.iter().rev().copied());
+                stack.extend(list.iter().rev().map(|c| (*c, below)));
             }
         }
+        robot.tool = tool.map(|(_, _, uid)| uid);
         out.push(robot);
     }
     out
@@ -372,6 +399,7 @@ mod tests {
         assert!((j.origin - DVec3::new(0.0, 0.0, 1.0)).length() < 1e-9);
         assert!((j.axis - DVec3::Z).length() < 1e-9);
         assert_eq!(j.child_link, doc.object_uid(link).map(|u| u.raw()));
+        assert_eq!(robot.tool, j.child_link, "the link past the last joint");
         let _ = joint;
     }
 
@@ -396,6 +424,21 @@ mod tests {
         assert_eq!(diff.robots, vec![after.robots[0].root]);
         assert!((after.robots[0].joints[0].position - 0.5).abs() < 1e-9);
         assert!(!after.robots[0].joints[0].out_of_limits());
+    }
+
+    #[test]
+    fn a_link_named_for_a_tool_is_the_tool_wherever_it_is() {
+        let mut doc = Document::new();
+        let (base, _, _) = arm(&mut doc);
+        let mut flange = Object::new("Flange", ObjectData::Empty);
+        flange.robot = Some(RobotPart::Link { inertial: None });
+        let flange = doc.add_object(flange);
+        doc.set_parent(flange, Some(base)).unwrap();
+        let model = Model::from_document(&doc);
+        assert_eq!(
+            model.robots[0].tool,
+            doc.object_uid(flange).map(|u| u.raw())
+        );
     }
 
     #[test]

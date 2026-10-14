@@ -29,6 +29,7 @@ the scene is there. It never seeds the session with an empty scene.
 
 ```
 cargo run -p kynex -- view 127.0.0.1:7878 --key <session key> --open
+cargo run -p kynex -- view 127.0.0.1:7878 --programs cell-a.json   # programs kept elsewhere
 ```
 
 This opens `http://localhost:8090` in a browser. The viewer is a web page
@@ -54,18 +55,142 @@ network with no internet.
   resolves about 0.03 mm, which is enough for a factory. Camera-relative
   rendering is left until a site is kilometres across.
 - Panels: scene tree with search, a joint panel per robot (value, limits,
-  out-of-limit warning), an inspector for the selected object, and a view
+  out-of-limit warning, and posing: see below), an inspector for the selected object, and a view
   toolbar (fit, ISO / top / front / side, joint gizmos, wireframe, grid).
   Keys: `F` fit, `0`/`7`/`1`/`3` views, `J` `W` `G` toggles, `Esc` deselect.
 - `--lan` lets other devices on the network open the viewer. The viewer
   shows the whole scene to anyone who can reach the port, so the default is
-  this machine only.
+  this machine only. Anyone who can open the viewer can also pose its robots. That
+  pose stays in KYNEX and never reaches Kreate.
 - The server only answers requests addressed to `localhost` or to an IP
   address. This blocks DNS rebinding, where a web page elsewhere points its
   own name at this machine to read the scene. On the LAN, open the viewer by
   IP (`http://192.168.0.12:8090`), not by machine name.
 - `--file model.kreate` shows a saved file instead of a session.
 - On screens narrower than 960 px, the side panels become drawers.
+
+### Posing robots
+
+The robot panel can pose a robot in the viewer. KYNEX works out the pose
+(`crates/kynex-kin`) and shows it. Nothing is sent to Kreate: the robot
+is marked **로컬 자세** and keeps that pose while the session moves on.
+**세션 자세로** lets go of it, and the robot takes the session's pose again.
+
+- **Joints**: drag a joint's bar. The joint stays within its limits.
+- **TCP pendant**: X/Y/Z and Rx/Ry/Rz jog buttons, in world or tool
+  axes. Hold a button to repeat. Steps are 1 mm · 1°, 10 mm · 5° or
+  50 mm · 15°. **이동할 때 자세 유지** keeps the tool's orientation while it
+  moves. It starts on for arms with six or more joints. Arms with fewer
+  cannot keep an orientation everywhere, so for them it starts off.
+- **Handle**: **핸들** puts a move/rotate handle on the TCP in the scene.
+  Dragging it sends the tool after the handle.
+- The TCP is the tool link plus a Z offset. The tool link is the link
+  named `tcp`, `tool0`, `tool`, `flange`, `ee_link` or `end_effector`. If no
+  link has one of those names, it is the link furthest out along the
+  moving joints.
+- When a pose cannot be reached, the arm goes as near as it can. The
+  panel then shows how far off it is, in mm and degrees.
+
+The inverse kinematics is damped least squares on the Jacobian, with the
+joint limits enforced. It takes any tree Kreate holds: prismatic axes,
+robots on tracks, and mimic joints. A drag solves from the current pose,
+so the arm does not jump to another configuration. A request can ask for
+random restarts (`"restarts": n`) when the start is far from the goal.
+
+### Programs
+
+Each robot card has a **프로그램** list of waypoints:
+
+1. Pose the robot with the controls above.
+2. Add the pose with **+ MoveJ** or **+ MoveL**.
+3. Repeat for each point. **▶ 재생** then plays the program in the viewer.
+
+KYNEX times the moves (`kynex_kin::path`):
+
+- **MoveJ**: all joints move at once and arrive together. The speed is a
+  share of each joint's top speed (its URDF `velocity`).
+- **MoveL**: the tool point moves along a straight line at the given
+  mm/s, and its orientation turns evenly on the way. An arm with fewer
+  than six joints holds the line only: its tool's orientation follows
+  the joints.
+- Each move speeds up, cruises and slows down. The list shows each move's
+  time and the cycle time. **순환 재생** adds a move back to the first
+  point and repeats the cycle.
+- A move that cannot run as asked is planned as near as it can be, then
+  flagged in the list. This happens when a line leaves the reachable
+  space, when a line needs a joint to go faster than it can (the move is
+  slowed and the factor is shown), or when a line ends in a different
+  arm configuration than the one taught.
+- The tool's path is drawn in the scene in blue, and the points in white.
+- Each point has buttons to go to it (→), re-teach it from the current
+  pose (⟳) or delete it (✕). Its J/L chip switches it between MoveJ and
+  MoveL.
+
+Programs are saved to `kynex-programs.json` in the directory `kynex view`
+runs in. Use `--programs FILE` to keep them somewhere else. Every change
+is written straight away. A program records its robot, joints and tool by
+identity and by name. When Kreate builds the scene again and numbers the
+objects anew, the program finds them again by name.
+
+**URScript** downloads the program as a `.script` file for a Universal
+Robots controller (`kynex_kin::urscript`). The program must be for a robot
+with six revolute joints.
+
+- MoveJ becomes `movej` with the taught joint positions.
+- MoveL becomes `movel` to the taught tool pose, in the controller's base
+  frame (the `base` link, half a turn from `base_link`).
+- The tool point is set with `set_tcp`, measured from `tool0`.
+- The robot first goes to the first point with `movej`. With 순환 재생
+  on, the rest runs in a `while (True):` loop.
+- The controller times moves in its own way, so a cycle on the robot is
+  close to the planned cycle, but not equal to it.
+
+### Collisions
+
+KYNEX checks each robot's links against everything else in the scene,
+and against the robot's own links (`crates/kynex-collide`).
+
+- **Live**: parts in contact at the pose shown turn red, the contact
+  point is marked, and the robot card lists the pairs (**충돌 N곳**). The
+  check runs on every scene change, so it covers jogging, programs
+  playing and robots moving in Kreate.
+- **Along a program**: each move is checked every 20 ms. The first
+  contact in a move shows under it, for example
+  `충돌: tool0 ↔ pallet (0.17 s)`. The rest of the scene stands where the
+  session has it.
+- A robot collides with its collision meshes (`RobotPart::Collision`,
+  from the URDF) where it has them, and with its visible meshes where it
+  does not. Two links joined by one joint are not checked against each
+  other, because they always meet at the joint.
+- The check is exact on the triangles. A surface has to pass more than
+  10 µm into another to count, so parts resting flush do not collide.
+  A mesh wholly inside another, with no surfaces crossing, is not seen.
+  Along a path, the surfaces cross on the way in, so the path check
+  still catches it.
+- There is no clearance check (minimum distance) yet.
+- Cost: a scene without robots costs a scan of its objects. With robots,
+  only the obstacles whose boxes reach the robots' space are tested.
+  `kynex bench` measures it (`contacts`, `+arm`). With one arm, a check
+  took 1.8 ms at 5,000 parts and 28 ms at 50,000. The live check waits
+  at least three times as long as the last check took before running
+  again, so a large scene keeps up with its updates. The last change is
+  always checked once the scene goes quiet.
+
+The demo session also has a UR5e beside the pallet. It does not move on
+its own, so you can program it.
+
+The page sends its requests as JSON to `POST /robot`:
+`{"op": "jog", "robot", "joint", "position"}`,
+`{"op": "ik", "robot", "tool", "offset", "position", "rotation"}` and
+`{"op": "release", "robot"}`, and for programs `teach`, `retouch`, `edit`,
+`delete`, `close`, `clear`, `goto`, `play`, `stop` and `urscript`. Programs reach
+the page as the `programs` event, and the pose and playback as `pose`.
+Identities are strings, positions are in
+metres and radians, and `rotation` is a quaternion `[x, y, z, w]` (or
+`null` for position only). The server takes only `application/json`
+bodies. That way, a page on another site cannot post a pose without
+first asking the browser for permission, and this server never grants
+it.
 
 To try the viewer without Kreate, start a demo session. It hosts a
 Kreate-compatible session with a robot on a linear track that keeps moving:
@@ -123,6 +248,8 @@ The changes KYNEX needs from Kreate are in
 |---|---|
 | `crates/kynex-link` | `KreateLink`: the session connection, the mirrored `Document`, reconnection |
 | `crates/kynex-model` | `Model`: world poses, robots as joint trees, and `Diff` between models |
+| `crates/kynex-kin` | `Kinematics`: forward kinematics, Jacobian, inverse kinematics with limits and mimic joints; `path`: MoveJ/MoveL timing; `urscript`: UR post-processor |
+| `crates/kynex-collide` | Mesh-to-mesh contact: exact triangle tests, a BVH per mesh, and a broad phase over the scene |
 | `crates/kynex-view` | The viewer: scene → JSON (`ViewState`), HTTP/SSE server, and the web page (`web/`) |
 | `apps/kynex` | The command line (`view`, `link`, `inspect`) |
 

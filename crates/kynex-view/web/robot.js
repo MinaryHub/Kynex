@@ -1,0 +1,732 @@
+// The robot panel: each robot's joints, and posing it here — a joint dragged
+// along its bar, the tool jogged step by step like a teach pendant, or
+// pulled by a handle in the scene — and its program: poses taught, the
+// moves between them timed, played back and drawn as the tool's path.
+// KYNEX works it all out (POST /robot) and the scene comes back on the
+// stream like any other change; nothing goes to Kreate.
+
+import * as THREE from 'three';
+import { TransformControls } from '/vendor/TransformControls.js';
+
+const KIND_CHIP = { revolute: 'R', continuous: 'C', prismatic: 'P', fixed: 'F', floating: '6', planar: '2' };
+
+// Jog steps: metres and radians together, one choice for both.
+const STEPS = [
+  { label: '1 mm · 1°', m: 0.001, rad: Math.PI / 180 },
+  { label: '10 mm · 5°', m: 0.01, rad: (5 * Math.PI) / 180 },
+  { label: '50 mm · 15°', m: 0.05, rad: (15 * Math.PI) / 180 },
+];
+const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+
+// A held jog button steps again after this long, then this often.
+const REPEAT_DELAY = 380;
+const REPEAT_EVERY = 90;
+
+// One decimal, and no "-0.0" for a value that rounds to nothing.
+const tenths = (v) => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1);
+const mm = (m) => tenths(m * 1000);
+const deg = (r) => tenths((r * 180) / Math.PI);
+
+function jointValue(j) {
+  return j.slides ? `${mm(j.position)} mm` : `${deg(j.position)}°`;
+}
+function limitText(j, v) {
+  return j.slides ? `${(v * 1000).toFixed(0)}` : `${((v * 180) / Math.PI).toFixed(0)}°`;
+}
+
+// The span a joint's bar shows: its limits with a little room either side,
+// so a joint past one shows where it went.
+function spanOf(j) {
+  const limited = j.limited && j.upper > j.lower;
+  let lo = j.lower, hi = j.upper;
+  if (!limited) {
+    lo = j.slides ? -1 : -Math.PI;
+    hi = j.slides ? 1 : Math.PI;
+  }
+  const pad = (hi - lo) * 0.08;
+  return { limited, lo, hi, a: lo - pad, b: hi + pad };
+}
+
+async function post(request) {
+  const response = await fetch('/robot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+export class RobotPanel {
+  // ctx: { host, records, scene, camera, canvas, controls, selected(), toast, escapeHtml }
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.host = ctx.host;
+    this.robots = [];
+    this.held = new Set();
+    // Per robot, what its controls are set to: kept across redraws.
+    this.ui = new Map();
+    // One request on its way per robot; a newer one waits and replaces any
+    // older one waiting, so a fast drag never queues up stale poses.
+    this.lanes = new Map();
+    // Program requests go one after another, none dropped.
+    this.queue = Promise.resolve();
+    // By robot root, as the `programs` event has them.
+    this.programs = {};
+    this.playing = null;
+    // The tool paths and taught points, drawn over the scene.
+    this.paths = new THREE.Group();
+    ctx.scene.add(this.paths);
+    // Where parts are in contact now: by robot root, as the event has them.
+    this.contacts = [];
+    this.contactDots = null;
+
+    this.proxy = new THREE.Object3D();
+    ctx.scene.add(this.proxy);
+    this.handle = new TransformControls(ctx.camera, ctx.canvas);
+    this.handle.setSize(0.75);
+    this.handle.setSpace('world');
+    this.handleHelper = this.handle.getHelper();
+    this.handleRoot = null;
+    this.dragging = false;
+    this.draggedAt = 0;
+    this.handle.addEventListener('dragging-changed', (e) => {
+      ctx.controls.enabled = !e.value;
+      this.dragging = e.value;
+      if (!e.value) {
+        this.draggedAt = performance.now();
+        // Back onto where the tool really went.
+        this.refresh();
+      }
+    });
+    this.handle.addEventListener('objectChange', () => {
+      if (this.dragging) this.pulled();
+    });
+
+    this.host.addEventListener('pointerdown', (e) => this.pointerDown(e));
+    this.host.addEventListener('click', (e) => this.clicked(e));
+    this.host.addEventListener('change', (e) => this.optionChanged(e));
+  }
+
+  // Whether the pointer is the handle's: a click on it picks nothing.
+  ownsPointer() {
+    return this.dragging || this.handle.axis !== null || performance.now() - this.draggedAt < 250;
+  }
+
+  uiOf(r) {
+    let ui = this.ui.get(r.root);
+    if (!ui) {
+      const dof = r.joints.filter((j) => j.moves).length;
+      // An arm that cannot hold an orientation everywhere is asked only for
+      // the point.
+      ui = { step: 1, frame: 'world', lock: dof >= 6, offset: 0, mode: 'translate', status: '', bad: false };
+      this.ui.set(r.root, ui);
+    }
+    return ui;
+  }
+
+  // The `pose` event: the robots held here, and the program playing.
+  setPose(pose) {
+    this.held = new Set(pose.held);
+    this.playing = pose.playing;
+    for (const section of this.host.querySelectorAll('.robot')) {
+      const root = section.dataset.root;
+      const held = this.held.has(root);
+      section.classList.toggle('held', held);
+      section.querySelector('.robot-local').hidden = !held;
+      const playing = this.playing?.robot === root ? this.playing : null;
+      const play = section.querySelector('[data-act="play"]');
+      if (play) {
+        play.textContent = playing ? '■ 정지' : '▶ 재생';
+        play.setAttribute('aria-pressed', String(!!playing));
+      }
+      const bar = section.querySelector('.prog-progress');
+      if (bar) {
+        bar.hidden = !playing;
+        if (playing) {
+          const share = playing.duration > 0 ? playing.t / playing.duration : 1;
+          bar.firstElementChild.style.width = `${(share * 100).toFixed(1)}%`;
+          bar.lastElementChild.textContent = `${playing.t.toFixed(2)} / ${playing.duration.toFixed(2)} s`;
+        }
+      }
+    }
+  }
+
+  // The `contacts` event: the parts in contact now, listed under their
+  // robot and marked where they meet.
+  setContacts(list) {
+    this.contacts = list;
+    this.renderContacts();
+    if (this.contactDots) {
+      this.contactDots.removeFromParent();
+      this.contactDots.geometry.dispose();
+      this.contactDots.material.dispose();
+      this.contactDots = null;
+    }
+    if (list.length) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(list.flatMap((c) => c.at), 3));
+      this.contactDots = new THREE.Points(
+        geometry,
+        new THREE.PointsMaterial({ color: 0xff3b3b, size: 11, sizeAttenuation: false, depthTest: false }),
+      );
+      this.contactDots.renderOrder = 11;
+      this.ctx.scene.add(this.contactDots);
+    }
+  }
+
+  renderContacts() {
+    const { escapeHtml } = this.ctx;
+    for (const section of this.host.querySelectorAll('.robot')) {
+      const mine = this.contacts.filter((c) => c.robot === section.dataset.root);
+      const box = section.querySelector('.robot-contacts');
+      box.hidden = !mine.length;
+      section.classList.toggle('in-contact', mine.length > 0);
+      if (!mine.length) continue;
+      // Each pair once, however many places they meet.
+      const pairs = [...new Set(mine.map((c) => `${c.part_name} ↔ ${c.other_name}`))];
+      box.innerHTML =
+        `<span class="contact-title">충돌 ${pairs.length}곳</span>` +
+        pairs.map((p) => `<span class="contact-pair">${escapeHtml(p)}</span>`).join('');
+    }
+  }
+
+  // The `programs` event: every robot's program, timed.
+  setPrograms(programs) {
+    this.programs = programs;
+    this.renderPrograms();
+    this.drawPaths();
+  }
+
+  setRobots(list) {
+    this.robots = list;
+    for (const root of [...this.ui.keys()]) if (!list.some((r) => r.root === root)) this.ui.delete(root);
+    if (this.handleRoot && !list.some((r) => r.root === this.handleRoot && r.tool)) this.showHandle(null);
+    this.render();
+  }
+
+  render() {
+    const { escapeHtml } = this.ctx;
+    const host = this.host;
+    document.getElementById('robot-count').textContent = this.robots.length;
+    if (!this.robots.length) {
+      host.dataset.shape = '';
+      host.innerHTML = '<p class="muted pad">장면에 로봇이 없습니다. Kreate에서 URDF를 불러오면 관절이 여기에 나타납니다.</p>';
+      return;
+    }
+    // Same robots and joints as drawn: update the numbers in place, so a pose
+    // streaming in does not rebuild the panel under the pointer.
+    const shape = this.robots.map((r) => r.root + ':' + r.tool + ':' + r.joints.map((j) => j.uid + j.kind).join(',')).join('|');
+    if (host.dataset.shape !== shape) {
+      host.dataset.shape = shape;
+      host.innerHTML = this.robots.map((r) => this.markup(r, escapeHtml)).join('');
+      this.setPose({ held: [...this.held], playing: this.playing });
+      this.renderPrograms();
+      this.renderContacts();
+    }
+    this.refresh();
+  }
+
+  markup(r, escapeHtml) {
+    const ui = this.uiOf(r);
+    const tool = r.tool ? this.ctx.records.get(r.tool) : null;
+    const jog = (axis, label) => `
+      <div class="jog-axis">
+        <button class="jog-btn" data-jog="${axis}" data-dir="-1" aria-label="${label} −">−</button>
+        <span>${label}</span>
+        <button class="jog-btn" data-jog="${axis}" data-dir="1" aria-label="${label} +">+</button>
+      </div>`;
+    return `
+      <section class="robot" data-root="${escapeHtml(r.root)}">
+        <div class="robot-head">
+          <span class="robot-name">${escapeHtml(r.name)}</span>
+          <span class="robot-meta">${r.joints.filter((j) => j.moves).length} DOF${r.mass ? ` · ${r.mass.toFixed(1)} kg` : ''}</span>
+        </div>
+        <div class="robot-contacts" hidden></div>
+        <div class="robot-local" hidden>
+          <span class="local-badge">로컬 자세</span>
+          <span class="local-note">Kreate에는 반영되지 않습니다</span>
+          <button class="text-btn" data-act="release">세션 자세로</button>
+        </div>
+        <ul class="joints">
+          ${r.joints
+            .map(
+              (j) => `
+            <li class="joint${j.moves ? ' movable' : ''}" data-uid="${escapeHtml(j.uid)}">
+              <span class="kind ${j.kind === 'fixed' ? 'fixed' : ''}" title="${j.kind}">${KIND_CHIP[j.kind] || '?'}</span>
+              <span class="jname">${escapeHtml(j.name)}</span>
+              <span class="jval"></span>
+              ${j.moves ? '<span class="track" title="끌어서 관절 이동"><span class="fill"></span><span class="mark"></span></span><span class="limits"><span class="lo"></span><span class="hi"></span></span>' : ''}
+            </li>`,
+            )
+            .join('')}
+        </ul>
+        ${
+          r.tool
+            ? `
+        <div class="tcp">
+          <div class="tcp-head">
+            <span class="tcp-title">TCP</span>
+            <span class="tcp-tool" title="툴 링크">${escapeHtml(tool?.name ?? '')}</span>
+            <button class="chip-btn" data-act="handle" aria-pressed="false" title="장면에서 끌어서 TCP 이동">핸들</button>
+          </div>
+          <dl class="tcp-pose num">
+            <dt>X</dt><dd data-v="x"></dd><dt>Y</dt><dd data-v="y"></dd><dt>Z</dt><dd data-v="z"></dd>
+            <dt>Rx</dt><dd data-v="rx"></dd><dt>Ry</dt><dd data-v="ry"></dd><dt>Rz</dt><dd data-v="rz"></dd>
+          </dl>
+          <div class="jog">
+            ${jog('x', 'X')}${jog('rx', 'Rx')}
+            ${jog('y', 'Y')}${jog('ry', 'Ry')}
+            ${jog('z', 'Z')}${jog('rz', 'Rz')}
+          </div>
+          <div class="tcp-opts">
+            <div class="seg" role="group" aria-label="좌표계">
+              <button data-frame="world" class="${ui.frame === 'world' ? 'on' : ''}">월드</button>
+              <button data-frame="tool" class="${ui.frame === 'tool' ? 'on' : ''}">툴</button>
+            </div>
+            <select data-opt="step" aria-label="간격">
+              ${STEPS.map((s, i) => `<option value="${i}"${i === ui.step ? ' selected' : ''}>${s.label}</option>`).join('')}
+            </select>
+          </div>
+          <div class="tcp-opts">
+            <label class="check"><input type="checkbox" data-opt="lock"${ui.lock ? ' checked' : ''}> 이동할 때 자세 유지</label>
+            <label class="offset">오프셋 Z <input type="number" data-opt="offset" value="${ui.offset}" step="1"> mm</label>
+          </div>
+          <div class="handle-modes seg" role="group" aria-label="핸들" hidden>
+            <button data-mode="translate" class="${ui.mode === 'translate' ? 'on' : ''}">이동</button>
+            <button data-mode="rotate" class="${ui.mode === 'rotate' ? 'on' : ''}">회전</button>
+          </div>
+          <div class="tcp-status"></div>
+        </div>
+        <div class="program">
+          <div class="prog-head">
+            <span class="section-title">프로그램</span>
+            <span class="prog-cycle num"></span>
+          </div>
+          <div class="prog-actions">
+            <button class="chip-btn" data-act="teach" data-kind="joint" title="현재 자세를 관절 이동(MoveJ) 지점으로 추가">+ MoveJ</button>
+            <button class="chip-btn" data-act="teach" data-kind="linear" title="현재 자세를 직선 이동(MoveL) 지점으로 추가">+ MoveL</button>
+            <button class="chip-btn play" data-act="play" aria-pressed="false">▶ 재생</button>
+          </div>
+          <ol class="points"></ol>
+          <div class="prog-progress" hidden><span></span><em class="num"></em></div>
+          <div class="prog-foot">
+            <label class="check" title="마지막 지점에서 첫 지점으로 돌아와 반복합니다"><input type="checkbox" data-opt="close"> 순환 재생</label>
+            <button class="text-btn quiet" data-act="urscript" title="UR 컨트롤러용 URScript 파일로 내려받기">URScript</button>
+            <button class="text-btn quiet danger" data-act="clear">모두 지우기</button>
+          </div>
+        </div>`
+            : ''
+        }
+      </section>`;
+  }
+
+  // Each robot's list of points, as its program now is.
+  renderPrograms() {
+    const { escapeHtml } = this.ctx;
+    const seconds = (s) => `${s.toFixed(2)} s`;
+    const problems = (m) =>
+      (m?.problems || []).map((p) => `<div class="pprob">⚠ ${escapeHtml(p)}</div>`).join('');
+    for (const section of this.host.querySelectorAll('.robot')) {
+      const list = section.querySelector('.points');
+      if (!list) continue;
+      const program = this.programs[section.dataset.root];
+      const points = program?.points || [];
+      section.querySelector('.prog-cycle').textContent =
+        program?.cycle != null && points.length > 1 ? `사이클 ${seconds(program.cycle)}` : '';
+      section.querySelector('[data-opt="close"]').checked = !!program?.close;
+      section.querySelector('[data-act="clear"]').hidden = !points.length;
+      section.querySelector('[data-act="urscript"]').hidden = !points.length;
+      if (!points.length) {
+        list.innerHTML =
+          '<li class="points-empty">로봇을 원하는 자세로 옮긴 뒤 <b>+ MoveJ</b> 또는 <b>+ MoveL</b>로 지점을 추가하세요.</li>';
+        continue;
+      }
+      const rows = points.map((p, i) => {
+        const linear = p.kind === 'linear';
+        const speed = linear ? Math.round(p.speed * 1000) : Math.round(p.speed * 100);
+        const bad = p.move?.problems?.length;
+        // The first point is where the program starts: nothing moves into it,
+        // unless the program comes back round to it.
+        const into = i > 0 || program.close;
+        return `
+          <li class="point${bad ? ' bad' : ''}" data-index="${i}">
+            <span class="pidx num">${i + 1}</span>
+            <span class="pname">${escapeHtml(p.name)}</span>
+            <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${linear ? 'L' : 'J'}</button>
+            <input class="pspeed num" type="number" data-opt="speed" value="${speed}" min="1" step="${linear ? 10 : 5}"${into ? '' : ' disabled'} aria-label="속도">
+            <span class="unit">${linear ? 'mm/s' : '%'}</span>
+            <span class="ptime num">${p.move ? seconds(p.move.duration) : i === 0 ? '시작' : ''}</span>
+            <span class="pacts">
+              <button class="icon-mini" data-act="goto" title="이 지점으로 이동">→</button>
+              <button class="icon-mini" data-act="retouch" title="현재 자세로 다시 지정">⟳</button>
+              <button class="icon-mini" data-act="delete" title="삭제">✕</button>
+            </span>
+            ${problems(p.move)}
+          </li>`;
+      });
+      if (program.close && program.back) {
+        rows.push(`
+          <li class="point back${program.back.problems.length ? ' bad' : ''}">
+            <span class="pidx num">↩</span>
+            <span class="pname muted">${escapeHtml(points[0].name)}(으)로 복귀 · ${points[0].kind === 'linear' ? 'L' : 'J'}</span>
+            <span class="ptime num">${seconds(program.back.duration)}</span>
+            ${problems(program.back)}
+          </li>`);
+      }
+      list.innerHTML = rows.join('');
+    }
+  }
+
+  // Each program's tool path, and its taught points, over the scene.
+  drawPaths() {
+    for (const child of [...this.paths.children]) {
+      child.removeFromParent();
+      child.geometry.dispose();
+      child.material.dispose();
+    }
+    for (const program of Object.values(this.programs)) {
+      if (program.trace.length >= 6) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(program.trace, 3));
+        const line = new THREE.Line(
+          geometry,
+          new THREE.LineBasicMaterial({ color: 0x5aa9ff, transparent: true, opacity: 0.9, depthTest: false }),
+        );
+        line.renderOrder = 9;
+        this.paths.add(line);
+      }
+      const at = program.points.filter((p) => p.at).flatMap((p) => p.at);
+      if (at.length) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(at, 3));
+        const dots = new THREE.Points(
+          geometry,
+          new THREE.PointsMaterial({ color: 0xffffff, size: 7, sizeAttenuation: false, depthTest: false }),
+        );
+        dots.renderOrder = 10;
+        this.paths.add(dots);
+      }
+    }
+  }
+
+  // A request about a robot's program, with the tool its lines are drawn
+  // with. In order, and none dropped: each changes the program.
+  programOp(r, request, then) {
+    const ui = this.uiOf(r);
+    const body = { robot: r.root, tool: r.tool, offset: [0, 0, ui.offset / 1000], ...request };
+    this.queue = this.queue.then(async () => {
+      try {
+        const answer = await post(body);
+        if (!answer.ok) this.ctx.toast(answer.error || '요청을 처리하지 못했습니다');
+        else then?.(answer);
+      } catch (err) {
+        this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      }
+    });
+  }
+
+  // The numbers: joints, and each tool where it is now.
+  refresh() {
+    const selected = this.ctx.selected();
+    for (const r of this.robots) {
+      const section = this.host.querySelector(`.robot[data-root="${r.root}"]`);
+      if (!section) continue;
+      for (const j of r.joints) {
+        const row = section.querySelector(`.joint[data-uid="${j.uid}"]`);
+        if (!row) continue;
+        row.querySelector('.jval').textContent = j.moves ? jointValue(j) + (j.out_of_limits ? ' ⚠' : '') : '고정';
+        row.classList.toggle('bad', j.out_of_limits);
+        row.classList.toggle('selected', j.uid === selected);
+        row.title = j.out_of_limits ? '한계를 벗어났습니다' : '';
+        const track = row.querySelector('.track');
+        if (!track || track.dataset.dragging) continue;
+        const { limited, lo, hi, a, b } = spanOf(j);
+        row.classList.toggle('unlimited', !limited);
+        const at = (v) => `${(Math.min(Math.max((v - a) / (b - a), 0), 1) * 100).toFixed(2)}%`;
+        const fill = track.querySelector('.fill');
+        fill.style.display = limited ? '' : 'none';
+        fill.style.left = at(lo);
+        fill.style.width = `calc(${at(hi)} - ${at(lo)})`;
+        let pos = j.position;
+        if (!limited && !j.slides) pos = Math.atan2(Math.sin(pos), Math.cos(pos));
+        track.querySelector('.mark').style.left = at(pos);
+        row.querySelector('.lo').textContent = limited ? limitText(j, j.lower) : '';
+        row.querySelector('.hi').textContent = limited ? limitText(j, j.upper) : '';
+      }
+      const tcp = this.tcpOf(r);
+      const box = section.querySelector('.tcp');
+      if (!tcp || !box) continue;
+      const e = new THREE.Euler().setFromQuaternion(tcp.quaternion, 'ZYX');
+      const v = { x: mm(tcp.position.x), y: mm(tcp.position.y), z: mm(tcp.position.z), rx: deg(e.x), ry: deg(e.y), rz: deg(e.z) };
+      for (const [k, text] of Object.entries(v)) box.querySelector(`[data-v="${k}"]`).textContent = text;
+      const ui = this.uiOf(r);
+      const status = box.querySelector('.tcp-status');
+      status.textContent = ui.status;
+      status.classList.toggle('bad', ui.bad);
+      if (this.handleRoot === r.root && !this.dragging) {
+        this.proxy.position.copy(tcp.position);
+        this.proxy.quaternion.copy(tcp.quaternion);
+        this.proxy.updateMatrixWorld();
+      }
+    }
+  }
+
+  // The tool point's world pose: the tool link's matrix, then the offset
+  // along its Z, as KYNEX works it out.
+  tcpOf(r) {
+    const rec = r.tool && this.ctx.records.get(r.tool);
+    if (!rec) return null;
+    const ui = this.uiOf(r);
+    const m = new THREE.Matrix4().fromArray(rec.matrix);
+    m.multiply(new THREE.Matrix4().makeTranslation(0, 0, ui.offset / 1000));
+    const position = new THREE.Vector3(), quaternion = new THREE.Quaternion(), scale = new THREE.Vector3();
+    m.decompose(position, quaternion, scale);
+    return { position, quaternion };
+  }
+
+  robotOf(el) {
+    const root = el.closest('.robot')?.dataset.root;
+    return this.robots.find((r) => r.root === root);
+  }
+
+  // ---- requests -------------------------------------------------------------
+
+  send(r, request) {
+    let lane = this.lanes.get(r.root);
+    if (!lane) this.lanes.set(r.root, (lane = { busy: false, next: null }));
+    if (lane.busy) {
+      lane.next = request;
+      return;
+    }
+    this.run(r, lane, request);
+  }
+
+  async run(r, lane, request) {
+    lane.busy = true;
+    try {
+      const answer = await post(request);
+      const ui = this.uiOf(r);
+      if (!answer.ok) {
+        this.ctx.toast(answer.error || '요청을 처리하지 못했습니다');
+      } else if (request.op === 'ik') {
+        ui.bad = !answer.reached;
+        ui.status = answer.reached
+          ? '도달'
+          : `도달하지 못함 · 위치 ${mm(answer.position_error)} mm` +
+            (request.rotation ? ` · 자세 ${deg(answer.rotation_error)}°` : '');
+      } else if (request.op === 'release') {
+        ui.status = '';
+        ui.bad = false;
+      }
+      this.refresh();
+    } catch (err) {
+      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+    }
+    lane.busy = false;
+    if (lane.next) {
+      const next = lane.next;
+      lane.next = null;
+      this.run(r, lane, next);
+    }
+  }
+
+  ik(r, position, quaternion) {
+    const ui = this.uiOf(r);
+    this.send(r, {
+      op: 'ik',
+      robot: r.root,
+      tool: r.tool,
+      offset: [0, 0, ui.offset / 1000],
+      position: position.toArray(),
+      rotation: quaternion ? quaternion.toArray() : null,
+    });
+  }
+
+  // ---- joints ---------------------------------------------------------------
+
+  pointerDown(e) {
+    const track = e.target.closest('.track');
+    if (track) return this.dragJoint(e, track);
+    const jog = e.target.closest('[data-jog]');
+    if (jog) return this.holdJog(e, jog);
+  }
+
+  dragJoint(e, track) {
+    const r = this.robotOf(track);
+    const uid = track.closest('.joint').dataset.uid;
+    const j = r?.joints.find((x) => x.uid === uid);
+    if (!j || e.button !== 0) return;
+    e.preventDefault();
+    track.setPointerCapture(e.pointerId);
+    track.dataset.dragging = '1';
+    const { limited, lo, hi, a, b } = spanOf(j);
+    const move = (ev) => {
+      const rect = track.getBoundingClientRect();
+      const t = Math.min(Math.max((ev.clientX - rect.left) / rect.width, 0), 1);
+      let v = a + t * (b - a);
+      if (limited) v = Math.min(Math.max(v, lo), hi);
+      // Where the pointer is, at once; the joint follows when KYNEX answers.
+      track.querySelector('.mark').style.left = `${(((v - a) / (b - a)) * 100).toFixed(2)}%`;
+      this.send(r, { op: 'jog', robot: r.root, joint: uid, position: v });
+    };
+    const up = () => {
+      delete track.dataset.dragging;
+      track.removeEventListener('pointermove', move);
+      track.removeEventListener('pointerup', up);
+      track.removeEventListener('pointercancel', up);
+    };
+    track.addEventListener('pointermove', move);
+    track.addEventListener('pointerup', up);
+    track.addEventListener('pointercancel', up);
+    move(e);
+  }
+
+  // ---- the pendant ----------------------------------------------------------
+
+  holdJog(e, button) {
+    const r = this.robotOf(button);
+    const tcp = r && this.tcpOf(r);
+    if (!tcp || e.button !== 0) return;
+    e.preventDefault();
+    // Steps add up on a target of their own: the tool's reported pose lags
+    // a request behind, and stepping from it would lose steps.
+    const target = { position: tcp.position.clone(), quaternion: tcp.quaternion.clone() };
+    const axis = button.dataset.jog;
+    const dir = Number(button.dataset.dir);
+    const step = () => this.jogStep(r, target, axis, dir);
+    step();
+    let timer = setTimeout(function again() {
+      step();
+      timer = setTimeout(again, REPEAT_EVERY);
+    }, REPEAT_DELAY);
+    button.classList.add('down');
+    const stop = () => {
+      clearTimeout(timer);
+      button.classList.remove('down');
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    };
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+  }
+
+  jogStep(r, target, axis, dir) {
+    const ui = this.uiOf(r);
+    const s = STEPS[ui.step];
+    const turn = axis.startsWith('r');
+    const unit = AXES[turn ? axis[1] : axis].clone();
+    // In the tool's frame, the axis turns with the tool.
+    if (ui.frame === 'tool') unit.applyQuaternion(target.quaternion);
+    if (turn) {
+      target.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(unit, dir * s.rad)).normalize();
+      this.ik(r, target.position, target.quaternion);
+    } else {
+      target.position.addScaledVector(unit, dir * s.m);
+      this.ik(r, target.position, ui.lock ? target.quaternion : null);
+    }
+  }
+
+  // ---- the handle -----------------------------------------------------------
+
+  showHandle(root) {
+    this.handleRoot = root;
+    if (root) {
+      this.handle.attach(this.proxy);
+      this.ctx.scene.add(this.handleHelper);
+      const r = this.robots.find((x) => x.root === root);
+      this.handle.setMode(this.uiOf(r).mode);
+    } else {
+      this.handle.detach();
+      this.handleHelper.removeFromParent();
+    }
+    for (const section of this.host.querySelectorAll('.robot')) {
+      const on = section.dataset.root === root;
+      section.querySelector('[data-act="handle"]')?.setAttribute('aria-pressed', String(on));
+      const modes = section.querySelector('.handle-modes');
+      if (modes) modes.hidden = !on;
+    }
+    this.refresh();
+  }
+
+  pulled() {
+    const r = this.robots.find((x) => x.root === this.handleRoot);
+    if (!r) return;
+    const ui = this.uiOf(r);
+    const keep = ui.mode === 'rotate' || ui.lock;
+    this.ik(r, this.proxy.position, keep ? this.proxy.quaternion : null);
+  }
+
+  // ---- buttons and options --------------------------------------------------
+
+  clicked(e) {
+    const r = this.robotOf(e.target);
+    if (!r) return;
+    const ui = this.uiOf(r);
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    const row = e.target.closest('.point[data-index]');
+    const index = row ? Number(row.dataset.index) : null;
+    if (act === 'release') {
+      this.send(r, { op: 'release', robot: r.root });
+    } else if (act === 'handle') {
+      this.showHandle(this.handleRoot === r.root ? null : r.root);
+    } else if (act === 'teach') {
+      this.programOp(r, { op: 'teach', kind: e.target.closest('[data-kind]').dataset.kind });
+    } else if (act === 'play') {
+      this.programOp(r, { op: this.playing?.robot === r.root ? 'stop' : 'play' });
+    } else if (act === 'urscript') {
+      this.programOp(r, { op: 'urscript' }, (answer) => {
+        // Handed to the browser as a file to keep.
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([answer.script], { type: 'text/plain' }));
+        link.download = answer.file;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+        this.ctx.toast(`${answer.file}을(를) 내려받았습니다`);
+      });
+    } else if (act === 'clear') {
+      if (confirm('이 로봇의 프로그램 지점을 모두 지울까요?')) this.programOp(r, { op: 'clear' });
+    } else if (act === 'kind' && index != null) {
+      const point = this.programs[r.root]?.points[index];
+      if (point) this.programOp(r, { op: 'edit', index, kind: point.kind === 'linear' ? 'joint' : 'linear' });
+    } else if (['goto', 'retouch', 'delete'].includes(act) && index != null) {
+      this.programOp(r, { op: act, index });
+    }
+    const frame = e.target.closest('[data-frame]');
+    if (frame) {
+      ui.frame = frame.dataset.frame;
+      frame.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === frame));
+    }
+    const mode = e.target.closest('[data-mode]');
+    if (mode) {
+      ui.mode = mode.dataset.mode;
+      mode.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === mode));
+      if (this.handleRoot === r.root) this.handle.setMode(ui.mode);
+    }
+  }
+
+  optionChanged(e) {
+    const r = this.robotOf(e.target);
+    if (!r) return;
+    const ui = this.uiOf(r);
+    const opt = e.target.dataset.opt;
+    if (opt === 'step') ui.step = Number(e.target.value);
+    if (opt === 'lock') ui.lock = e.target.checked;
+    if (opt === 'offset') {
+      const v = Number(e.target.value);
+      ui.offset = Number.isFinite(v) ? v : 0;
+      this.refresh();
+      // The program's lines are timed for the tool point: again for this one.
+      if (this.programs[r.root]) this.programOp(r, { op: 'program' });
+    }
+    if (opt === 'close') this.programOp(r, { op: 'close', close: e.target.checked });
+    if (opt === 'speed') {
+      const index = Number(e.target.closest('.point').dataset.index);
+      const point = this.programs[r.root]?.points[index];
+      const v = Number(e.target.value);
+      if (point && Number.isFinite(v) && v > 0) {
+        this.programOp(r, { op: 'edit', index, speed: point.kind === 'linear' ? v / 1000 : v / 100 });
+      }
+    }
+  }
+}

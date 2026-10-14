@@ -13,6 +13,10 @@
 //! reports its load time and frame rate while it orbits the scene.
 //!
 //! Results are printed and written to `bench-results/`.
+//!
+//! The collision check is measured too: the whole scene's contacts, as the
+//! viewer works them out after every change, with no robot and with an arm
+//! standing in the first station.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -105,8 +109,9 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         "update×100",
         "snapshot",
         "idle tick",
-        "patch×1"
+        "patch×1",
     );
+    println!("{:<11} {:>12} {:>12}", "", "contacts", "+arm");
     let mut docs = Vec::new();
     for tier in &tiers {
         let started = Instant::now();
@@ -131,6 +136,12 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             r["patch_1_ms"].as_f64().unwrap(),
             bytes(r["patch_1_bytes"].as_u64().unwrap()),
         );
+        println!(
+            "{:<11} {:>10.1}ms {:>10.1}ms",
+            "",
+            r["contacts_ms"].as_f64().unwrap(),
+            r["contacts_arm_ms"].as_f64().unwrap(),
+        );
         let mut r = r;
         r["generate_ms"] = json!(ms(built));
         results.push(r);
@@ -139,7 +150,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     println!(
         "\n  model: 모델 재구성 · view: 뷰어 장면 구성 · scene: 첫 전송량 · update: 물체 1/100개 이동 시 뷰어 갱신 \
          (세션 패치가 알려 준 물체만)\n  snapshot: 세션 참가 스냅샷 · idle tick: 협업 세션의 50ms 주기 비교 비용 · \
-         patch×1: 물체 1개 이동 패치"
+         patch×1: 물체 1개 이동 패치\n  contacts: 장면 전체 충돌 검사(로봇 없음) · +arm: 첫 스테이션에 팔 로봇 하나"
     );
 
     let mut browser_results = Vec::new();
@@ -340,9 +351,25 @@ fn measure(tier: &Tier, doc: &Document) -> Value {
         ms(t.elapsed())
     });
 
+    // The viewer's collision check, its shapes already made, as after the
+    // first change: with no robot, and with an arm among the parts.
+    let contacts = |doc: &Document| {
+        let mut collider = crate::collide::Collider::default();
+        collider.contacts(doc);
+        median(|| {
+            let t = Instant::now();
+            std::hint::black_box(collider.contacts(doc));
+            ms(t.elapsed())
+        })
+    };
+    let contacts_ms = contacts(doc);
+    let contacts_arm_ms = contacts(&with_arm(doc));
+
     json!({
         "tier": tier.name,
         "objects": tier.objects,
+        "contacts_ms": contacts_ms,
+        "contacts_arm_ms": contacts_arm_ms,
         "unique_meshes": ((tier.objects as f64 * tier.unique).ceil() as usize).max(1),
         "triangles": triangles,
         "model_ms": model_ms,
@@ -360,6 +387,36 @@ fn measure(tier: &Tier, doc: &Document) -> Value {
         "patch_1_bytes": patch_len,
         "link_apply_ms": link_apply_ms,
     })
+}
+
+/// An arm of two box links, standing among the first station's parts.
+const ARM: &str = r#"<?xml version="1.0"?>
+<robot name="arm">
+  <link name="arm_base">
+    <visual><origin xyz="0 0 0.25"/><geometry><box size="0.3 0.3 0.5"/></geometry></visual>
+  </link>
+  <joint name="arm_turn" type="revolute">
+    <parent link="arm_base"/><child link="arm_link"/>
+    <origin xyz="0 0 0.5"/><axis xyz="0 0 1"/>
+    <limit lower="-3" upper="3" effort="10" velocity="1"/>
+  </joint>
+  <link name="arm_link">
+    <visual><origin xyz="0.6 0 0"/><geometry><box size="1.2 0.12 0.12"/></geometry></visual>
+  </link>
+</robot>
+"#;
+
+fn with_arm(doc: &Document) -> Document {
+    let mut doc = doc.clone();
+    let none = |_: &std::path::Path| -> Result<kreate_io::ir::ImportScene, String> {
+        Ok(kreate_io::ir::ImportScene::new(
+            kreate_io::ir::SourceMetadata::new("none"),
+        ))
+    };
+    let arm = kreate_io::urdf::parse_urdf(ARM, std::path::Path::new("."), &none)
+        .expect("the bench arm reads");
+    kreate_io::build::build_into(&arm, &mut doc);
+    doc
 }
 
 /// What a session patch moving `parts` names.

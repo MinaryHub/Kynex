@@ -1,6 +1,7 @@
 //! A Kreate session without Kreate: hosts one on this machine with a robot
 //! on a linear track and keeps it moving, so the link and the viewer can be
-//! tried — and shown — with nothing else running.
+//! tried — and shown — with nothing else running. Beside it stands a UR5e
+//! that does not move, to be programmed in the viewer.
 //!
 //! ```text
 //! cargo run -p kynex-link --example demo_session -- [--port 7878] [--key KEY]
@@ -78,6 +79,89 @@ const ROBOT: &str = r#"<?xml version="1.0"?>
 </robot>
 "#;
 
+/// A UR5e: `ur_description`'s joint origins and limits, its links drawn as
+/// plain shapes. `base` is the controller's base frame, `tool0` its flange.
+const UR5E: &str = r#"<?xml version="1.0"?>
+<robot name="ur5e">
+  <material name="ur_blue"><color rgba="0.35 0.62 0.86 1"/></material>
+  <material name="ur_grey"><color rgba="0.78 0.80 0.82 1"/></material>
+  <material name="ur_dark"><color rgba="0.20 0.21 0.23 1"/></material>
+  <link name="base_link">
+    <visual><origin xyz="0 0 0.045"/><geometry><cylinder radius="0.075" length="0.09"/></geometry><material name="ur_dark"/></visual>
+  </link>
+  <joint name="base_link-base_fixed_joint" type="fixed">
+    <parent link="base_link"/><child link="base"/><origin rpy="0 0 3.141592654"/>
+  </joint>
+  <link name="base"/>
+  <joint name="shoulder_pan_joint" type="revolute">
+    <parent link="base_link"/><child link="shoulder_link"/>
+    <origin xyz="0 0 0.1625"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="150" velocity="3.14"/>
+  </joint>
+  <link name="shoulder_link">
+    <visual><origin xyz="0 0 -0.04"/><geometry><cylinder radius="0.062" length="0.13"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="shoulder_lift_joint" type="revolute">
+    <parent link="shoulder_link"/><child link="upper_arm_link"/>
+    <origin rpy="1.570796327 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="150" velocity="3.14"/>
+  </joint>
+  <link name="upper_arm_link">
+    <visual><origin xyz="-0.2125 0 0.135" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.048" length="0.425"/></geometry><material name="ur_grey"/></visual>
+    <visual><origin xyz="0 0 0.07"/><geometry><cylinder radius="0.062" length="0.14"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="elbow_joint" type="revolute">
+    <parent link="upper_arm_link"/><child link="forearm_link"/>
+    <origin xyz="-0.425 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="150" velocity="3.14"/>
+  </joint>
+  <link name="forearm_link">
+    <visual><origin xyz="-0.196 0 0.02" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.038" length="0.392"/></geometry><material name="ur_grey"/></visual>
+    <visual><origin xyz="0 0 0.06"/><geometry><cylinder radius="0.05" length="0.12"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="wrist_1_joint" type="revolute">
+    <parent link="forearm_link"/><child link="wrist_1_link"/>
+    <origin xyz="-0.3922 0 0.1333"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="28" velocity="6.28"/>
+  </joint>
+  <link name="wrist_1_link">
+    <visual><geometry><cylinder radius="0.04" length="0.11"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="wrist_2_joint" type="revolute">
+    <parent link="wrist_1_link"/><child link="wrist_2_link"/>
+    <origin xyz="0 -0.0997 0" rpy="1.570796327 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="28" velocity="6.28"/>
+  </joint>
+  <link name="wrist_2_link">
+    <visual><geometry><cylinder radius="0.04" length="0.11"/></geometry><material name="ur_blue"/></visual>
+  </link>
+  <joint name="wrist_3_joint" type="revolute">
+    <parent link="wrist_2_link"/><child link="wrist_3_link"/>
+    <origin xyz="0 0.0996 0" rpy="1.570796327 3.141592654 3.141592654"/><axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="28" velocity="6.28"/>
+  </joint>
+  <link name="wrist_3_link">
+    <visual><origin xyz="0 0 -0.02"/><geometry><cylinder radius="0.038" length="0.04"/></geometry><material name="ur_dark"/></visual>
+  </link>
+  <joint name="wrist_3-flange" type="fixed">
+    <parent link="wrist_3_link"/><child link="tool0"/>
+  </joint>
+  <link name="tool0">
+    <visual><origin xyz="0 0 0.04"/><geometry><box size="0.03 0.08 0.08"/></geometry><material name="ur_dark"/></visual>
+  </link>
+</robot>
+"#;
+
+/// The UR5e's pose as it stands: elbow up, the tool pointing down.
+const UR_HOME: [(&str, f64); 6] = [
+    ("shoulder_pan_joint", 0.0),
+    ("shoulder_lift_joint", -1.9),
+    ("elbow_joint", 1.9),
+    ("wrist_1_joint", -1.571),
+    ("wrist_2_joint", -1.571),
+    ("wrist_3_joint", 0.0),
+];
+
 fn main() {
     let mut port = kreate_collab::DEFAULT_PORT;
     let mut key = String::new();
@@ -100,6 +184,26 @@ fn main() {
     let scene =
         kreate_io::urdf::parse_urdf(ROBOT, Path::new("."), &load).expect("the demo robot reads");
     kreate_io::build::build_into(&scene, &mut doc);
+    let ur = kreate_io::urdf::parse_urdf(UR5E, Path::new("."), &load).expect("the demo UR5e reads");
+    kreate_io::build::build_into(&ur, &mut doc);
+    // Beside the pallet, at its home pose.
+    let ur_base = doc
+        .objects()
+        .find(|(_, o)| o.name == "base_link")
+        .map(|(id, _)| id)
+        .expect("the UR5e's base");
+    doc.object_mut(ur_base).unwrap().transform.translation = DVec3::new(0.95, -0.75, 0.0);
+    for (name, position) in UR_HOME {
+        let id = doc
+            .objects()
+            .find(|(_, o)| o.name == name)
+            .map(|(id, _)| id)
+            .expect("a UR5e joint");
+        let Some(RobotPart::Joint(j)) = doc.object(id).and_then(|o| o.robot.clone()) else {
+            continue;
+        };
+        doc.object_mut(id).unwrap().transform = j.place(position);
+    }
     for (name, size, at) in [
         (
             "conveyor",

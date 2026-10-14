@@ -377,6 +377,9 @@ impl Stage {
                 let scene = self.base.as_ref().unwrap_or(doc);
                 let (reply, changed) = self.posing.handle(scene, &request.body);
                 touched |= !changed.changed.is_empty();
+                // The robots posed anew, for the viewers to draw.
+                self.placed.changed.extend(changed.changed);
+                self.placed.removed.extend(changed.removed);
                 reply
             };
             // A page that gave up waiting has nobody to answer.
@@ -387,9 +390,23 @@ impl Stage {
         let time = self.clock.advance(now);
         let scene = self.base.as_ref().unwrap_or(doc);
         if let Some(runner) = self.runner.as_mut() {
-            touched |= runner.tick(time, now, &mut self.posing, &mut self.cell, scene);
+            if runner.tick(time, now, &mut self.posing, &mut self.cell, scene) {
+                touched = true;
+                // The robot the program moves, drawn where it now is.
+                crate::pose::mark(scene, runner.root, &mut self.placed);
+            }
         }
         touched |= self.cell.tick(scene, time, now);
+        // A program going round is kept supplied, as an operator would:
+        // raw parts on the infeed, finished parts off the outfeed.
+        if self
+            .runner
+            .as_ref()
+            .is_some_and(|r| r.looping() && !r.stopped())
+        {
+            self.cell.supply(scene);
+            touched |= self.cell.take_changed();
+        }
         // A comparison done.
         if let Some(results) = &self.comparing {
             match results.try_recv() {
@@ -466,6 +483,8 @@ impl Stage {
                     .ok_or("프로그램이 없습니다")?;
                 let scene = self.base.as_ref().unwrap_or(doc);
                 self.runner = Some(Runner::new(root, program, scene, self.clock.time)?);
+                // Parts to take: the infeed stocked as the run starts.
+                self.cell.stock(scene);
                 // A new run, a new record.
                 self.timeline = Some(Timeline::new(self.clock.time));
                 self.timeline_told = None;

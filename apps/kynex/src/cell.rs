@@ -509,42 +509,55 @@ impl Cell {
     /// parts set down on an outfeed pallet are taken away. Returns how many
     /// were taken away.
     pub fn supply(&mut self, doc: &Document) -> usize {
-        let pallets: Vec<Component> = self
+        self.stock(doc);
+        let outfeeds: Vec<Component> = self
             .components
             .iter()
-            .filter(|c| c.kind.pallet())
+            .filter(|c| c.kind == Kind::Outfeed)
             .cloned()
             .collect();
         let mut taken = 0;
-        for c in pallets {
+        for c in outfeeds {
             let slots = self.slots(doc, &c);
-            let on = |p: &Part| {
-                p.held.is_none()
-                    && slots
-                        .iter()
-                        .any(|at| p.world.translation.distance(*at) < SNAP)
-            };
-            if c.kind == Kind::Outfeed {
-                let (gone, kept): (Vec<Part>, Vec<Part>) = std::mem::take(&mut self.parts)
-                    .into_iter()
-                    .partition(|p| p.finished && on(p));
-                self.parts = kept;
-                taken += gone.len();
-                self.removed.extend(gone.iter().map(|p| p.uid));
-                self.changed |= !gone.is_empty();
-            } else {
-                for at in slots {
-                    let free = !self
-                        .parts
-                        .iter()
-                        .any(|p| p.held.is_none() && p.world.translation.distance(at) < SNAP);
-                    if free {
-                        self.add_part(at, false);
-                    }
+            let (gone, kept): (Vec<Part>, Vec<Part>) =
+                std::mem::take(&mut self.parts).into_iter().partition(|p| {
+                    p.finished
+                        && p.held.is_none()
+                        && slots
+                            .iter()
+                            .any(|at| p.world.translation.distance(*at) < SNAP)
+                });
+            self.parts = kept;
+            taken += gone.len();
+            self.removed.extend(gone.iter().map(|p| p.uid));
+            self.changed |= !gone.is_empty();
+        }
+        taken
+    }
+
+    /// Puts a raw part on every free place of every infeed pallet: as a run
+    /// starts, so that it has parts to take. Returns how many were put.
+    pub fn stock(&mut self, doc: &Document) -> usize {
+        let infeeds: Vec<Component> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Infeed)
+            .cloned()
+            .collect();
+        let mut put = 0;
+        for c in infeeds {
+            for at in self.slots(doc, &c) {
+                let free = !self
+                    .parts
+                    .iter()
+                    .any(|p| p.held.is_none() && p.world.translation.distance(at) < SNAP);
+                if free {
+                    self.add_part(at, false);
+                    put += 1;
                 }
             }
         }
-        taken
+        put
     }
 
     /// Takes away the roles of objects that are gone from the scene.

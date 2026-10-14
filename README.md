@@ -153,6 +153,10 @@ run by the same clock.
 - With **순환 재생** the program runs again from its first step. The
   panel shows the step running, how many cycles have run and how long
   the last one took.
+- A run starts with the infeed stocked: every free place gets a raw part.
+  While a program runs round, an operator is assumed to keep the cell
+  supplied, as in a scenario comparison: the infeed is restocked and
+  finished parts are taken off the outfeed as they are set down.
 - Moving the robot by hand (jog, IK, → to a point, 세션 자세로) stops the
   run.
 - The path check (Collisions, below) takes the program's door commands

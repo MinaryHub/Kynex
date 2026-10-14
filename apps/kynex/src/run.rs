@@ -113,6 +113,11 @@ impl Runner {
         })
     }
 
+    /// Whether its program runs round and round.
+    pub fn looping(&self) -> bool {
+        self.program.close
+    }
+
     /// Whether it has stopped: at its end, or on an alarm.
     pub fn stopped(&self) -> bool {
         matches!(self.state, State::Done | State::Alarm(_))

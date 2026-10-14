@@ -552,11 +552,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   font-size: 11.5px;
 }
 .act-body .pspeed { width: 56px; flex: none; }
-.run-bar { display: flex; align-items: center; gap: 8px; }
-.run-bar .chip-btn { margin-left: 0; }
+.run-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.run-bar .chip-btn { margin-left: 0; flex: none; white-space: nowrap; }
+.run-bar select { flex: none; }
 .run-bar select { height: 24px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 11.5px; }
 .run-state { font: 11px var(--mono); color: var(--ok); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-state.alarm { color: var(--bad); white-space: normal; }
+.run-state { flex: 1 1 80px; }
+.run-state.alarm { color: var(--bad); white-space: normal; flex-basis: 100%; }
 .prog-foot { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
 .prog-foot .check { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .text-btn.quiet { border-color: var(--line-2); color: var(--muted); }

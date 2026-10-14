@@ -477,7 +477,8 @@ impl Posing {
 
 /// Every joint of the robot, for the viewers to look at again: what a
 /// joint carries follows from it.
-fn mark(doc: &Document, root: u64, touched: &mut Changes) {
+/// Marks robot `root`'s joints for the viewers to look at again: it moved.
+pub fn mark(doc: &Document, root: u64, touched: &mut Changes) {
     if let Some(kin) = Kinematics::of(doc, root) {
         mark_joints(kin.joints(), touched);
     }

@@ -626,8 +626,10 @@ fn next_unit(state: &mut u64) -> f64 {
     (*state >> 11) as f64 / (1u64 << 53) as f64
 }
 
+pub mod drl;
 pub mod path;
 pub mod post;
+pub mod rapid;
 pub mod urscript;
 
 #[cfg(test)]

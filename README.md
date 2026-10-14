@@ -271,17 +271,26 @@ identity and by name. When Kreate builds the scene again and numbers the
 objects anew, the program finds them again by name.
 
 **URScript** downloads the program as a `.script` file for a Universal
-Robots controller. The program is first made into one any vendor's
+Robots controller, **RAPID** as a `.mod` module for an ABB one, and **DRL**
+as a `.drl` program for a Doosan Robotics one. Only the button for the
+robot's own controller shows, when its description tells whose it is. The program is first made into one any vendor's
 controller can be given (`kynex_kin::post`: its moves, and between them
 outputs set or pulsed, inputs waited for, pauses, a pallet's count moved
 on), then written by the vendor's writer (`kynex_kin::urscript` for
-Universal Robots). The exports of three programs are kept as they are
+Universal Robots, `kynex_kin::rapid` for ABB). The exports of three
+programs, and of stage 1's cell as RAPID, are kept as they are
 (`apps/kynex/src/run/golden`): a writer that writes them otherwise fails
 the tests. The program must be for a robot
 with six revolute joints. Actions go as script once the cell is wired to
 the controller: under **I/O 연결** in the inspector of a gripper, a
 machine or a conveyor, give each of its outputs and inputs a number (0–7
-the standard digital I/O, 8–15 the configurable, 16–17 the tool's).
+the standard digital I/O, 8–15 the configurable, 16–17 the tool's; for
+ABB, signals `DO_KYNEX_n` and `DI_KYNEX_n`, listed at the top of the
+module, to be set up on the controller). In RAPID, joint moves go as
+`MoveAbsJ` with the taught joints, lines and arcs as `MoveL`/`MoveC` to
+targets in the base frame (`wobj0`), blends as `zonedata`, pallet points
+by `Offs`. Names and comments are kept to ASCII; other letters become
+`?` or `_`.
 
 - A grip sets the gripper's output (release clears it), then waits for
   its "closed" input, or its open/close time if it has none.
@@ -326,6 +335,28 @@ the standard digital I/O, 8–15 the configurable, 16–17 the tool's).
   --ignored`, then `check.py --name stage1` and `--io --name stage1`) its
   81 moves take 3.3 % longer than KYNEX plans, and every one ends where
   KYNEX says.
+- **On Doosan's emulator** (free, in Docker; the same cell on an M1013,
+  on a 1.2 m pedestal for its shorter reach to a tool held down):
+
+  ```
+  docker run -d --rm --privileged --name kynex_emulator -e ROBOT_MODEL=M1013       -p 12345:12345 doosanrobot/dsr_emulator:3.0.1
+  docker build -t kynex-run-drl tools/doosan
+  cargo test -p kynex doosan_stage_one -- --ignored
+  python tools/doosan/check.py
+  ```
+
+  `tools/doosan/run_drl` (built with Doosan's DRFL) registers the TCP and
+  starts the program; what it does is read from the emulator's log. Its
+  81 moves take 7.3 % longer than KYNEX plans — the controller takes about
+  0.1 s more over each move, short ones the most — and each ends within
+  1 mm of where KYNEX says.
+- DRL: joint moves are `movej` to the taught joints, each joint at its
+  share of its own top speed; lines and arcs `movel`/`movec` to poses in
+  `DR_BASE` (mm, ZYZ degrees); a joint move to a pallet place `movejx` in
+  the taught posture (`get_solution_space`). DRL cannot make a TCP: the
+  program names `KYNEX` with `set_tcp`, and gives its values at the top,
+  to register on the teach pendant. I/O 0–15 are the controller's 1–16,
+  16–17 the tool's 1–2.
 - MoveJ becomes `movej` with the taught joint positions.
 - MoveL becomes `movel` to the taught tool pose, in the controller's base
   frame (the `base` link, half a turn from `base_link`).
@@ -341,7 +372,14 @@ The **라이브러리** tab, beside the scene tree, lists equipment to place as
 thumbnails: each drawn from the piece at its usual size
 (`apps/kynex/src/library.rs`):
 
-- 로봇: UR10e + 이중 그리퍼, UR5e.
+- 로봇: UR10e + 이중 그리퍼, UR5e, ABB IRB 1600-10/1.45 + 이중 그리퍼,
+  Doosan M1013 + 이중 그리퍼(두산 `dsr_description2`의 관절·범위·속도.
+  에뮬레이터에서 영점 플랜지 `[0, 34.5, 1452.5]`와 대기 자세가 같음을 확인).
+  IRB 1600은 ROS-Industrial `abb_irb1600_support`의 관절 원점과 축,
+  ABB 제품 사양서의 관절 범위와 최고 속도를 따릅니다. 관절값이 컨트롤러와
+  같은 방향을 가리키고 `tool0`이 컨트롤러의 플랜지라서, 교정 자세의
+  플랜지가 ABB와 같은 `[[815, 0, 1186.5], [0.707107, 0, 0.707107, 0]]`로
+  나옵니다(시험으로 확인).
 - 공작기계: CNC 선반.
 - 성형기: 사출 성형기 (a 150 t class machine: clamp and mould behind a
   guard, injection unit with its hopper; length, width, height).

@@ -1146,3 +1146,31 @@ fn repeats_within_repeats_are_held_to_a_size() {
     let why = all[0].flatten(&all).unwrap_err();
     assert!(why.contains("100000"), "{why}");
 }
+
+#[test]
+fn repeats_of_empty_routines_are_held_to_a_size_too() {
+    use crate::program::Program;
+    // Routines with no steps of their own, calling each other a thousand
+    // times over: nothing made, but a thousand to the sixth calls.
+    let mut all: Vec<Program> = (0..6)
+        .map(|k| {
+            let mut p = Program::named(&format!("r{k}"), None, DVec3::ZERO);
+            if k < 5 {
+                p.steps.push(Step::Do(Action::Call {
+                    routine: format!("r{}", k + 1),
+                    times: 1000,
+                }));
+            }
+            p
+        })
+        .collect();
+    all[0].name = "main".into();
+    all[0].steps = vec![Step::Do(Action::Call {
+        routine: "r1".into(),
+        times: 1000,
+    })];
+    let started = std::time::Instant::now();
+    let why = all[0].flatten(&all).unwrap_err();
+    assert!(why.contains("100000"), "{why}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}

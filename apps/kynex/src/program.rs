@@ -374,10 +374,23 @@ impl Program {
     /// Also returns where each step comes from: the program's name and
     /// the step's own index in it.
     pub fn flatten(&self, all: &[Program]) -> Result<(Program, Vec<(String, usize)>), String> {
+        fn spend(budget: &mut usize) -> Result<(), String> {
+            if *budget == 0 {
+                return Err(format!(
+                    "서브루틴을 펼치면 {MAX_FLAT_STEPS}단계를 넘습니다: 반복 횟수를 줄이세요"
+                ));
+            }
+            *budget -= 1;
+            Ok(())
+        }
+        // Every step made and every call gone into is taken from one
+        // budget: repeats of a routine with no steps of its own would
+        // otherwise go round past any time, making nothing.
         fn into(
             program: &Program,
             all: &[Program],
             depth: usize,
+            budget: &mut usize,
             steps: &mut Vec<Step>,
             origin: &mut Vec<(String, usize)>,
         ) -> Result<(), String> {
@@ -394,15 +407,12 @@ impl Program {
                             .find(|p| p.name == *routine)
                             .ok_or_else(|| format!("서브루틴 {routine}이(가) 없습니다"))?;
                         for _ in 0..*times {
-                            into(called, all, depth + 1, steps, origin)?;
+                            spend(budget)?;
+                            into(called, all, depth + 1, budget, steps, origin)?;
                         }
                     }
                     other => {
-                        if steps.len() >= MAX_FLAT_STEPS {
-                            return Err(format!(
-                                "서브루틴을 펼치면 {MAX_FLAT_STEPS}단계를 넘습니다: 반복 횟수를 줄이세요"
-                            ));
-                        }
+                        spend(budget)?;
                         steps.push(other.clone());
                         origin.push((program.name.clone(), i));
                     }
@@ -412,7 +422,8 @@ impl Program {
         }
         let mut steps = Vec::new();
         let mut origin = Vec::new();
-        into(self, all, 0, &mut steps, &mut origin)?;
+        let mut budget = MAX_FLAT_STEPS;
+        into(self, all, 0, &mut budget, &mut steps, &mut origin)?;
         Ok((
             Program {
                 steps,

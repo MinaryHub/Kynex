@@ -289,13 +289,22 @@ the controller.
 
 ### The library: placing equipment
 
-The **라이브러리** tab, beside the scene tree, lists equipment to place
+The **라이브러리** tab, beside the scene tree, lists equipment to place as
+thumbnails: each drawn from the piece at its usual size
 (`apps/kynex/src/library.rs`):
 
 - 로봇: UR10e + 이중 그리퍼, UR5e.
 - 공작기계: CNC 선반.
+- 성형기: 사출 성형기 (a 150 t class machine: clamp and mould behind a
+  guard, injection unit with its hopper; length, width, height).
 - 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대.
+- 물류: 벨트 컨베이어 (length, belt width, height), AMR (a mobile base
+  with a top plate to carry a load; length, width, height).
 - 안전: 안전 펜스.
+
+The conveyor, the injection moulding machine and the AMR are laid out
+only, for now: they come with no role in the cell, so nothing moves on
+them yet.
 
 Drag an entry onto the scene, or click it and then click the scene. It
 lands on the floor, or on top of whatever is under the pointer (a robot

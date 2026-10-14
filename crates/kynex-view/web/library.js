@@ -17,6 +17,62 @@ async function post(request) {
   return response.json();
 }
 
+// Thumbnails, drawn at twice the size they show at.
+const THUMB = [160, 120];
+
+// Each template's thumbnail, as an image: drawn once from its triangles
+// (the `templates` event) on a canvas of its own, which is then let go.
+function drawThumbnails(templates) {
+  const out = new Map();
+  const canvas = document.createElement('canvas');
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+  } catch {
+    return out;
+  }
+  renderer.setSize(THUMB[0], THUMB[1], false);
+  renderer.setClearColor(0x000000, 0);
+  const camera = new THREE.PerspectiveCamera(30, THUMB[0] / THUMB[1], 0.01, 100);
+  camera.up.set(0, 0, 1);
+  for (const [key, parts] of Object.entries(templates)) {
+    const scene = new THREE.Scene();
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+    sun.position.set(-2, -3, 5);
+    scene.add(sun);
+    const box = new THREE.Box3();
+    for (const part of parts) {
+      if (!part.p.length) continue;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(part.p, 3));
+      geometry.computeVertexNormals();
+      const color = new THREE.Color().setRGB(part.c[0], part.c[1], part.c[2], THREE.LinearSRGBColorSpace);
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.1, flatShading: true }));
+      scene.add(mesh);
+      geometry.computeBoundingBox();
+      box.union(geometry.boundingBox);
+    }
+    if (box.isEmpty()) continue;
+    // From the front, a little to the left and above: the side work is
+    // done from.
+    const centre = box.getCenter(new THREE.Vector3());
+    const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
+    const away = new THREE.Vector3(-0.8, -1.4, 0.9).normalize();
+    camera.position.copy(centre).addScaledVector(away, (radius / Math.sin((camera.fov * Math.PI) / 360)) * 1.02);
+    camera.lookAt(centre);
+    renderer.render(scene, camera);
+    out.set(key, canvas.toDataURL('image/png'));
+    scene.traverse((o) => {
+      o.geometry?.dispose();
+      o.material?.dispose();
+    });
+  }
+  renderer.dispose();
+  renderer.forceContextLoss();
+  return out;
+}
+
 const deg = (r) => (r * 180) / Math.PI;
 const rad = (d) => (d * Math.PI) / 180;
 
@@ -25,6 +81,7 @@ export class LibraryPanel {
   constructor(ctx) {
     this.ctx = ctx;
     this.library = { templates: [], items: [] };
+    this.thumbs = new Map();
     this.list = document.getElementById('library-list');
     this.box = document.getElementById('insp-item');
     // A template picked to be placed with the next click on the scene.
@@ -175,6 +232,12 @@ export class LibraryPanel {
     if (s != null) this.showFor(s);
   }
 
+  // The `templates` event: what each template looks like.
+  setThumbnails(templates) {
+    this.thumbs = drawThumbnails(templates);
+    this.renderList();
+  }
+
   renderList() {
     const { escapeHtml } = this.ctx;
     const groups = new Map();
@@ -184,10 +247,15 @@ export class LibraryPanel {
     }
     let html = '';
     for (const [group, list] of groups) {
-      html += `<li class="lib-group">${escapeHtml(group)}</li>`;
+      html += `<li class="lib-group">${escapeHtml(group)}</li><li class="lib-grid">`;
       for (const t of list) {
-        html += `<li class="lib-template${t.key === this.armed ? ' armed' : ''}" draggable="true" data-template="${escapeHtml(t.key)}" title="장면으로 끌어 놓거나, 누른 뒤 장면을 누르세요">${escapeHtml(t.name)}</li>`;
+        const thumb = this.thumbs.get(t.key);
+        html += `<div class="lib-template${t.key === this.armed ? ' armed' : ''}" draggable="true" data-template="${escapeHtml(t.key)}" title="${escapeHtml(t.name)} · 장면으로 끌어 놓거나, 누른 뒤 장면을 누르세요">
+          ${thumb ? `<img class="lib-thumb" src="${thumb}" alt="" draggable="false">` : '<span class="lib-thumb"></span>'}
+          <span class="lib-name">${escapeHtml(t.name)}</span>
+        </div>`;
       }
+      html += '</li>';
     }
     if (this.library.items.length) {
       html += '<li class="lib-group">배치된 장비</li>';

@@ -60,12 +60,25 @@ impl Posing {
                 let all: Value =
                     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", from.display()))?;
                 let list = |key: &str| all[key].as_array().cloned().unwrap_or_default();
+                // Programs from an older layout, and those in scenarios,
+                // brought up to this one.
+                let version = all["version"].as_u64().unwrap_or(1);
+                let mut programs = list("programs");
+                for p in &mut programs {
+                    program::migrate(p, version);
+                }
+                let mut scenarios = list("scenarios");
+                for s in &mut scenarios {
+                    for p in s["programs"].as_array_mut().into_iter().flatten() {
+                        program::migrate(p, version);
+                    }
+                }
                 (
-                    list("programs"),
+                    programs,
                     Project {
                         cell: list("cell"),
                         library: list("library"),
-                        scenarios: list("scenarios"),
+                        scenarios,
                     },
                 )
             }

@@ -865,3 +865,42 @@ fn ursim_program() {
     )
     .unwrap();
 }
+
+#[test]
+fn a_program_for_a_library_robot_saved_before_layout_2_is_turned_at_the_base() {
+    let mut c = cell1();
+    tending(&mut c);
+    let now = c.posing.saved_programs(&c.doc).remove(0);
+    let pan = |v: &serde_json::Value| -> Vec<f64> {
+        v["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["joints"].as_array().cloned().unwrap_or_default())
+            .filter(|j| j["name"] == "shoulder_pan_joint")
+            .map(|j| j["position"].as_f64().unwrap())
+            .collect()
+    };
+    // As layout 1 had it: the base joint half a turn the other way.
+    let mut old = now.clone();
+    for s in old["steps"].as_array_mut().unwrap() {
+        for j in s["joints"].as_array_mut().into_iter().flatten() {
+            if j["name"] == "shoulder_pan_joint" {
+                let q = j["position"].as_f64().unwrap() - std::f64::consts::PI;
+                j["position"] = json!(q);
+            }
+        }
+    }
+    let mut kept = old.clone();
+    crate::program::migrate(&mut kept, 2);
+    assert_eq!(kept, old, "a file of this layout is as it is");
+    crate::program::migrate(&mut old, 1);
+    for (a, b) in pan(&old).iter().zip(pan(&now)) {
+        let d = (a - b).rem_euclid(std::f64::consts::TAU);
+        assert!(
+            d < 1e-9 || std::f64::consts::TAU - d < 1e-9,
+            "{a} against {b}"
+        );
+        assert!(a.abs() < std::f64::consts::TAU, "{a}");
+    }
+}

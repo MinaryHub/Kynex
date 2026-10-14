@@ -617,6 +617,7 @@ impl Stage {
         }
         server.state("cell", &self.cell.to_json(scene));
         server.state("library", &self.library.to_json());
+        server.state("templates", Library::thumbnails());
         server.state("scenarios", &self.scenarios_json());
         let programs = self.posing.take_programs_changed();
         if programs {

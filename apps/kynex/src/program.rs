@@ -30,8 +30,46 @@ use serde_json::{json, Value};
 
 use crate::cell::{Command, Signal};
 
-/// The programs file's layout, written into it.
-pub const FILE_VERSION: u64 = 1;
+/// The programs file's layout, written into it. 2: the library's UR robots
+/// turned at the base as ur_description has them (see [`migrate`]).
+pub const FILE_VERSION: u64 = 2;
+
+/// Brings a program saved in a file of layout `version` up to this one.
+///
+/// Before layout 2 the library's UR robots hung their arm from `base_link`
+/// unturned, where ur_description (and the controller) turn it half a
+/// turn: the same pose then had the base joint half a turn round. A
+/// program for one of those robots — placed equipment, by its identity —
+/// has its base joint turned so, to stand where it was taught.
+pub fn migrate(saved: &mut Value, version: u64) {
+    let library_robot = saved["robot"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .is_some_and(|u| (crate::library::EQUIPMENT..crate::cell::PARTS).contains(&u));
+    if version >= 2 || !library_robot {
+        return;
+    }
+    let turn = |joints: &mut Value| {
+        for j in joints.as_array_mut().into_iter().flatten() {
+            if j["name"] == "shoulder_pan_joint" {
+                if let Some(q) = j["position"].as_f64() {
+                    let q = q + std::f64::consts::PI;
+                    j["position"] = json!(if q > std::f64::consts::TAU - 1e-3 {
+                        q - std::f64::consts::TAU
+                    } else {
+                        q
+                    });
+                }
+            }
+        }
+    };
+    for list in ["steps", "points"] {
+        for step in saved[list].as_array_mut().into_iter().flatten() {
+            turn(&mut step["joints"]);
+            turn(&mut step["via"]);
+        }
+    }
+}
 
 /// A new joint move's share of each joint's top speed.
 pub const JOINT_SPEED: f64 = 0.5;

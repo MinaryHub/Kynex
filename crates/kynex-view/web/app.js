@@ -467,6 +467,7 @@ function connect() {
   source.addEventListener('programs', (e) => robotPanel.setPrograms(JSON.parse(e.data)));
   source.addEventListener('contacts', (e) => setContacts(JSON.parse(e.data)));
   source.addEventListener('library', (e) => libraryPanel.setLibrary(JSON.parse(e.data)));
+  source.addEventListener('templates', (e) => libraryPanel.setThumbnails(JSON.parse(e.data)));
   source.addEventListener('timeline', (e) => timelinePanel.setTimeline(JSON.parse(e.data)));
   source.addEventListener('scenarios', (e) => timelinePanel.setScenarios(JSON.parse(e.data)));
   source.addEventListener('cell', (e) => {

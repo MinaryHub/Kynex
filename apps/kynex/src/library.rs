@@ -1,6 +1,8 @@
 //! The library: equipment to place in a cell — robots, CNC machines,
-//! pallet tables, pedestals, fences — each made from a template for the
-//! sizes it is given, as Visual Components' catalogue does.
+//! injection moulding machines, pallet tables, conveyors, AMRs, pedestals,
+//! fences — each made from a template for the sizes it is given, as Visual
+//! Components' catalogue does. Each template comes with a thumbnail: the
+//! piece at its usual size, as triangles, for the page to draw.
 //!
 //! Placed equipment is KYNEX's own, as the cell's parts are: it is added to
 //! the scene KYNEX shows, under identities of its own (see [`EQUIPMENT`]),
@@ -88,6 +90,17 @@ pub const TEMPLATES: &[Template] = &[
         ],
     },
     Template {
+        key: "injection_molder",
+        name: "사출 성형기",
+        group: "성형기",
+        // A 150 t machine: some 5 m long, 1.5 m wide, 2 m to its hopper.
+        params: &[
+            p("length", "길이", 5.0, 3.0, 9.0),
+            p("width", "폭", 1.5, 1.0, 2.5),
+            p("height", "높이", 2.0, 1.5, 3.0),
+        ],
+    },
+    Template {
         key: "infeed_station",
         name: "투입 팔레트 테이블",
         group: "주변 장치",
@@ -105,6 +118,27 @@ pub const TEMPLATES: &[Template] = &[
             p("height", "높이", 0.77, 0.3, 1.5),
             p("plate_w", "판 폭", 0.55, 0.2, 2.0),
             p("plate_d", "판 깊이", 0.45, 0.2, 2.0),
+        ],
+    },
+    Template {
+        key: "conveyor",
+        name: "벨트 컨베이어",
+        group: "물류",
+        params: &[
+            p("length", "길이", 2.0, 0.5, 12.0),
+            p("width", "벨트 폭", 0.5, 0.2, 1.5),
+            p("height", "높이", 0.8, 0.3, 1.5),
+        ],
+    },
+    Template {
+        key: "amr",
+        name: "AMR (자율 이동 로봇)",
+        group: "물류",
+        // A 250 kg-class mobile base.
+        params: &[
+            p("length", "길이", 0.9, 0.5, 2.0),
+            p("width", "폭", 0.6, 0.4, 1.5),
+            p("height", "높이", 0.35, 0.2, 0.8),
         ],
     },
     Template {
@@ -412,6 +446,29 @@ impl Library {
         changes
     }
 
+    /// The `templates` event: each template at its usual size, as coloured
+    /// triangles, for the page to draw its thumbnail by. Made once.
+    pub fn thumbnails() -> &'static str {
+        static THUMBNAILS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        THUMBNAILS.get_or_init(|| {
+            let mut out = serde_json::Map::new();
+            for t in TEMPLATES {
+                let item = Item {
+                    id: 0,
+                    template: t.key.to_string(),
+                    name: t.name.to_string(),
+                    params: BTreeMap::new(),
+                    at: DVec3::ZERO,
+                    yaw: 0.0,
+                };
+                if let Ok(built) = build(&item) {
+                    out.insert(t.key.to_string(), triangles(&built.doc));
+                }
+            }
+            Value::Object(out).to_string()
+        })
+    }
+
     /// The `library` event: what can be placed, and what is.
     pub fn to_json(&self) -> String {
         json!({
@@ -435,6 +492,37 @@ impl Library {
         })
         .to_string()
     }
+}
+
+/// Every mesh of `doc` where it stands, as `[{"c": [r, g, b], "p": [x, y,
+/// z, …]}]`: a colour, and three corners a triangle, to the millimetre.
+fn triangles(doc: &Document) -> Value {
+    let mut parts = Vec::new();
+    for (id, object) in doc.objects() {
+        let Some(mesh) = object.mesh().and_then(|m| doc.mesh(m)) else {
+            continue;
+        };
+        let world = doc.world_transform(id);
+        let colour = doc.material_at(id, 0).map_or([0.7, 0.72, 0.75], |m| {
+            [m.base_color.r, m.base_color.g, m.base_color.b]
+        });
+        let at: Vec<DVec3> = mesh
+            .positions()
+            .iter()
+            .map(|p| world.transform_point3(p.as_dvec3()))
+            .collect();
+        let corners: Vec<f64> = mesh
+            .triangulate()
+            .indices
+            .iter()
+            .flat_map(|i| {
+                let p = at[*i as usize];
+                [p.x, p.y, p.z].map(|v| (v * 1000.0).round() / 1000.0)
+            })
+            .collect();
+        parts.push(json!({ "c": colour, "p": corners }));
+    }
+    Value::Array(parts)
 }
 
 /// The roles `built` comes with, by the identities its objects take in the
@@ -600,6 +688,36 @@ fn build(item: &Item) -> Result<Built, String> {
             };
             roles.push((plate, kind));
         }
+        "conveyor" => {
+            let c = Colours::new(&mut doc);
+            conveyor(
+                &mut doc,
+                &c,
+                item.param("length"),
+                item.param("width"),
+                item.param("height"),
+            );
+        }
+        "injection_molder" => {
+            let c = Colours::new(&mut doc);
+            molder(
+                &mut doc,
+                &c,
+                item.param("length"),
+                item.param("width"),
+                item.param("height"),
+            );
+        }
+        "amr" => {
+            let c = Colours::new(&mut doc);
+            amr(
+                &mut doc,
+                &c,
+                item.param("length"),
+                item.param("width"),
+                item.param("height"),
+            );
+        }
         "pedestal" => {
             let c = Colours::new(&mut doc);
             let (h, s) = (item.param("height"), item.param("size"));
@@ -640,6 +758,9 @@ struct Colours {
     pallet: MaterialId,
     dark: MaterialId,
     fence: MaterialId,
+    belt: MaterialId,
+    body: MaterialId,
+    accent: MaterialId,
 }
 
 impl Colours {
@@ -660,6 +781,9 @@ impl Colours {
             pallet: colour("pallet", [0.20, 0.45, 0.75], 0.0),
             dark: colour("dark", [0.12, 0.13, 0.15], 0.0),
             fence: colour("fence", [0.95, 0.75, 0.10], 0.0),
+            belt: colour("belt", [0.06, 0.06, 0.07], 0.0),
+            body: colour("body", [0.93, 0.93, 0.91], 0.0),
+            accent: colour("accent", [0.95, 0.45, 0.12], 0.0),
         }
     }
 }
@@ -703,6 +827,25 @@ fn post(
     if parent.is_some() {
         doc.set_parent(id, parent).unwrap();
     }
+    id
+}
+
+/// A cylinder lying along X (`along_x`) or else Y, its centre at `centre`.
+fn bar(
+    doc: &mut Document,
+    name: &str,
+    radius: f64,
+    length: f64,
+    centre: [f64; 3],
+    along_x: bool,
+    colour: MaterialId,
+) -> ObjectId {
+    let id = post(doc, name, radius, length, centre, colour, None);
+    doc.object_mut(id).unwrap().transform.rotation = if along_x {
+        DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2)
+    } else {
+        DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2)
+    };
     id
 }
 
@@ -801,6 +944,212 @@ fn cnc(doc: &mut Document, c: &Colours, item: &Item) -> ObjectId {
         m,
     );
     machine
+}
+
+/// A belt conveyor `l` long along X, centred on the origin, its belt `w`
+/// wide with its top at `h`: side frames, legs at most 1.5 m apart, and a
+/// drum at each end.
+fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
+    block(
+        doc,
+        "belt",
+        [l, w, 0.02],
+        [0.0, 0.0, h - 0.01],
+        c.belt,
+        None,
+    );
+    for (side, y) in [("left", -1.0), ("right", 1.0)] {
+        let y = y * (w / 2.0 + 0.02);
+        block(
+            doc,
+            &format!("frame_{side}"),
+            [l + 0.1, 0.04, 0.14],
+            [0.0, y, h - 0.06],
+            c.steel,
+            None,
+        );
+        let legs = ((l / 1.5).ceil() as usize).max(1);
+        for i in 0..=legs {
+            let x = -l / 2.0 + 0.05 + (l - 0.1) * i as f64 / legs as f64;
+            block(
+                doc,
+                &format!("leg_{side}{i}"),
+                [0.05, 0.05, h - 0.12],
+                [x, y, (h - 0.12) / 2.0],
+                c.steel,
+                None,
+            );
+        }
+    }
+    for (end, x) in [("in", -1.0), ("out", 1.0)] {
+        bar(
+            doc,
+            &format!("drum_{end}"),
+            0.05,
+            w + 0.02,
+            [x * l / 2.0, 0.0, h - 0.05],
+            false,
+            c.dark,
+        );
+    }
+}
+
+/// An injection moulding machine `l` long along X, its operator's side at
+/// y = 0 facing −Y as a CNC machine's front: a bed, the clamping unit on
+/// the left (platens, tie bars, the mould behind a guard), the injection
+/// unit on the right (barrel and hopper), and the control panel.
+fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
+    let bed = 0.9;
+    let (x0, y0) = (-l / 2.0, w / 2.0);
+    block(doc, "bed", [l, w, bed], [0.0, y0, bed / 2.0], c.body, None);
+    // The clamp: a fixed and a moving platen, the mould between.
+    let clamp = l * 0.45;
+    let tall = (h - bed - 0.35).max(0.6);
+    let top = bed + tall;
+    for (name, x) in [
+        ("platen_end", 0.1),
+        ("platen_moving", 0.45),
+        ("platen_fixed", clamp - 0.1),
+    ] {
+        block(
+            doc,
+            name,
+            [0.15, w * 0.75, tall],
+            [x0 + x, y0, bed + tall / 2.0],
+            c.door,
+            None,
+        );
+    }
+    block(
+        doc,
+        "mould",
+        [clamp - 0.75, w * 0.5, tall * 0.7],
+        [x0 + (0.55 + clamp - 0.2) / 2.0, y0, bed + tall / 2.0],
+        c.steel,
+        None,
+    );
+    for (k, (dy, dz)) in [(-1.0, 0.15), (1.0, 0.15), (-1.0, 0.85), (1.0, 0.85)]
+        .iter()
+        .enumerate()
+    {
+        bar(
+            doc,
+            &format!("tie_bar{k}"),
+            0.04,
+            clamp - 0.1,
+            [x0 + clamp / 2.0, y0 + dy * w * 0.3, bed + tall * dz],
+            true,
+            c.steel,
+        );
+    }
+    // The guard over the clamp, on the operator's side.
+    block(
+        doc,
+        "guard",
+        [clamp, 0.03, tall + 0.2],
+        [x0 + clamp / 2.0, -0.02, bed + (tall + 0.2) / 2.0],
+        c.accent,
+        None,
+    );
+    // The injection unit: the barrel into the fixed platen, the hopper on it.
+    let unit = l - clamp - 0.2;
+    bar(
+        doc,
+        "barrel",
+        0.09,
+        unit,
+        [x0 + clamp + unit / 2.0, y0, bed + tall / 2.0],
+        true,
+        c.steel,
+    );
+    block(
+        doc,
+        "injection_unit",
+        [unit * 0.45, w * 0.55, tall * 0.55],
+        [x0 + clamp + unit * 0.7, y0, bed + tall * 0.5],
+        c.door,
+        None,
+    );
+    post(
+        doc,
+        "hopper",
+        0.18,
+        (h - top).max(0.3),
+        [
+            x0 + clamp + unit * 0.45,
+            y0,
+            top + (h - top).max(0.3) / 2.0 - 0.05,
+        ],
+        c.body,
+        None,
+    );
+    block(
+        doc,
+        "panel",
+        [0.5, 0.06, 0.6],
+        [x0 + clamp + 0.4, -0.03, bed + 0.5],
+        c.dark,
+        None,
+    );
+}
+
+/// An autonomous mobile robot `l` × `w` × `h`, centred on the origin: a
+/// body with a top plate to carry a load, a bumper round its foot, drive
+/// wheels at its middle and a laser scanner at its front.
+fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
+    let clearance = 0.04;
+    block(
+        doc,
+        "body",
+        [l, w, h - clearance - 0.02],
+        [0.0, 0.0, clearance + (h - clearance - 0.02) / 2.0],
+        c.body,
+        None,
+    );
+    block(
+        doc,
+        "top",
+        [l - 0.02, w - 0.02, 0.02],
+        [0.0, 0.0, h - 0.01],
+        c.dark,
+        None,
+    );
+    block(
+        doc,
+        "bumper",
+        [l + 0.02, w + 0.02, 0.06],
+        [0.0, 0.0, clearance + 0.05],
+        c.dark,
+        None,
+    );
+    block(
+        doc,
+        "stripe",
+        [l + 0.004, w + 0.004, 0.025],
+        [0.0, 0.0, h * 0.7],
+        c.accent,
+        None,
+    );
+    for (side, y) in [("left", -1.0), ("right", 1.0)] {
+        bar(
+            doc,
+            &format!("wheel_{side}"),
+            0.08,
+            0.05,
+            [0.0, y * (w / 2.0 - 0.03), 0.08],
+            false,
+            c.belt,
+        );
+    }
+    post(
+        doc,
+        "scanner",
+        0.04,
+        0.06,
+        [l / 2.0 - 0.06, 0.0, h + 0.03],
+        c.dark,
+        None,
+    );
 }
 
 /// A fence `l` × `w` round the origin: posts at most 1.3 m apart, and three

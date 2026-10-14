@@ -668,6 +668,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 }
 .lib-template:hover { border-color: var(--faint); }
 .lib-template.armed { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+/* Templates as cards, two to a row: what each looks like, and its name. */
+.lib-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0 2px; }
+.lib-grid .lib-template { height: auto; display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 0; padding: 4px 4px 6px; text-align: center; }
+.lib-thumb { display: block; width: 100%; aspect-ratio: 4 / 3; border-radius: 4px; background: var(--bg); object-fit: contain; pointer-events: none; }
+.lib-name { font-size: 11px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .lib-item { cursor: pointer; background: transparent; border-style: dashed; color: var(--muted); }
 .lib-item:hover { color: var(--text); }
 #canvas.placing { cursor: crosshair; }

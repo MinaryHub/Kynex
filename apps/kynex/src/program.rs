@@ -88,6 +88,10 @@ const MAX_CALL_DEPTH: usize = 8;
 /// The most times a call repeats.
 pub const MAX_TIMES: u32 = 1000;
 
+/// The most steps a program comes to with its calls replaced: repeats
+/// within repeats would otherwise multiply past any memory.
+const MAX_FLAT_STEPS: usize = 100_000;
+
 /// The spacing of a drawn path, seconds.
 const TRACE_STEP: f64 = 0.02;
 
@@ -394,6 +398,11 @@ impl Program {
                         }
                     }
                     other => {
+                        if steps.len() >= MAX_FLAT_STEPS {
+                            return Err(format!(
+                                "서브루틴을 펼치면 {MAX_FLAT_STEPS}단계를 넘습니다: 반복 횟수를 줄이세요"
+                            ));
+                        }
                         steps.push(other.clone());
                         origin.push((program.name.clone(), i));
                     }

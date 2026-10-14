@@ -1118,3 +1118,31 @@ fn a_routine_is_called_times_over_renamed_and_saved() {
     let why = c.posing.runnable(c.robot).unwrap_err();
     assert!(why.contains("스스로"), "{why}");
 }
+
+#[test]
+fn repeats_within_repeats_are_held_to_a_size() {
+    use crate::program::Program;
+    // Each routine calls the next a thousand times: a thousand to the
+    // sixth steps, were they all made.
+    let mut all: Vec<Program> = (0..6)
+        .map(|k| {
+            let mut p = Program::named(&format!("r{k}"), None, DVec3::ZERO);
+            p.steps.push(if k < 5 {
+                Step::Do(Action::Call {
+                    routine: format!("r{}", k + 1),
+                    times: 1000,
+                })
+            } else {
+                Step::Do(Action::Delay { seconds: 1.0 })
+            });
+            p
+        })
+        .collect();
+    all[0].name = "main".into();
+    all[0].steps = vec![Step::Do(Action::Call {
+        routine: "r1".into(),
+        times: 1000,
+    })];
+    let why = all[0].flatten(&all).unwrap_err();
+    assert!(why.contains("100000"), "{why}");
+}

@@ -3,6 +3,9 @@
 //! does to the cell — grip, release, tell a machine to open or start, wait
 //! for it to say it is done (see [`Action`]).
 //!
+//! A point may be taught in a machine's or a pallet's frame (see
+//! [`Frame`]): moved with the equipment, the point moves with it.
+//!
 //! A point may stand on a pallet (see [`Point::pallet`]): taught over one
 //! of its places, it is run over the place the pallet's count has reached,
 //! and [`Action::Next`] moves the count on — one program for every place.
@@ -22,7 +25,7 @@ use kreate_math::{DAffine3, DVec3};
 use kreate_scene::Document;
 use kynex_kin::path::{self, MoveKind, Plan, Problem, Waypoint};
 use kynex_kin::urscript::{self, Export, Move};
-use kynex_kin::{Kinematics, Tool};
+use kynex_kin::{Goal, Kinematics, Options, Tool};
 use serde_json::{json, Value};
 
 use crate::cell::{Command, Signal};
@@ -38,6 +41,16 @@ pub const LINEAR_SPEED: f64 = 0.25;
 /// The spacing of a drawn path, seconds.
 const TRACE_STEP: f64 = 0.02;
 
+/// The equipment a point is taught in: run, the tool goes where it was
+/// taught as seen from the equipment, wherever the equipment stands now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    /// The equipment: a CNC machine or a pallet.
+    pub object: u64,
+    /// Where it stood in the world when the point was taught.
+    pub taught_in: DAffine3,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Point {
     pub name: String,
@@ -49,6 +62,8 @@ pub struct Point {
     /// as far from the place the pallet's count has reached as it was
     /// taught from the place nearest it, turned as taught.
     pub pallet: Option<u64>,
+    /// The equipment it is taught in, if any.
+    pub frame: Option<Frame>,
 }
 
 /// What the robot does between moves.
@@ -101,6 +116,7 @@ impl Program {
             },
             positions,
             pallet: None,
+            frame: None,
         };
         self.insert(Step::Move(point), after);
     }
@@ -117,6 +133,100 @@ impl Program {
             Step::Move(p) => Some((i, p)),
             Step::Do(_) => None,
         })
+    }
+
+    /// Copies steps `from` to `to` for CNC machine `machine`, after them:
+    /// the same work at another machine. The machine the steps tell and
+    /// wait for becomes `machine`; points in its frame are solved again to
+    /// stand as far from `machine` as they stood from it, each from the one
+    /// before so the arm keeps its posture; other points are copied as
+    /// they are. Returns how many steps were added.
+    pub fn copy_for(
+        &mut self,
+        from: usize,
+        to: usize,
+        machine: u64,
+        doc: &Document,
+        kin: &Kinematics,
+    ) -> Result<usize, String> {
+        if from > to || to >= self.steps.len() {
+            return Err("복제할 구간이 맞지 않습니다".into());
+        }
+        let range = self.steps[from..=to].to_vec();
+        // The machine the steps are for: the first they tell or wait for.
+        let source = range
+            .iter()
+            .find_map(|s| match s {
+                Step::Do(Action::Command { machine, .. } | Action::Wait { machine, .. }) => {
+                    Some(*machine)
+                }
+                Step::Move(p) if p.pallet.is_none() => p.frame.map(|f| f.object),
+                _ => None,
+            })
+            .ok_or("구간에 CNC 명령이나 CNC 기준 지점이 없습니다")?;
+        if source == machine {
+            return Err("같은 장비입니다".into());
+        }
+        let there = doc
+            .object_by_uid(kreate_scene::Uid::from_raw(machine))
+            .map(|id| doc.world_transform(id))
+            .ok_or("no such machine")?;
+        let tool = self.tool(kin).ok_or("툴이 정해지지 않았습니다")?;
+        let mut seed: Option<Vec<f64>> = None;
+        let mut copies = Vec::new();
+        for step in range {
+            copies.push(match step {
+                Step::Do(Action::Command {
+                    machine: m,
+                    command,
+                }) if m == source => Step::Do(Action::Command { machine, command }),
+                Step::Do(Action::Wait { machine: m, signal }) if m == source => {
+                    Step::Do(Action::Wait { machine, signal })
+                }
+                Step::Do(a) => Step::Do(a),
+                Step::Move(mut p) => {
+                    self.taught += 1;
+                    p.name = format!("P{}", self.taught);
+                    if let Some(frame) =
+                        p.frame.filter(|f| f.object == source && p.pallet.is_none())
+                    {
+                        let q = kin.with(&p.positions);
+                        let goal = there * frame.taught_in.inverse() * kin.pose(&q, &tool);
+                        let (_, rotation, position) = goal.to_scale_rotation_translation();
+                        let found = kin.solve(
+                            &tool,
+                            &Goal {
+                                position,
+                                rotation: Some(rotation),
+                            },
+                            seed.as_deref().unwrap_or(&q),
+                            &Options {
+                                restarts: 16,
+                                ..Options::default()
+                            },
+                        );
+                        if !found.reached {
+                            return Err(format!("{}: 복제한 위치에 닿지 않습니다", p.name));
+                        }
+                        p.positions = kin
+                            .vars
+                            .iter()
+                            .map(|v| v.uid)
+                            .zip(found.positions.iter().copied())
+                            .collect();
+                        p.frame = Some(Frame {
+                            object: machine,
+                            taught_in: there,
+                        });
+                        seed = Some(found.positions);
+                    }
+                    Step::Move(p)
+                }
+            });
+        }
+        let added = copies.len();
+        self.steps.splice(to + 1..to + 1, copies);
+        Ok(added)
     }
 
     /// The pallets it goes through place by place: those it moves on.
@@ -177,6 +287,9 @@ impl Program {
                     })).collect::<Vec<_>>(),
                     "pallet": p.pallet.map(|u| u.to_string()),
                     "pallet_name": p.pallet.map(name),
+                    "frame": p.frame.map(|f| f.object.to_string()),
+                    "frame_name": p.frame.map(|f| name(f.object)),
+                    "frame_at": p.frame.map(|f| affine_json(&f.taught_in)),
                 }),
                 Step::Do(a) => action_json(a, &|u| name(u)),
             }).collect::<Vec<_>>(),
@@ -241,6 +354,13 @@ impl Program {
                         positions,
                         pallet: if s["pallet"].is_string() {
                             object(s, "pallet")
+                        } else {
+                            None
+                        },
+                        frame: if s["frame"].is_string() {
+                            object(s, "frame")
+                                .zip(affine_of(&s["frame_at"]))
+                                .map(|(object, taught_in)| Frame { object, taught_in })
                         } else {
                             None
                         },
@@ -484,6 +604,8 @@ impl Program {
                         "move": into.get(&i).map(|s| move_json(*s)),
                         "pallet": p.pallet.map(|u| u.to_string()),
                         "pallet_name": p.pallet.map(name),
+                        "frame": p.frame.map(|f| f.object.to_string()),
+                        "frame_name": p.frame.map(|f| name(f.object)),
                     })
                 }
                 Step::Do(a) => action_json(a, &name),
@@ -522,6 +644,7 @@ pub fn is_op(op: &str) -> bool {
             | "clear"
             | "goto"
             | "urscript"
+            | "copy"
     )
 }
 
@@ -592,6 +715,19 @@ pub fn action_of(v: &Value) -> Result<Action, String> {
         },
         other => return Err(format!("unknown step {other:?}")),
     })
+}
+
+/// A placement as saved: its matrix, column by column (the axes, then where
+/// it is), so that it reads back exactly.
+fn affine_json(a: &DAffine3) -> Value {
+    json!(a.to_cols_array())
+}
+
+fn affine_of(v: &Value) -> Option<DAffine3> {
+    let list = v.as_array()?;
+    let cols: Vec<f64> = list.iter().filter_map(Value::as_f64).collect();
+    let cols: [f64; 12] = cols.try_into().ok()?;
+    Some(DAffine3::from_cols_array(&cols))
 }
 
 /// Every object's name, by identity.

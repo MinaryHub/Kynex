@@ -552,3 +552,128 @@ fn points_on_a_pallet_go_from_place_to_place() {
     assert!(near(c.slot(c.infeed, cycles + 1)));
     assert!(!near(c.slot(c.outfeed, cycles + 1)));
 }
+
+/// Moves the first CNC machine to `at`, turned `yaw`, and builds the scene
+/// again: as when it is dragged in the viewer.
+fn move_machine(c: &mut Cell1, at: [f64; 3], yaw: f64) {
+    let item = c
+        .library
+        .items()
+        .iter()
+        .find(|i| i.template == "cnc_lathe")
+        .unwrap()
+        .id;
+    c.library
+        .handle(&json!({"op": "move", "item": item, "at": at, "yaw": yaw}).to_string());
+    let mut doc = Document::new();
+    c.library.apply(&mut doc);
+    c.doc = doc;
+}
+
+#[test]
+fn points_in_a_machines_frame_follow_it_when_it_moves() {
+    // The moves into and out of the machine, in its frame.
+    let into_machine = [6, 7, 9, 10, 19, 20, 22];
+    let mut framed = cell1();
+    tending(&mut framed);
+    let m = framed.machine;
+    for i in into_machine {
+        let a = ask_posing(
+            &mut framed.posing,
+            &framed.doc,
+            json!({"op": "edit", "robot": framed.robot.to_string(), "index": i, "frame": m.to_string()}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+    }
+    // Saved and read back, it keeps its frames.
+    let saved = framed.posing.saved_programs(&framed.doc);
+    let (_, again) = crate::program::Program::from_saved(&saved[0], &framed.doc).unwrap();
+    assert_eq!(&again, framed.posing.program(framed.robot).unwrap());
+    let mut plain = cell1();
+    tending(&mut plain);
+
+    // The machine 10 cm to the side and turned a little.
+    for c in [&mut framed, &mut plain] {
+        move_machine(c, [0.1, 0.75, 0.0], 0.1);
+    }
+    let (runner, t) = framed.run(120.0);
+    let state = runner.to_json(t);
+    assert_eq!(state["state"], "done", "{state}");
+    let cell: serde_json::Value = serde_json::from_str(&framed.cell.to_json(&framed.doc)).unwrap();
+    let parts = cell["parts"].as_array().unwrap();
+    assert_eq!(parts.iter().filter(|p| p["finished"] == true).count(), 1);
+
+    // Taught in the world, the program misses the chuck it moved.
+    let (runner, t) = plain.run(120.0);
+    let state = runner.to_json(t);
+    assert_eq!(state["state"], "alarm", "{state}");
+}
+
+fn edit_step(c: &mut Cell1, index: usize, field: &str, uid: u64) {
+    let a = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "edit", "robot": c.robot.to_string(), "index": index, field: uid.to_string()}),
+    );
+    assert_eq!(a["ok"], true, "{a}");
+}
+
+#[test]
+fn work_taught_at_one_machine_is_copied_for_another() {
+    let mut c = cell_with(2, 10.0);
+    let (m1, m2) = (c.machines[0], c.machines[1]);
+    let (infeed, outfeed) = (c.infeed, c.outfeed);
+    // At the first machine only: load, unload, and the pallets on.
+    load(&mut c, m1);
+    unload(&mut c, m1);
+    c.act(json!({"type": "next", "pallet": infeed.to_string()}));
+    c.act(json!({"type": "next", "pallet": outfeed.to_string()}));
+    for i in [0, 1, 3] {
+        edit_step(&mut c, i, "pallet", infeed);
+    }
+    for i in [24, 25, 27] {
+        edit_step(&mut c, i, "pallet", outfeed);
+    }
+    for i in [6, 7, 9, 10, 19, 20, 22, 23] {
+        edit_step(&mut c, i, "frame", m1);
+    }
+    let steps = c.posing.program(c.robot).unwrap().steps.len();
+    let a = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "copy", "robot": c.robot.to_string(), "from": 0, "to": steps - 1,
+               "machine": m2.to_string()}),
+    );
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(a["added"], steps);
+    let program = c.posing.program(c.robot).unwrap();
+    assert_eq!(program.steps.len(), steps * 2);
+    // The copy tells and waits for the second machine, in its frame.
+    for step in &program.steps[steps..] {
+        match step {
+            Step::Do(Action::Command { machine, .. } | Action::Wait { machine, .. }) => {
+                assert_eq!(*machine, m2)
+            }
+            Step::Move(p) => assert!(p.frame.is_none_or(|f| f.object != m1)),
+            _ => {}
+        }
+    }
+
+    let (runner, t, timeline) = c.run_timed(150.0);
+    let state = runner.to_json(t);
+    assert_eq!(state["state"], "done", "{state}");
+    // Both machines cut once, and two parts are out on the outfeed.
+    let j = timeline.to_json();
+    let cut: Vec<f64> = j["lanes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["group"] == "machine")
+        .map(|l| l["totals"]["cut"].as_f64().unwrap_or(0.0))
+        .collect();
+    assert_eq!(cut.len(), 2);
+    assert!(cut.iter().all(|c| (c - 10.0).abs() < 0.1), "{cut:?}");
+    let cell: serde_json::Value = serde_json::from_str(&c.cell.to_json(&c.doc)).unwrap();
+    let parts = cell["parts"].as_array().unwrap();
+    assert_eq!(parts.iter().filter(|p| p["finished"] == true).count(), 2);
+}

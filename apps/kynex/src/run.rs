@@ -223,10 +223,7 @@ impl Runner {
         Ok(match step {
             Step::Move(point) => {
                 let here = posing.positions(&self.kin, self.root);
-                let positions = match point.pallet {
-                    Some(pallet) => self.on_pallet(&point, pallet, cell, scene)?,
-                    None => self.kin.with(&point.positions),
-                };
+                let positions = self.target(&point, cell, scene)?;
                 let to = Waypoint {
                     kind: point.kind,
                     positions,
@@ -271,23 +268,78 @@ impl Runner {
         })
     }
 
-    /// Where `point`, taught over a place of `pallet`, is run: over the
-    /// place the pallet's count has reached, as far from it and turned as
-    /// it was taught. The joints come from the taught ones, so the arm
-    /// keeps the posture it was taught in.
-    fn on_pallet(
+    /// Where `point` is run, as joint positions: where it was taught, or
+    /// — in a frame — moved as its equipment has moved since, and — on a
+    /// pallet — over the place the pallet's count has reached, as far
+    /// from it and turned as it was taught. The joints are solved from the
+    /// taught ones, so the arm keeps the posture it was taught in.
+    fn target(&self, point: &Point, cell: &Cell, scene: &Document) -> Result<Vec<f64>, String> {
+        let taught = self.kin.with(&point.positions);
+        let mut pose = self.kin.pose(&taught, &self.tool);
+        // How the equipment has moved since: the identity if it has not.
+        let mut moved = kreate_math::DAffine3::IDENTITY;
+        if let Some(frame) = &point.frame {
+            let id = scene
+                .object_by_uid(kreate_scene::Uid::from_raw(frame.object))
+                .ok_or_else(|| format!("{}의 기준 장비가 장면에 없습니다", point.name))?;
+            moved = scene.world_transform(id) * frame.taught_in.inverse();
+        }
+        let shifted = !moved.abs_diff_eq(kreate_math::DAffine3::IDENTITY, 1e-9);
+        pose = moved * pose;
+        let mut goal = pose;
+        if let Some(pallet) = point.pallet {
+            goal.translation += self.place_shift(point, pallet, &taught, &moved, cell, scene)?;
+        }
+        if !shifted && goal.translation == pose.translation {
+            return Ok(taught);
+        }
+        let (_, rotation, _) = goal.to_scale_rotation_translation();
+        let found = self.kin.solve(
+            &self.tool,
+            &Goal {
+                position: goal.translation,
+                rotation: Some(rotation),
+            },
+            &taught,
+            &Options {
+                restarts: 8,
+                ..Options::default()
+            },
+        );
+        if !found.reached {
+            return Err(match point.pallet {
+                Some(_) => format!(
+                    "{}: 팔레트 {}번 칸에 닿지 않습니다",
+                    point.name,
+                    self.places
+                        .get(&point.pallet.unwrap_or_default())
+                        .copied()
+                        .unwrap_or(0)
+                        + 1
+                ),
+                None => format!("{}: 옮겨진 장비 기준 위치에 닿지 않습니다", point.name),
+            });
+        }
+        Ok(found.positions)
+    }
+
+    /// How far the place pallet `pallet`'s count has reached is from the
+    /// place `point` was taught over: `taught` its joints, `moved` how its
+    /// frame has moved since.
+    fn place_shift(
         &self,
         point: &Point,
         pallet: u64,
+        taught: &[f64],
+        moved: &kreate_math::DAffine3,
         cell: &Cell,
         scene: &Document,
-    ) -> Result<Vec<f64>, String> {
-        let taught = self.kin.with(&point.positions);
+    ) -> Result<DVec3, String> {
         let slots = cell.pallet_slots(scene, pallet);
         if slots.is_empty() {
             return Err(format!("{}의 기준 팔레트가 셀에 없습니다", point.name));
         }
-        let pose = self.kin.pose(&taught, &self.tool);
+        let pose = *moved * self.kin.pose(taught, &self.tool);
         // The place it was taught over: the one nearest, seen from above,
         // the tool point or a grip point of this robot's — on a double
         // gripper, the grip point holding the part stands off the tool's.
@@ -296,7 +348,7 @@ impl Runner {
                 cell.grippers()
                     .into_iter()
                     .filter_map(|g| self.kin.tool(g, kreate_math::DAffine3::IDENTITY))
-                    .map(|g| self.kin.pose(&taught, &g).translation),
+                    .map(|g| moved.transform_point3(self.kin.pose(taught, &g).translation)),
             )
             .collect();
         let flat = |v: DVec3| DVec3::new(v.x, v.y, 0.0).length();
@@ -310,31 +362,7 @@ impl Runner {
             .min_by(|a, b| gap(*a).total_cmp(&gap(*b)))
             .expect("a place");
         let to = self.places.get(&pallet).copied().unwrap_or(0) % slots.len();
-        if to == from {
-            return Ok(taught);
-        }
-        let (_, rotation, _) = pose.to_scale_rotation_translation();
-        let goal = Goal {
-            position: pose.translation + (slots[to] - slots[from]),
-            rotation: Some(rotation),
-        };
-        let found = self.kin.solve(
-            &self.tool,
-            &goal,
-            &taught,
-            &Options {
-                restarts: 8,
-                ..Options::default()
-            },
-        );
-        if !found.reached {
-            return Err(format!(
-                "{}: 팔레트 {}번 칸에 닿지 않습니다",
-                point.name,
-                to + 1
-            ));
-        }
-        Ok(found.positions)
+        Ok(slots[to] - slots[from])
     }
 
     /// What the robot is doing, for the timeline: `move`, `wait` (for a

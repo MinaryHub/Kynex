@@ -405,10 +405,14 @@ impl Posing {
                 program.insert(Step::Do(action), after);
             }
             "retouch" => {
-                program
-                    .point_mut(index()?)
-                    .ok_or_else(not_a_move)?
-                    .positions = here
+                let point = program.point_mut(index()?).ok_or_else(not_a_move)?;
+                point.positions = here;
+                // Taught again: in its equipment as that stands now.
+                if let Some(frame) = &mut point.frame {
+                    if let Some(id) = doc.object_by_uid(Uid::from_raw(frame.object)) {
+                        frame.taught_in = doc.world_transform(id);
+                    }
+                }
             }
             "edit" if req["step"].is_object() => {
                 let i = index()?;
@@ -441,9 +445,31 @@ impl Posing {
                         point.name = name.chars().take(32).collect();
                     }
                 }
-                // The pallet it stands on, or none (`null`, "").
+                // The equipment it is taught in, or none (`null`, ""): where
+                // that stands now is where the point was taught in it.
+                let frame_of = |object: u64| {
+                    let id = doc.object_by_uid(Uid::from_raw(object))?;
+                    Some(program::Frame {
+                        object,
+                        taught_in: doc.world_transform(id),
+                    })
+                };
+                if let Some(frame) = req.get("frame") {
+                    point.frame = match uid(frame) {
+                        Some(object) => Some(frame_of(object).ok_or("no such equipment")?),
+                        None => None,
+                    };
+                    if point.frame.is_none_or(|f| Some(f.object) != point.pallet) {
+                        point.pallet = None;
+                    }
+                }
+                // The pallet it stands on, or none: a pallet is its frame.
                 if let Some(pallet) = req.get("pallet") {
                     point.pallet = uid(pallet);
+                    point.frame = match point.pallet {
+                        Some(object) => Some(frame_of(object).ok_or("no such pallet")?),
+                        None => None,
+                    };
                 }
             }
             "delete" => {
@@ -460,6 +486,18 @@ impl Posing {
                     .insert(root, kin.vars.iter().map(|v| v.uid).zip(q).collect());
                 mark_joints(kin.joints(), touched);
                 return Ok(json!({ "ok": true }));
+            }
+            "copy" => {
+                let at = |key: &str| {
+                    req[key]
+                        .as_u64()
+                        .map(|i| i as usize)
+                        .ok_or(format!("no {key}"))
+                };
+                let machine = uid(&req["machine"]).ok_or("no machine")?;
+                let added = program.copy_for(at("from")?, at("to")?, machine, doc, kin)?;
+                self.programs_changed = true;
+                return Ok(json!({ "ok": true, "added": added }));
             }
             "urscript" => {
                 let (script, file) = program.urscript(root, doc, kin)?;

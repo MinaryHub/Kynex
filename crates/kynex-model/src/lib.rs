@@ -109,6 +109,32 @@ pub struct Robot {
     pub tool: Option<u64>,
 }
 
+impl Robot {
+    /// Whose controller the robot is, as far as its description tells:
+    /// `"ur"` for Universal Robots (`ur_description` names its first joint
+    /// `shoulder_pan_joint`), `"abb"` for ABB (an IRB, by its name),
+    /// `"doosan"` for Doosan Robotics (by its name, or a model's: M1013,
+    /// H2017, A0912 and the like). `None` when it does not say.
+    pub fn vendor(&self) -> Option<&'static str> {
+        let name = self.name.to_lowercase();
+        if self.joints.iter().any(|j| j.name == "shoulder_pan_joint") {
+            Some("ur")
+        } else if name.contains("irb") || name.contains("abb") {
+            Some("abb")
+        } else if name.contains("doosan") || doosan_model(&name) {
+            Some("doosan")
+        } else {
+            None
+        }
+    }
+}
+
+/// Whether `name` starts with a Doosan model's: M, H or A and four digits.
+fn doosan_model(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.len() >= 5 && matches!(b[0], b'm' | b'h' | b'a') && b[1..5].iter().all(u8::is_ascii_digit)
+}
+
 /// Names a robot description gives the link a tool is fitted to, the most
 /// telling first. A robot with none of them uses its link the most moving
 /// joints out from the root, the first such.

@@ -37,6 +37,7 @@ pub fn robot(robot: &Robot) -> Value {
         "root": robot.root.to_string(),
         "name": robot.name,
         "mass": robot.mass,
+        "vendor": robot.vendor(),
         "tool": robot.tool.map(|t| t.to_string()),
         "joints": robot.joints.iter().map(|j| json!({
             "uid": j.uid.to_string(),

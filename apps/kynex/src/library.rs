@@ -79,6 +79,18 @@ pub const TEMPLATES: &[Template] = &[
         params: &[],
     },
     Template {
+        key: "irb1600_tending",
+        name: "ABB IRB 1600 + 이중 그리퍼",
+        group: "로봇",
+        params: &[],
+    },
+    Template {
+        key: "m1013_tending",
+        name: "Doosan M1013 + 이중 그리퍼",
+        group: "로봇",
+        params: &[],
+    },
+    Template {
         key: "cnc_lathe",
         name: "CNC 선반",
         group: "공작기계",
@@ -623,16 +635,36 @@ fn graft(item: &Item, built: &Built, doc: &mut Document) -> Vec<u64> {
 
 // --- making equipment -------------------------------------------------------
 
+/// A UR's joints at rest, the tool down.
+const UR_REST: &[(&str, f64)] = &[
+    ("shoulder_lift_joint", -1.75),
+    ("elbow_joint", 1.75),
+    ("wrist_1_joint", -1.571),
+    ("wrist_2_joint", -1.571),
+];
+
 fn build(item: &Item) -> Result<Built, String> {
     let mut doc = Document::new();
     let mut roles = Vec::new();
     let mut root_link = None;
     match item.template.as_str() {
-        "ur10e_tending" | "ur5e" => {
-            let urdf = if item.template == "ur5e" {
-                include_str!("../library/ur5e.urdf")
-            } else {
-                include_str!("../library/ur10e_tending.urdf")
+        "ur10e_tending" | "ur5e" | "irb1600_tending" | "m1013_tending" => {
+            // Each at rest, the tool down: the pose a tending robot waits in.
+            let (urdf, rest): (&str, &[(&str, f64)]) = match item.template.as_str() {
+                "ur5e" => (include_str!("../library/ur5e.urdf"), UR_REST),
+                "irb1600_tending" => (
+                    include_str!("../library/irb1600_tending.urdf"),
+                    &[("joint_5", std::f64::consts::FRAC_PI_2)],
+                ),
+                // Doosan's: the forearm level, the tool down.
+                "m1013_tending" => (
+                    include_str!("../library/m1013_tending.urdf"),
+                    &[
+                        ("joint_3", std::f64::consts::FRAC_PI_2),
+                        ("joint_5", std::f64::consts::FRAC_PI_2),
+                    ],
+                ),
+                _ => (include_str!("../library/ur10e_tending.urdf"), UR_REST),
             };
             let none = |_: &Path| -> Result<ImportScene, String> {
                 Ok(ImportScene::new(SourceMetadata::new("none")))
@@ -649,13 +681,7 @@ fn build(item: &Item) -> Result<Built, String> {
                     roles.push((id, Kind::Gripper));
                 }
             }
-            // At rest, the tool down: the pose a tending robot waits in.
-            for (joint, q) in [
-                ("shoulder_lift_joint", -1.75),
-                ("elbow_joint", 1.75),
-                ("wrist_1_joint", -1.571),
-                ("wrist_2_joint", -1.571),
-            ] {
+            for &(joint, q) in rest {
                 if let Some(id) = named(&doc, joint) {
                     if let Some(RobotPart::Joint(j)) = doc.object(id).and_then(|o| o.robot.clone())
                     {

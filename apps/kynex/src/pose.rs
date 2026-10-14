@@ -5,21 +5,18 @@
 //! so the viewer shows the session's scene with these robots set as asked,
 //! until they are let go and take the session's pose again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use kreate_math::{DAffine3, DQuat, DVec3};
 use kreate_scene::{Changes, DatablockKind, Document, Uid};
-use kynex_kin::path::{MoveKind, Plan};
+use kynex_kin::path::MoveKind;
 use kynex_kin::{Goal, Kinematics, Options};
 use serde_json::{json, Value};
 
+use crate::cell::Cell;
 use crate::collide::{self, Collider};
-use crate::program::{self, Program};
-
-/// How often a program being played moves the robot shown.
-const FRAME: Duration = Duration::from_millis(33);
+use crate::program::{self, Program, Step};
 
 /// What the viewer has asked of the robots and not let go.
 #[derive(Debug, Default)]
@@ -28,7 +25,6 @@ pub struct Posing {
     held: BTreeMap<u64, BTreeMap<u64, f64>>,
     /// By robot root.
     programs: BTreeMap<u64, Program>,
-    playing: Option<Playback>,
     /// The programs changed since the viewers were last told.
     programs_changed: bool,
     /// Where the programs are kept between runs, if anywhere.
@@ -46,22 +42,6 @@ pub struct Posing {
 pub struct Project {
     pub cell: Vec<Value>,
     pub library: Vec<Value>,
-}
-
-/// A program being played: the robot shown follows its plan by the clock.
-#[derive(Debug)]
-struct Playback {
-    root: u64,
-    plan: Plan,
-    /// The plan's variables, by joint, and every joint they move.
-    vars: Vec<u64>,
-    joints: Vec<u64>,
-    started: Instant,
-    /// Round again at the end: a closed program is a cycle.
-    repeat: bool,
-    last: Option<Instant>,
-    /// Seconds into the plan, as last shown.
-    t: f64,
 }
 
 impl Posing {
@@ -166,19 +146,37 @@ impl Posing {
         Some(shown)
     }
 
-    /// What the `pose` event says: the robots held here, and the program
-    /// playing.
-    pub fn to_json(&self) -> String {
+    /// What the `pose` event says: the robots held here, the program
+    /// running (see `crate::run`), and the simulation's clock.
+    pub fn to_json(&self, running: Value, clock: Value) -> String {
         json!({
             "held": self.held.keys().map(u64::to_string).collect::<Vec<_>>(),
-            "playing": self.playing.as_ref().map(|p| json!({
-                "robot": p.root.to_string(),
-                "t": p.t,
-                "duration": p.plan.duration,
-                "repeat": p.repeat,
-            })),
+            "running": running,
+            "clock": clock,
         })
         .to_string()
+    }
+
+    /// Robot `root`'s program, if it has one.
+    pub fn program(&self, root: u64) -> Option<&Program> {
+        self.programs.get(&root)
+    }
+
+    /// Where robot `root` stands as shown: held, or as the scene has it.
+    pub fn positions(&self, kin: &Kinematics, root: u64) -> Vec<f64> {
+        kin.with(&self.held.get(&root).cloned().unwrap_or_default())
+    }
+
+    /// Holds robot `root` at `q`, one position per [`Kinematics::vars`].
+    pub fn hold_at(&mut self, kin: &Kinematics, root: u64, q: &[f64]) {
+        self.held.insert(
+            root,
+            kin.vars
+                .iter()
+                .map(|v| v.uid)
+                .zip(q.iter().copied())
+                .collect(),
+        );
     }
 
     /// Whether the programs changed since this was last asked.
@@ -193,17 +191,30 @@ impl Posing {
     }
 
     /// What the `programs` event says: every robot's program, timed in
-    /// `doc` and checked for collisions with the rest of it.
-    pub fn programs_json(&self, doc: &Document, collider: &mut Collider) -> String {
+    /// `doc` and checked for collisions with the rest of it — the doors of
+    /// machines the program has opened by each move out of the way (their
+    /// doors as `cell` finds them).
+    pub fn programs_json(&self, doc: &Document, collider: &mut Collider, cell: &Cell) -> String {
+        let names = program::names(doc);
         let mut out = serde_json::Map::new();
         for (root, program) in &self.programs {
             let Some(kin) = Kinematics::of(doc, *root) else {
                 continue;
             };
             let plan = program.plan(&kin);
+            let open: Vec<HashSet<u64>> = program
+                .open_during_moves()
+                .into_iter()
+                .map(|machines| {
+                    machines
+                        .into_iter()
+                        .filter_map(|m| cell.door_of(doc, m))
+                        .collect()
+                })
+                .collect();
             let hits: Vec<Vec<String>> = match &plan {
                 Some(plan) => collider
-                    .along(doc, *root, plan)
+                    .along(doc, *root, plan, &open)
                     .into_iter()
                     .map(|hit| {
                         hit.map(|(t, c)| {
@@ -222,48 +233,10 @@ impl Posing {
             };
             out.insert(
                 root.to_string(),
-                program.to_json(&kin, plan.as_ref(), &hits),
+                program.to_json(&kin, plan.as_ref(), &hits, &names),
             );
         }
         Value::Object(out).to_string()
-    }
-
-    /// Moves the robot being played on to where its program is now, at most
-    /// once a frame. Returns what the viewers need to look at again.
-    pub fn tick(&mut self, now: Instant) -> Changes {
-        let mut touched = Changes::default();
-        let Some(play) = &mut self.playing else {
-            return touched;
-        };
-        if play.last.is_some_and(|last| now - last < FRAME) {
-            return touched;
-        }
-        play.last = Some(now);
-        let mut t = (now - play.started).as_secs_f64();
-        let done = !play.repeat && t >= play.plan.duration;
-        if play.repeat && play.plan.duration > 0.0 {
-            t %= play.plan.duration;
-        }
-        play.t = t.min(play.plan.duration);
-        let q = play.plan.at(play.t);
-        self.held
-            .insert(play.root, play.vars.iter().copied().zip(q).collect());
-        mark_joints(play.joints.iter().copied(), &mut touched);
-        if done {
-            self.playing = None;
-        }
-        touched
-    }
-
-    /// Whether a program is playing: the loop then wakes for its frames.
-    pub fn is_playing(&self) -> bool {
-        self.playing.is_some()
-    }
-
-    fn stop(&mut self, root: u64) {
-        if self.playing.as_ref().is_some_and(|p| p.root == root) {
-            self.playing = None;
-        }
     }
 
     /// Takes one request from the page, `doc` being the session's scene.
@@ -281,7 +254,6 @@ impl Posing {
         let req: Value = serde_json::from_str(body).map_err(|e| format!("not JSON: {e}"))?;
         let op = req["op"].as_str().ok_or("no op")?;
         if op == "release" && req["robot"].is_null() {
-            self.playing = None;
             for root in std::mem::take(&mut self.held).into_keys() {
                 mark(doc, root, touched);
             }
@@ -293,10 +265,6 @@ impl Posing {
         let kin = Kinematics::of(doc, root).ok_or("no such robot")?;
         let held = self.held.get(&root).cloned().unwrap_or_default();
         let now = kin.with(&held);
-        // Anything else asked of a robot stops its program.
-        if !matches!(op, "program" | "play" | "urscript") {
-            self.stop(root);
-        }
         if program::is_op(op) {
             return self.program_op(op, &req, doc, &kin, root, &now, touched);
         }
@@ -381,13 +349,14 @@ impl Posing {
                 self.programs_changed = true;
             }
         }
-        let count = program.points.len();
+        let count = program.steps.len();
         let index = || -> Result<usize, String> {
             let i = req["index"].as_u64().ok_or("no index")? as usize;
             (i < count)
                 .then_some(i)
-                .ok_or_else(|| format!("no point {i}"))
+                .ok_or_else(|| format!("no step {i}"))
         };
+        let not_a_move = || "이동 단계가 아닙니다".to_string();
         match op {
             "program" => return Ok(json!({ "ok": true })),
             "teach" => {
@@ -396,9 +365,26 @@ impl Posing {
                 let after = req["after"].as_u64().map(|i| i as usize);
                 program.teach(kind, here, after);
             }
-            "retouch" => program.points[index()?].positions = here,
+            "add" => {
+                let action = program::action_of(&req["step"])?;
+                let after = req["after"].as_u64().map(|i| i as usize);
+                program.insert(Step::Do(action), after);
+            }
+            "retouch" => {
+                program
+                    .point_mut(index()?)
+                    .ok_or_else(not_a_move)?
+                    .positions = here
+            }
+            "edit" if req["step"].is_object() => {
+                let i = index()?;
+                let Step::Do(action) = &mut program.steps[i] else {
+                    return Err("동작 단계가 아닙니다".into());
+                };
+                *action = program::action_of(&req["step"])?;
+            }
             "edit" => {
-                let point = &mut program.points[index()?];
+                let point = program.point_mut(index()?).ok_or_else(not_a_move)?;
                 if let Some(kind) = req["kind"].as_str() {
                     let kind = program::kind_of(kind).ok_or("kind is joint or linear")?;
                     if kind != point.kind {
@@ -423,42 +409,24 @@ impl Posing {
                 }
             }
             "delete" => {
-                program.points.remove(index()?);
+                program.steps.remove(index()?);
             }
             "close" => {
                 program.close = req["close"].as_bool().ok_or("close is true or false")?;
             }
             "clear" => program.clear(),
             "goto" => {
-                let q = kin.with(&program.points[index()?].positions);
+                let point = program.point_mut(index()?).ok_or_else(not_a_move)?;
+                let q = kin.with(&point.positions);
                 self.held
                     .insert(root, kin.vars.iter().map(|v| v.uid).zip(q).collect());
                 mark_joints(kin.joints(), touched);
-                return Ok(json!({ "ok": true }));
-            }
-            "play" => {
-                if count < 2 {
-                    return Err("재생하려면 지점이 둘 이상 있어야 합니다".into());
-                }
-                let plan = program.plan(kin).ok_or("no tool")?;
-                self.playing = Some(Playback {
-                    root,
-                    plan,
-                    vars: kin.vars.iter().map(|v| v.uid).collect(),
-                    joints: kin.joints().collect(),
-                    started: Instant::now(),
-                    repeat: program.close,
-                    last: None,
-                    t: 0.0,
-                });
                 return Ok(json!({ "ok": true }));
             }
             "urscript" => {
                 let (script, file) = program.urscript(root, doc, kin)?;
                 return Ok(json!({ "ok": true, "script": script, "file": file }));
             }
-            // Stopped above, where it stands.
-            "stop" => return Ok(json!({ "ok": true })),
             _ => unreachable!("program::is_op lists {op}"),
         }
         self.programs_changed = true;
@@ -583,8 +551,8 @@ mod tests {
             "the session's scene is as it was"
         );
         assert_eq!(
-            p.to_json(),
-            json!({"held": [base.to_string()], "playing": null}).to_string()
+            p.to_json(Value::Null, Value::Null),
+            json!({"held": [base.to_string()], "running": null, "clock": null}).to_string()
         );
 
         ask(
@@ -643,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn a_program_is_taught_timed_and_played() {
+    fn a_program_is_taught_and_timed() {
         let (doc, base, joint, tip) = arm();
         let (b, j, t) = (base.to_string(), joint.to_string(), tip.to_string());
         let mut p = Posing::default();
@@ -666,10 +634,14 @@ mod tests {
         assert!(p.take_programs_changed());
         assert!(!p.take_programs_changed(), "told once");
 
-        let programs: Value =
-            serde_json::from_str(&p.programs_json(&doc, &mut Collider::default())).unwrap();
+        let programs: Value = serde_json::from_str(&p.programs_json(
+            &doc,
+            &mut Collider::default(),
+            &Cell::default(),
+        ))
+        .unwrap();
         let program = &programs[&b];
-        let points = program["points"].as_array().unwrap();
+        let points = program["steps"].as_array().unwrap();
         assert_eq!(points.len(), 3);
         assert_eq!(points[0]["name"], "P1");
         assert!(
@@ -703,41 +675,18 @@ mod tests {
             &doc,
             json!({"op": "close", "robot": b, "close": true}),
         );
-        let programs: Value =
-            serde_json::from_str(&p.programs_json(&doc, &mut Collider::default())).unwrap();
+        let programs: Value = serde_json::from_str(&p.programs_json(
+            &doc,
+            &mut Collider::default(),
+            &Cell::default(),
+        ))
+        .unwrap();
         let program = &programs[&b];
-        assert_eq!(program["points"].as_array().unwrap().len(), 2);
-        assert_eq!(program["points"][1]["name"], "P3");
-        assert_eq!(program["points"][1]["kind"], "joint");
+        assert_eq!(program["steps"].as_array().unwrap().len(), 2);
+        assert_eq!(program["steps"][1]["name"], "P3");
+        assert_eq!(program["steps"][1]["kind"], "joint");
         assert!(!program["back"].is_null(), "closed: a move back to P1");
         assert!(program["cycle"].as_f64().unwrap() < cycle);
-
-        // Playing moves the robot shown along the plan, frame by frame.
-        let (answer, _) = ask(&mut p, &doc, json!({"op": "play", "robot": b}));
-        assert_eq!(answer["ok"], true, "{answer}");
-        assert!(p.is_playing());
-        let start = Instant::now();
-        let touched = p.tick(start + Duration::from_millis(500));
-        assert!(touched
-            .changed
-            .contains(&(DatablockKind::Object, Uid::from_raw(joint))));
-        assert!(
-            p.tick(start + Duration::from_millis(510))
-                .changed
-                .is_empty(),
-            "within a frame"
-        );
-        let pose: Value = serde_json::from_str(&p.to_json()).unwrap();
-        assert_eq!(pose["playing"]["robot"], b);
-        assert_eq!(pose["playing"]["repeat"], true);
-
-        // Jogging the robot stops it, where it is.
-        ask(
-            &mut p,
-            &doc,
-            json!({"op": "jog", "robot": b, "joint": j, "position": 0.0}),
-        );
-        assert!(!p.is_playing());
 
         // Going to a point poses the robot there.
         ask(&mut p, &doc, json!({"op": "goto", "robot": b, "index": 1}));
@@ -747,15 +696,55 @@ mod tests {
     }
 
     #[test]
-    fn a_program_too_short_to_play_says_so() {
+    fn actions_go_between_the_moves() {
         let (doc, base, _, tip) = arm();
         let mut p = Posing::default();
         let (b, t) = (base.to_string(), tip.to_string());
         ask(&mut p, &doc, json!({"op": "teach", "robot": b, "tool": t}));
-        let (answer, _) = ask(&mut p, &doc, json!({"op": "play", "robot": b}));
-        assert_eq!(answer["ok"], false);
-        let (answer, _) = ask(&mut p, &doc, json!({"op": "edit", "robot": b, "index": 5}));
-        assert_eq!(answer["ok"], false, "no fifth point");
+        ask(&mut p, &doc, json!({"op": "teach", "robot": b, "tool": t}));
+        // Between the two: grip, then wait two seconds.
+        let (a, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "add", "robot": b, "after": 0, "step": {"type": "grip", "gripper": t}}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        ask(
+            &mut p,
+            &doc,
+            json!({"op": "add", "robot": b, "after": 1, "step": {"type": "delay", "seconds": 2.0}}),
+        );
+        let programs: Value = serde_json::from_str(&p.programs_json(
+            &doc,
+            &mut Collider::default(),
+            &Cell::default(),
+        ))
+        .unwrap();
+        let steps = programs[&b]["steps"].as_array().unwrap();
+        let types: Vec<&str> = steps.iter().map(|s| s["type"].as_str().unwrap()).collect();
+        assert_eq!(types, ["move", "grip", "delay", "move"]);
+        assert_eq!(steps[1]["gripper_name"], "tool0");
+        // The second move is the plan's first move, timed as before.
+        assert!(steps[3]["move"]["duration"].is_number());
+        // An action is edited as a whole; a move's tools are not for it.
+        let (a, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "edit", "robot": b, "index": 2, "step": {"type": "delay", "seconds": 5.0}}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        for op in ["goto", "retouch"] {
+            let (a, _) = ask(&mut p, &doc, json!({"op": op, "robot": b, "index": 1}));
+            assert_eq!(a["ok"], false, "{op} on an action");
+        }
+        let (a, _) = ask(&mut p, &doc, json!({"op": "edit", "robot": b, "index": 9}));
+        assert_eq!(a["ok"], false, "no tenth step");
+        let (a, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "add", "robot": b, "step": {"type": "wait", "machine": "1", "signal": "nonsense"}}),
+        );
+        assert_eq!(a["ok"], false);
     }
 
     /// A file of its own in the temporary directory, gone when dropped.
@@ -806,8 +795,12 @@ mod tests {
         teach_two(&mut p, &doc, base, joint, tip);
         assert!(p.take_programs_changed());
         p.save(&doc, Project::default()).unwrap();
-        let before: Value =
-            serde_json::from_str(&p.programs_json(&doc, &mut Collider::default())).unwrap();
+        let before: Value = serde_json::from_str(&p.programs_json(
+            &doc,
+            &mut Collider::default(),
+            &Cell::default(),
+        ))
+        .unwrap();
 
         // The next run reads it, and takes it on once its robot is there.
         let mut again = Posing::with_file(&file.0, &file.0).unwrap().0;
@@ -816,8 +809,12 @@ mod tests {
         assert_eq!(again.pending(), 1, "no robot, still waiting");
         again.adopt(&doc);
         assert_eq!(again.pending(), 0);
-        let after: Value =
-            serde_json::from_str(&again.programs_json(&doc, &mut Collider::default())).unwrap();
+        let after: Value = serde_json::from_str(&again.programs_json(
+            &doc,
+            &mut Collider::default(),
+            &Cell::default(),
+        ))
+        .unwrap();
         assert_eq!(before, after);
 
         // Its next point is numbered on from the file's.
@@ -826,9 +823,13 @@ mod tests {
             &doc,
             json!({"op": "teach", "robot": base.to_string(), "tool": tip.to_string()}),
         );
-        let now: Value =
-            serde_json::from_str(&again.programs_json(&doc, &mut Collider::default())).unwrap();
-        assert_eq!(now[base.to_string()]["points"][2]["name"], "P3");
+        let now: Value = serde_json::from_str(&again.programs_json(
+            &doc,
+            &mut Collider::default(),
+            &Cell::default(),
+        ))
+        .unwrap();
+        assert_eq!(now[base.to_string()]["steps"][2]["name"], "P3");
     }
 
     #[test]
@@ -847,10 +848,14 @@ mod tests {
         assert_ne!(base, base2);
         let mut again = Posing::with_file(&file.0, &file.0).unwrap().0;
         again.adopt(&other);
-        let programs: Value =
-            serde_json::from_str(&again.programs_json(&other, &mut Collider::default())).unwrap();
+        let programs: Value = serde_json::from_str(&again.programs_json(
+            &other,
+            &mut Collider::default(),
+            &Cell::default(),
+        ))
+        .unwrap();
         let program = &programs[base2.to_string()];
-        assert_eq!(program["points"].as_array().unwrap().len(), 2);
+        assert_eq!(program["steps"].as_array().unwrap().len(), 2);
         assert_eq!(program["close"], true);
         // Joint and tool found by name: P2 is at 0.6 rad, the tool 50 mm out.
         ask(

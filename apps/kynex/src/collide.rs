@@ -235,7 +235,17 @@ impl Collider {
     /// The first contact in each move of robot `root`'s plan, the rest of
     /// the scene standing as `doc` has it: seconds into the move, and the
     /// contact.
-    pub fn along(&mut self, doc: &Document, root: u64, plan: &Plan) -> Vec<Option<(f64, Contact)>> {
+    ///
+    /// `open` gives, move by move, what is out of the way during it: the
+    /// doors of machines the program has opened by then. A move past the
+    /// list has nothing out of the way.
+    pub fn along(
+        &mut self,
+        doc: &Document,
+        root: u64,
+        plan: &Plan,
+        open: &[HashSet<u64>],
+    ) -> Vec<Option<(f64, Contact)>> {
         let robots = self.robots(doc);
         let Some(robot) = robots.iter().find(|r| r.root == root) else {
             return vec![None; plan.segments.len()];
@@ -262,13 +272,16 @@ impl Collider {
             .fold(Aabb::EMPTY, |b, (part, _)| b.union(part.bounds()));
         let own: HashSet<u64> = robot.kin.uids().collect();
         let obstacles = self.obstacles(doc, &robots, region, &HashSet::new());
+        let none = HashSet::new();
         samples
             .iter()
-            .map(|seg| {
+            .enumerate()
+            .map(|(i, seg)| {
+                let away = open.get(i).unwrap_or(&none);
                 seg.iter().find_map(|(t, parts)| {
                     let hit = parts.iter().find_map(|(part, _)| {
                         let (other, at) = obstacles
-                            .contacts(part, |u| own.contains(&u))
+                            .contacts(part, |u| own.contains(&u) || away.contains(&u))
                             .into_iter()
                             .next()?;
                         Some(Contact {
@@ -462,7 +475,7 @@ mod tests {
         // Most of a half turn: through the block. Then a little back, clear
         // of it.
         let plan = path::plan(&kin, &tool, &[w(0.0), w(3.0), w(2.0)], false);
-        let hits = Collider::default().along(&doc, root, &plan);
+        let hits = Collider::default().along(&doc, root, &plan, &[]);
         assert_eq!(hits.len(), 2);
         let (t, c) = hits[0].as_ref().expect("the first move hits the block");
         assert_eq!(label(&doc, c.other), "block");

@@ -16,6 +16,7 @@ use crate::cell::{self, Cell};
 use crate::collide::{self, Collider};
 use crate::library::{self, Library};
 use crate::pose::{Posing, Project};
+use crate::run::{Clock, Runner};
 
 const PORT: u16 = 8090;
 
@@ -222,6 +223,9 @@ struct Stage {
     base: Option<Document>,
     /// What the viewers need to look at again for the equipment.
     placed: Changes,
+    /// The program running, and the clock it runs by.
+    runner: Option<Runner>,
+    clock: Clock,
 }
 
 impl Stage {
@@ -251,6 +255,8 @@ impl Stage {
             collider: Collider::default(),
             base: None,
             placed: Changes::default(),
+            runner: None,
+            clock: Clock::default(),
         })
     }
 
@@ -306,7 +312,24 @@ impl Stage {
                 .ok()
                 .and_then(|v| v["op"].as_str().map(str::to_string))
                 .unwrap_or_default();
-            let reply = if library::is_op(&op) {
+            let robot = serde_json::from_str::<Value>(&request.body)
+                .ok()
+                .and_then(|v| v["robot"].as_str().and_then(|s| s.parse::<u64>().ok()));
+            // Moving a robot by hand stops its program.
+            if matches!(op.as_str(), "jog" | "ik" | "release" | "goto")
+                && self
+                    .runner
+                    .as_ref()
+                    .is_some_and(|r| Some(r.root) == robot || robot.is_none())
+            {
+                self.runner = None;
+                touched = true;
+            }
+            let reply = if matches!(op.as_str(), "play" | "stop" | "speed") {
+                let answer = self.run_op(doc, &op, &request.body);
+                touched = true;
+                answer
+            } else if library::is_op(&op) {
                 let (reply, roles) = self.library.handle(&request.body);
                 for (uid, name, kind) in roles.added {
                     self.cell.ensure(uid, name, kind);
@@ -334,25 +357,77 @@ impl Stage {
             // A page that gave up waiting has nobody to answer.
             let _ = request.reply.send(reply);
         }
-        // A program playing moves the robot on; the machines run.
+        // The clock: the program running moves on, the machines run.
         let now = Instant::now();
-        touched |= !self.posing.tick(now).changed.is_empty();
-        touched |= self.cell.tick(self.base.as_ref().unwrap_or(doc), now);
+        let time = self.clock.advance(now);
+        let scene = self.base.as_ref().unwrap_or(doc);
+        if let Some(runner) = self.runner.as_mut() {
+            touched |= runner.tick(time, now, &mut self.posing, &mut self.cell, scene);
+        }
+        touched |= self.cell.tick(scene, time, now);
         touched
+    }
+
+    /// Whether anything runs by the clock: the loop then keeps time.
+    fn running(&self) -> bool {
+        self.runner.as_ref().is_some_and(|r| !r.stopped()) || self.cell.is_running()
+    }
+
+    /// Runs a program, stops it, or sets the clock's speed.
+    fn run_op(&mut self, doc: &Document, op: &str, body: &str) -> String {
+        let req: Value = serde_json::from_str(body).unwrap_or_default();
+        let answer = match op {
+            "speed" => match req["speed"].as_f64() {
+                Some(v) if v > 0.0 => {
+                    self.clock.speed = v.clamp(0.1, 100.0);
+                    Ok(())
+                }
+                _ => Err("speed is a positive number".to_string()),
+            },
+            "stop" => {
+                self.runner = None;
+                Ok(())
+            }
+            _ => (|| {
+                let root = req["robot"]
+                    .as_str()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .ok_or("no robot")?;
+                let program = self
+                    .posing
+                    .program(root)
+                    .cloned()
+                    .ok_or("프로그램이 없습니다")?;
+                let scene = self.base.as_ref().unwrap_or(doc);
+                self.runner = Some(Runner::new(root, program, scene, self.clock.time)?);
+                Ok(())
+            })(),
+        };
+        match answer {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+        }
+        .to_string()
     }
 
     /// Tells the viewers how the robots are posed here, their programs,
     /// the cell and the equipment, and saves what changed.
     fn tell(&mut self, server: &Server, doc: &Document, replaced: bool) {
         let scene = self.base.as_ref().unwrap_or(doc);
-        server.state("pose", &self.posing.to_json());
+        let running = self
+            .runner
+            .as_ref()
+            .map_or(Value::Null, |r| r.to_json(self.clock.time));
+        server.state("pose", &self.posing.to_json(running, self.clock.to_json()));
         server.state("cell", &self.cell.to_json(scene));
         server.state("library", &self.library.to_json());
         let programs = self.posing.take_programs_changed();
         if programs {
             server.state(
                 "programs",
-                &self.posing.programs_json(scene, &mut self.collider),
+                &self
+                    .posing
+                    .programs_json(scene, &mut self.collider, &self.cell),
             );
         }
         let roles = self.cell.take_roles_changed();
@@ -419,7 +494,7 @@ fn offline(
     );
     stage.tell(server, &doc, true);
     loop {
-        let first = if stage.posing.is_playing() || stage.cell.is_running() {
+        let first = if stage.running() {
             match requests.recv_timeout(Duration::from_millis(5)) {
                 Ok(r) => Some(r),
                 Err(RecvTimeoutError::Timeout) => None,

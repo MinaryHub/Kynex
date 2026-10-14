@@ -1,0 +1,293 @@
+//! Running a program: the robot goes through its steps by the simulation's
+//! clock — moving, gripping, telling machines what to do, waiting for them
+//! — while the machines run by the same clock (see `crate::cell`).
+//!
+//! A move is planned when it starts, from wherever the robot is then, so a
+//! program can be run from any pose. A step the cell refuses — a cycle
+//! started on an open door, a grip with nothing there — stops the run with
+//! an alarm saying why, as a robot controller would.
+//!
+//! The clock can run faster than real time ([`Clock::speed`]): a 90 s
+//! machining cycle need not be watched for 90 s.
+
+use std::time::{Duration, Instant};
+
+use kreate_scene::Document;
+use kynex_kin::path::{self, MoveKind, Plan, Waypoint};
+use kynex_kin::{Kinematics, Tool};
+use serde_json::{json, Value};
+
+use crate::cell::{Cell, Signal};
+use crate::pose::Posing;
+use crate::program::{Action, Program, Step};
+
+/// How often a moving robot is shown at a new pose, in real time.
+const FRAME: Duration = Duration::from_millis(33);
+
+/// The simulation's clock: seconds, running at `speed` times real time.
+#[derive(Debug)]
+pub struct Clock {
+    pub speed: f64,
+    pub time: f64,
+    last: Option<Instant>,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self {
+            speed: 1.0,
+            time: 0.0,
+            last: None,
+        }
+    }
+}
+
+impl Clock {
+    /// Moves the clock on to real time `now`, and returns where it is.
+    pub fn advance(&mut self, now: Instant) -> f64 {
+        if let Some(last) = self.last {
+            self.time += now.duration_since(last).as_secs_f64() * self.speed;
+        }
+        self.last = Some(now);
+        self.time
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({ "speed": self.speed, "time": self.time })
+    }
+}
+
+/// Where a run is in its step.
+#[derive(Debug)]
+enum State {
+    /// About to start the step.
+    Begin,
+    Moving {
+        plan: Plan,
+        from: f64,
+    },
+    /// For the machine to say what the step waits for.
+    Waiting,
+    /// Until the clock reaches this: a gripper closing, a pause.
+    Until(f64),
+    Done,
+    Alarm(String),
+}
+
+/// A program running on a robot.
+#[derive(Debug)]
+pub struct Runner {
+    pub root: u64,
+    program: Program,
+    kin: Kinematics,
+    tool: Tool,
+    step: usize,
+    state: State,
+    /// When the current cycle began, how many have finished, and how long
+    /// the last one took.
+    cycle_from: f64,
+    cycles: u32,
+    last_cycle: Option<f64>,
+    last_frame: Option<Instant>,
+}
+
+impl Runner {
+    /// Robot `root`'s `program`, about to run in `scene` from `time`.
+    pub fn new(root: u64, program: Program, scene: &Document, time: f64) -> Result<Self, String> {
+        if program.steps.is_empty() {
+            return Err("프로그램에 단계가 없습니다".into());
+        }
+        let kin = Kinematics::of(scene, root).ok_or("no such robot")?;
+        let tool = program.tool(&kin).ok_or("툴이 정해지지 않았습니다")?;
+        Ok(Self {
+            root,
+            program,
+            kin,
+            tool,
+            step: 0,
+            state: State::Begin,
+            cycle_from: time,
+            cycles: 0,
+            last_cycle: None,
+            last_frame: None,
+        })
+    }
+
+    /// Whether it has stopped: at its end, or on an alarm.
+    pub fn stopped(&self) -> bool {
+        matches!(self.state, State::Done | State::Alarm(_))
+    }
+
+    /// Moves the run on to `time` on the simulation's clock: as many steps
+    /// as end by then. `scene` is the scene the cell is in; the robot's
+    /// pose is held in `posing`. Returns whether the robot moved or the run
+    /// changed, for the viewers.
+    pub fn tick(
+        &mut self,
+        time: f64,
+        now: Instant,
+        posing: &mut Posing,
+        cell: &mut Cell,
+        scene: &Document,
+    ) -> bool {
+        let mut changed = false;
+        // Steps that take no time follow one another within a tick; the
+        // bound keeps a program of nothing but those from spinning.
+        for _ in 0..256 {
+            match &mut self.state {
+                State::Done | State::Alarm(_) => break,
+                State::Begin => {
+                    changed = true;
+                    if self.step >= self.program.steps.len() {
+                        if self.program.close {
+                            self.cycles += 1;
+                            self.last_cycle = Some(time - self.cycle_from);
+                            self.cycle_from = time;
+                            self.step = 0;
+                            continue;
+                        }
+                        self.state = State::Done;
+                        break;
+                    }
+                    self.state = match self.begin(time, posing, cell, scene) {
+                        Ok(state) => state,
+                        Err(why) => State::Alarm(why),
+                    };
+                }
+                State::Moving { plan, from } => {
+                    let t = time - *from;
+                    let ended = t >= plan.duration;
+                    let due = self
+                        .last_frame
+                        .is_none_or(|f| now.duration_since(f) >= FRAME);
+                    if ended || due {
+                        posing.hold_at(&self.kin, self.root, &plan.at(t));
+                        self.last_frame = Some(now);
+                        changed = true;
+                    }
+                    if !ended {
+                        break;
+                    }
+                    self.next();
+                }
+                State::Waiting => {
+                    let Step::Do(Action::Wait { machine, signal }) = self.program.steps[self.step]
+                    else {
+                        unreachable!("waiting on a wait step");
+                    };
+                    if !cell.signal(scene, machine, signal) {
+                        break;
+                    }
+                    self.next();
+                }
+                State::Until(end) => {
+                    if time < *end {
+                        break;
+                    }
+                    self.next();
+                }
+            }
+        }
+        changed
+    }
+
+    fn next(&mut self) {
+        self.step += 1;
+        self.state = State::Begin;
+    }
+
+    /// Starts step `self.step`.
+    fn begin(
+        &mut self,
+        time: f64,
+        posing: &mut Posing,
+        cell: &mut Cell,
+        scene: &Document,
+    ) -> Result<State, String> {
+        let step = self.program.steps[self.step].clone();
+        Ok(match step {
+            Step::Move(point) => {
+                let here = posing.positions(&self.kin, self.root);
+                let to = Waypoint {
+                    kind: point.kind,
+                    positions: self.kin.with(&point.positions),
+                    speed: point.speed,
+                };
+                let from = Waypoint {
+                    kind: MoveKind::Joint,
+                    positions: here,
+                    speed: 1.0,
+                };
+                let plan = path::plan(&self.kin, &self.tool, &[from, to], false);
+                State::Moving { plan, from: time }
+            }
+            Step::Do(Action::Grip { gripper }) => {
+                // Where the gripper is: the robot as it stands now.
+                let posed = posing.shown(scene);
+                cell.grip(posed.as_ref().unwrap_or(scene), gripper)?;
+                State::Until(time + cell.actuate_time(gripper))
+            }
+            Step::Do(Action::Release { gripper }) => {
+                let posed = posing.shown(scene);
+                cell.release(posed.as_ref().unwrap_or(scene), gripper)?;
+                State::Until(time + cell.actuate_time(gripper))
+            }
+            Step::Do(Action::Command { machine, command }) => {
+                cell.command(scene, machine, command)?;
+                self.step += 1;
+                State::Begin
+            }
+            Step::Do(Action::Wait { .. }) => State::Waiting,
+            Step::Do(Action::Delay { seconds }) => State::Until(time + seconds),
+        })
+    }
+
+    /// What the `pose` event says of the run.
+    pub fn to_json(&self, time: f64) -> Value {
+        let (state, detail) = match &self.state {
+            State::Begin => ("running", String::new()),
+            State::Moving { plan, from } => (
+                "moving",
+                format!(
+                    "{:.1} / {:.1} s",
+                    (time - from).min(plan.duration),
+                    plan.duration
+                ),
+            ),
+            State::Waiting => ("waiting", self.waiting_for()),
+            State::Until(end) => ("pausing", format!("{:.1} s", (end - time).max(0.0))),
+            State::Done => ("done", String::new()),
+            State::Alarm(why) => ("alarm", why.clone()),
+        };
+        json!({
+            "robot": self.root.to_string(),
+            "step": self.step,
+            "state": state,
+            "detail": detail,
+            "cycles": self.cycles,
+            "last_cycle": self.last_cycle,
+            "cycle_time": time - self.cycle_from,
+        })
+    }
+
+    fn waiting_for(&self) -> String {
+        match self.program.steps.get(self.step) {
+            Some(Step::Do(Action::Wait { signal, .. })) => signal_label(*signal).to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
+/// A signal, as the viewer names it.
+pub fn signal_label(signal: Signal) -> &'static str {
+    match signal {
+        Signal::DoorOpen => "문 열림",
+        Signal::DoorClosed => "문 닫힘",
+        Signal::Clamped => "척 물림",
+        Signal::Idle => "가공 대기",
+        Signal::Done => "가공 완료",
+    }
+}
+
+#[cfg(test)]
+mod tests;

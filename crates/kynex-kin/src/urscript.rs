@@ -21,10 +21,12 @@ use kreate_scene::robot::JointKind;
 use crate::path::{self, MoveKind, Waypoint};
 use crate::{Kinematics, Tool};
 
-/// One move of the program: the point it reaches, by its name.
+/// One move of the program: the point it reaches, by its name, and what
+/// the program does before it that the script cannot say yet, as comments.
 pub struct Move<'a> {
     pub name: &'a str,
     pub waypoint: &'a Waypoint,
+    pub notes: Vec<String>,
 }
 
 pub struct Export<'a> {
@@ -37,6 +39,8 @@ pub struct Export<'a> {
     pub base: u64,
     /// The flange the tool point is set from (`tool0`).
     pub flange: u64,
+    /// What the program does after its last move, as comments.
+    pub trailing: Vec<String>,
 }
 
 /// The program as a URScript file, or why it cannot be one.
@@ -76,6 +80,11 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     );
     let _ = writeln!(out, "def {name}():");
     let _ = writeln!(out, "  set_tcp({})", pose(&tcp));
+    let notes = |out: &mut String, indent: &str, notes: &[String]| {
+        for n in notes {
+            let _ = writeln!(out, "{indent}# {}", ascii(n));
+        }
+    };
     let step = |out: &mut String, indent: &str, m: &Move, kind: MoveKind| {
         let w = m.waypoint;
         let _ = writeln!(out, "{indent}# {}", ascii(m.name));
@@ -104,21 +113,28 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     };
     // Wherever the robot stands, it goes to the first point by its joints:
     // a line from an unknown pose could go anywhere.
+    let first = &export.moves[0];
+    notes(&mut out, "  ", &first.notes);
     let _ = writeln!(out, "  # To the start");
-    step(&mut out, "  ", &export.moves[0], MoveKind::Joint);
+    step(&mut out, "  ", first, MoveKind::Joint);
     let rest = &export.moves[1..];
     if export.close {
         let _ = writeln!(out, "  while (True):");
         for m in rest {
+            notes(&mut out, "    ", &m.notes);
             step(&mut out, "    ", m, m.waypoint.kind);
         }
-        let first = &export.moves[0];
+        notes(&mut out, "    ", &export.trailing);
+        // Round again: what came before the first move comes again too.
+        notes(&mut out, "    ", &first.notes);
         step(&mut out, "    ", first, first.waypoint.kind);
         let _ = writeln!(out, "  end");
     } else {
         for m in rest {
+            notes(&mut out, "  ", &m.notes);
             step(&mut out, "  ", m, m.waypoint.kind);
         }
+        notes(&mut out, "  ", &export.trailing);
     }
     let _ = writeln!(out, "end");
     let _ = writeln!(out, "{name}()");

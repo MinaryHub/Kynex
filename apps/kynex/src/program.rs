@@ -1,5 +1,7 @@
 //! A robot's program: poses taught in the viewer and the moves between
-//! them, timed by kynex-kin's planner.
+//! them, timed by kynex-kin's planner, and between the moves what the robot
+//! does to the cell — grip, release, tell a machine to open or start, wait
+//! for it to say it is done (see [`Action`]).
 //!
 //! Positions are kept by joint identity, so a program outlives the session
 //! scene being rebuilt around it; a joint it does not name stands where the
@@ -10,7 +12,7 @@
 //! objects anew, and the program finds its robot, joints and tool again by
 //! name.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kreate_math::{DAffine3, DVec3};
 use kreate_scene::Document;
@@ -18,6 +20,8 @@ use kynex_kin::path::{self, MoveKind, Plan, Problem, Waypoint};
 use kynex_kin::urscript::{self, Export, Move};
 use kynex_kin::{Kinematics, Tool};
 use serde_json::{json, Value};
+
+use crate::cell::{Command, Signal};
 
 /// The programs file's layout, written into it.
 pub const FILE_VERSION: u64 = 1;
@@ -39,9 +43,31 @@ pub struct Point {
     pub positions: BTreeMap<u64, f64>,
 }
 
+/// What the robot does between moves.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Action {
+    /// Close grip point `gripper` on the part at it.
+    Grip { gripper: u64 },
+    /// Open it, letting go of the part.
+    Release { gripper: u64 },
+    /// Tell CNC machine `machine` to do something.
+    Command { machine: u64, command: Command },
+    /// Wait until machine `machine` says `signal`.
+    Wait { machine: u64, signal: Signal },
+    /// Wait this many seconds.
+    Delay { seconds: f64 },
+}
+
+/// One line of a program: a move to a point, or an action.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Step {
+    Move(Point),
+    Do(Action),
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Program {
-    pub points: Vec<Point>,
+    pub steps: Vec<Step>,
     /// Ends with a move back to the first point: a cycle.
     pub close: bool,
     /// The tool the linear moves carry, and its point along it.
@@ -52,7 +78,7 @@ pub struct Program {
 }
 
 impl Program {
-    /// A point at `positions`, after `after` or at the end.
+    /// A point at `positions`, after step `after` or at the end.
     pub fn teach(&mut self, kind: MoveKind, positions: BTreeMap<u64, f64>, after: Option<usize>) {
         self.taught += 1;
         let point = Point {
@@ -64,8 +90,29 @@ impl Program {
             },
             positions,
         };
-        let at = after.map_or(self.points.len(), |i| (i + 1).min(self.points.len()));
-        self.points.insert(at, point);
+        self.insert(Step::Move(point), after);
+    }
+
+    /// `step`, after step `after` or at the end.
+    pub fn insert(&mut self, step: Step, after: Option<usize>) {
+        let at = after.map_or(self.steps.len(), |i| (i + 1).min(self.steps.len()));
+        self.steps.insert(at, step);
+    }
+
+    /// The moves, each with its step's index.
+    pub fn moves(&self) -> impl Iterator<Item = (usize, &Point)> {
+        self.steps.iter().enumerate().filter_map(|(i, s)| match s {
+            Step::Move(p) => Some((i, p)),
+            Step::Do(_) => None,
+        })
+    }
+
+    /// The point step `i` moves to, if it is a move.
+    pub fn point_mut(&mut self, i: usize) -> Option<&mut Point> {
+        match self.steps.get_mut(i)? {
+            Step::Move(p) => Some(p),
+            Step::Do(_) => None,
+        }
     }
 
     /// No points, the same tool.
@@ -91,16 +138,20 @@ impl Program {
             "offset": [self.offset.x, self.offset.y, self.offset.z],
             "close": self.close,
             "taught": self.taught,
-            "points": self.points.iter().map(|p| json!({
-                "name": p.name,
-                "kind": kind_tag(p.kind),
-                "speed": p.speed,
-                "joints": p.positions.iter().map(|(uid, q)| json!({
-                    "uid": uid.to_string(),
-                    "name": var_name.get(uid).copied().unwrap_or(""),
-                    "position": q,
-                })).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
+            "steps": self.steps.iter().map(|s| match s {
+                Step::Move(p) => json!({
+                    "type": "move",
+                    "name": p.name,
+                    "kind": kind_tag(p.kind),
+                    "speed": p.speed,
+                    "joints": p.positions.iter().map(|(uid, q)| json!({
+                        "uid": uid.to_string(),
+                        "name": var_name.get(uid).copied().unwrap_or(""),
+                        "position": q,
+                    })).collect::<Vec<_>>(),
+                }),
+                Step::Do(a) => action_json(a, &|u| name(u)),
+            }).collect::<Vec<_>>(),
         })
     }
 
@@ -134,24 +185,54 @@ impl Program {
             .map(|(u, n)| (*u, n.as_str()))
             .collect();
         let vars: Vec<(u64, &str)> = kin.vars.iter().map(|v| (v.uid, v.name.as_str())).collect();
-        let mut points = Vec::new();
-        for p in saved["points"].as_array()? {
-            let mut positions = BTreeMap::new();
-            for j in p["joints"].as_array().into_iter().flatten() {
-                let Some(position) = j["position"].as_f64() else {
-                    continue;
-                };
-                let name = text(&j["name"]).filter(|n| !n.is_empty());
-                if let Some(var) = pick(uid(&j["uid"]), name, &vars) {
-                    positions.insert(var, position);
+        // Machines and grip points anywhere in the scene, by name too.
+        let everything: Vec<(u64, &str)> = names.iter().map(|(u, n)| (*u, n.as_str())).collect();
+        let object = |v: &Value, key: &str| {
+            pick(uid(&v[key]), text(&v[&format!("{key}_name")]), &everything)
+        };
+        let mut steps = Vec::new();
+        // "points" is how a program was kept before it had actions.
+        let saved_steps = saved["steps"].as_array().or(saved["points"].as_array())?;
+        for s in saved_steps {
+            let step = match s["type"].as_str().unwrap_or("move") {
+                "move" => {
+                    let mut positions = BTreeMap::new();
+                    for j in s["joints"].as_array().into_iter().flatten() {
+                        let Some(position) = j["position"].as_f64() else {
+                            continue;
+                        };
+                        let name = text(&j["name"]).filter(|n| !n.is_empty());
+                        if let Some(var) = pick(uid(&j["uid"]), name, &vars) {
+                            positions.insert(var, position);
+                        }
+                    }
+                    Step::Move(Point {
+                        name: text(&s["name"]).unwrap_or_else(|| format!("P{}", steps.len() + 1)),
+                        kind: kind_of(s["kind"].as_str().unwrap_or("joint"))?,
+                        speed: s["speed"].as_f64().unwrap_or(JOINT_SPEED),
+                        positions,
+                    })
                 }
-            }
-            points.push(Point {
-                name: text(&p["name"]).unwrap_or_else(|| format!("P{}", points.len() + 1)),
-                kind: kind_of(p["kind"].as_str().unwrap_or("joint"))?,
-                speed: p["speed"].as_f64().unwrap_or(JOINT_SPEED),
-                positions,
-            });
+                "grip" => Step::Do(Action::Grip {
+                    gripper: object(s, "gripper")?,
+                }),
+                "release" => Step::Do(Action::Release {
+                    gripper: object(s, "gripper")?,
+                }),
+                "command" => Step::Do(Action::Command {
+                    machine: object(s, "machine")?,
+                    command: Command::of(s["command"].as_str()?)?,
+                }),
+                "wait" => Step::Do(Action::Wait {
+                    machine: object(s, "machine")?,
+                    signal: Signal::of(s["signal"].as_str()?)?,
+                }),
+                "delay" => Step::Do(Action::Delay {
+                    seconds: s["seconds"].as_f64().unwrap_or(1.0),
+                }),
+                _ => continue,
+            };
+            steps.push(step);
         }
         let offset = match saved["offset"].as_array().map(Vec::as_slice) {
             Some([x, y, z]) => DVec3::new(
@@ -165,11 +246,8 @@ impl Program {
             tool: pick(uid(&saved["tool"]), text(&saved["tool_name"]), &parts),
             offset,
             close: saved["close"].as_bool().unwrap_or(false),
-            taught: saved["taught"]
-                .as_u64()
-                .map_or(points.len(), |t| t as usize)
-                .max(points.len()),
-            points,
+            taught: saved["taught"].as_u64().map_or(steps.len(), |t| t as usize),
+            steps,
         };
         Some((root, program))
     }
@@ -198,23 +276,44 @@ impl Program {
             .ok_or("no flange")?;
         let waypoints = self.waypoints(kin);
         let robot = names.get(&root).cloned().unwrap_or_else(|| "robot".into());
+        // The actions, until their I/O is mapped, as comments where they
+        // fall: someone finishing the program on the controller sees where
+        // each goes.
+        let name = |u: u64| names.get(&u).cloned().unwrap_or_else(|| u.to_string());
+        let mut moves = Vec::new();
+        let mut notes = Vec::new();
+        let mut next = waypoints.iter();
+        for step in &self.steps {
+            match step {
+                Step::Move(p) => moves.push(Move {
+                    name: &p.name,
+                    waypoint: next.next().expect("a waypoint per move"),
+                    notes: std::mem::take(&mut notes),
+                }),
+                Step::Do(a) => notes.push(format!(
+                    "KYNEX, not exported until its I/O is mapped: {}",
+                    match a {
+                        Action::Grip { gripper } => format!("close gripper {}", name(*gripper)),
+                        Action::Release { gripper } => format!("open gripper {}", name(*gripper)),
+                        Action::Command { machine, command } =>
+                            format!("tell {} to {}", name(*machine), command.tag()),
+                        Action::Wait { machine, signal } =>
+                            format!("wait for {} to say {}", name(*machine), signal.tag()),
+                        Action::Delay { seconds } => format!("sleep({seconds})"),
+                    }
+                )),
+            }
+        }
         let script = urscript::urscript(
             kin,
             &tool,
             &Export {
                 name: &robot,
-                moves: self
-                    .points
-                    .iter()
-                    .zip(&waypoints)
-                    .map(|(p, w)| Move {
-                        name: &p.name,
-                        waypoint: w,
-                    })
-                    .collect(),
+                moves,
                 close: self.close,
                 base,
                 flange,
+                trailing: notes,
             },
         )?;
         let file: String = robot
@@ -234,15 +333,49 @@ impl Program {
         kin.tool(self.tool?, DAffine3::from_translation(self.offset))
     }
 
+    /// The moves as the planner takes them, in order.
     pub fn waypoints(&self, kin: &Kinematics) -> Vec<Waypoint> {
-        self.points
-            .iter()
-            .map(|p| Waypoint {
+        self.moves()
+            .map(|(_, p)| Waypoint {
                 kind: p.kind,
                 positions: kin.with(&p.positions),
                 speed: p.speed,
             })
             .collect()
+    }
+
+    /// Move by move in the plan's order, the machines this program has
+    /// opened by then: their doors are out of the way. A closed program's
+    /// move back to its start comes last, with the machines open at its end.
+    pub fn open_during_moves(&self) -> Vec<HashSet<u64>> {
+        let mut open = HashSet::new();
+        let mut out = Vec::new();
+        for (i, step) in self.steps.iter().enumerate() {
+            match step {
+                Step::Do(Action::Command {
+                    machine,
+                    command: Command::Open,
+                }) => {
+                    open.insert(*machine);
+                }
+                Step::Do(Action::Command {
+                    machine,
+                    command: Command::Close,
+                }) => {
+                    open.remove(machine);
+                }
+                // The plan's moves are into its second point on: the first
+                // is where it starts.
+                Step::Move(_) if self.moves().next().map(|m| m.0) != Some(i) => {
+                    out.push(open.clone());
+                }
+                _ => {}
+            }
+        }
+        if self.close {
+            out.push(open);
+        }
+        out
     }
 
     /// The program timed, when it has a tool to time its lines by.
@@ -251,12 +384,19 @@ impl Program {
         Some(path::plan(kin, &tool, &self.waypoints(kin), self.close))
     }
 
-    /// What the viewer shows of it: its points, each move's time and
-    /// problems, the cycle time and the tool's path.
+    /// What the viewer shows of it: its steps, each move's time and
+    /// problems, the time of its moves and the tool's path.
     ///
     /// `plan` is [`Program::plan`]'s; `more` adds problems of the plan's
-    /// own moves, in its order: the collisions found along them.
-    pub fn to_json(&self, kin: &Kinematics, plan: Option<&Plan>, more: &[Vec<String>]) -> Value {
+    /// own moves, in its order: the collisions found along them. `names`
+    /// names the machines and grip points the actions are for.
+    pub fn to_json(
+        &self,
+        kin: &Kinematics,
+        plan: Option<&Plan>,
+        more: &[Vec<String>],
+        names: &HashMap<u64, String>,
+    ) -> Value {
         let tool = self.tool(kin);
         // The move into each point, by the point, with its index in the plan.
         let mut into: BTreeMap<usize, (usize, &path::Segment)> = BTreeMap::new();
@@ -283,23 +423,30 @@ impl Program {
             })
         };
         let waypoints = self.waypoints(kin);
-        let points: Vec<Value> = self
-            .points
+        let mut nth = 0;
+        let name = |u: u64| names.get(&u).cloned().unwrap_or_default();
+        let steps: Vec<Value> = self
+            .steps
             .iter()
-            .zip(&waypoints)
-            .enumerate()
-            .map(|(i, (p, w))| {
-                let at = tool.as_ref().map(|t| {
-                    let p = kin.pose(&w.positions, t).translation;
-                    [p.x, p.y, p.z]
-                });
-                json!({
-                    "name": p.name,
-                    "kind": kind_tag(p.kind),
-                    "speed": p.speed,
-                    "at": at,
-                    "move": into.get(&i).map(|s| move_json(*s)),
-                })
+            .map(|s| match s {
+                Step::Move(p) => {
+                    // The plan numbers the moves among themselves.
+                    let i = nth;
+                    nth += 1;
+                    let at = tool.as_ref().map(|t| {
+                        let p = kin.pose(&waypoints[i].positions, t).translation;
+                        [p.x, p.y, p.z]
+                    });
+                    json!({
+                        "type": "move",
+                        "name": p.name,
+                        "kind": kind_tag(p.kind),
+                        "speed": p.speed,
+                        "at": at,
+                        "move": into.get(&i).map(|s| move_json(*s)),
+                    })
+                }
+                Step::Do(a) => action_json(a, &name),
             })
             .collect();
         let trace: Vec<f64> = match (&plan, &tool) {
@@ -312,7 +459,7 @@ impl Program {
             _ => Vec::new(),
         };
         json!({
-            "points": points,
+            "steps": steps,
             "close": self.close,
             "back": back.map(move_json),
             "cycle": plan.as_ref().map(|p| p.duration),
@@ -327,20 +474,80 @@ pub fn is_op(op: &str) -> bool {
         op,
         "program"
             | "teach"
+            | "add"
             | "retouch"
             | "edit"
             | "delete"
             | "close"
             | "clear"
             | "goto"
-            | "play"
-            | "stop"
             | "urscript"
     )
 }
 
+/// An action, as saved and as the viewer reads it: its machine or grip
+/// point by identity and by name.
+fn action_json(a: &Action, name: &dyn Fn(u64) -> String) -> Value {
+    match a {
+        Action::Grip { gripper } | Action::Release { gripper } => json!({
+            "type": if matches!(a, Action::Grip { .. }) { "grip" } else { "release" },
+            "gripper": gripper.to_string(),
+            "gripper_name": name(*gripper),
+        }),
+        Action::Command { machine, command } => json!({
+            "type": "command",
+            "machine": machine.to_string(),
+            "machine_name": name(*machine),
+            "command": command.tag(),
+        }),
+        Action::Wait { machine, signal } => json!({
+            "type": "wait",
+            "machine": machine.to_string(),
+            "machine_name": name(*machine),
+            "signal": signal.tag(),
+        }),
+        Action::Delay { seconds } => json!({ "type": "delay", "seconds": seconds }),
+    }
+}
+
+/// An action from the page: the step `v` describes.
+pub fn action_of(v: &Value) -> Result<Action, String> {
+    let uid = |key: &str| {
+        v[key]
+            .as_str()
+            .and_then(|s| s.parse::<u64>().ok())
+            .ok_or_else(|| format!("no {key}"))
+    };
+    Ok(match v["type"].as_str().ok_or("no type")? {
+        "grip" => Action::Grip {
+            gripper: uid("gripper")?,
+        },
+        "release" => Action::Release {
+            gripper: uid("gripper")?,
+        },
+        "command" => Action::Command {
+            machine: uid("machine")?,
+            command: v["command"]
+                .as_str()
+                .and_then(Command::of)
+                .ok_or("unknown command")?,
+        },
+        "wait" => Action::Wait {
+            machine: uid("machine")?,
+            signal: v["signal"]
+                .as_str()
+                .and_then(Signal::of)
+                .ok_or("unknown signal")?,
+        },
+        "delay" => Action::Delay {
+            seconds: v["seconds"].as_f64().unwrap_or(1.0).clamp(0.0, 3600.0),
+        },
+        other => return Err(format!("unknown step {other:?}")),
+    })
+}
+
 /// Every object's name, by identity.
-fn names(doc: &Document) -> HashMap<u64, String> {
+pub fn names(doc: &Document) -> HashMap<u64, String> {
     doc.objects()
         .filter_map(|(id, o)| Some((doc.object_uid(id)?.raw(), o.name.clone())))
         .collect()

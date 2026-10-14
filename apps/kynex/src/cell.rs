@@ -33,6 +33,76 @@ pub const GRIP_REACH: f64 = 0.02;
 /// How near a part let go must be to a free place to settle into it.
 pub const SNAP: f64 = 0.03;
 
+/// What a robot tells a CNC machine: its outputs to the machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    Open,
+    Close,
+    Clamp,
+    Unclamp,
+    Start,
+}
+
+impl Command {
+    pub const ALL: [Command; 5] = [
+        Command::Open,
+        Command::Close,
+        Command::Clamp,
+        Command::Unclamp,
+        Command::Start,
+    ];
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Command::Open => "open",
+            Command::Close => "close",
+            Command::Clamp => "clamp",
+            Command::Unclamp => "unclamp",
+            Command::Start => "start",
+        }
+    }
+
+    pub fn of(tag: &str) -> Option<Command> {
+        Command::ALL.into_iter().find(|c| c.tag() == tag)
+    }
+}
+
+/// What a CNC machine tells a robot: its outputs, the robot's inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    DoorOpen,
+    DoorClosed,
+    Clamped,
+    /// Not machining.
+    Idle,
+    /// Not machining, and a finished part in the chuck.
+    Done,
+}
+
+impl Signal {
+    pub const ALL: [Signal; 5] = [
+        Signal::DoorOpen,
+        Signal::DoorClosed,
+        Signal::Clamped,
+        Signal::Idle,
+        Signal::Done,
+    ];
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Signal::DoorOpen => "door_open",
+            Signal::DoorClosed => "door_closed",
+            Signal::Clamped => "clamped",
+            Signal::Idle => "idle",
+            Signal::Done => "done",
+        }
+    }
+
+    pub fn of(tag: &str) -> Option<Signal> {
+        Signal::ALL.into_iter().find(|s| s.tag() == tag)
+    }
+}
+
 /// What an object is to the process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -203,9 +273,9 @@ pub struct Cell {
     pending: Vec<Value>,
     /// Each CNC machine's state, by its object.
     machines: BTreeMap<u64, Machine>,
-    /// When the cell was last moved on, and last said to have changed
-    /// while running.
-    last_tick: Option<Instant>,
+    /// The simulation's clock when the cell was last moved on; and the real
+    /// time it last said it changed while running.
+    last_tick: Option<f64>,
     last_report: Option<Instant>,
 }
 
@@ -606,8 +676,29 @@ impl Cell {
             "auto" => {
                 let found = guess(doc);
                 let mut added = 0;
+                // A machine marked already, as equipment from the library
+                // comes, is not marked again by a part of it.
+                let machines: Vec<ObjectId> = self
+                    .components
+                    .iter()
+                    .filter(|c| c.kind == Kind::Cnc)
+                    .filter_map(|c| id_of(doc, c.object))
+                    .collect();
+                let inside = |object: u64| {
+                    let mut at = id_of(doc, object);
+                    for _ in 0..64 {
+                        match at {
+                            Some(id) if machines.contains(&id) => return true,
+                            Some(id) => at = doc.object(id).and_then(|o| o.parent),
+                            None => return false,
+                        }
+                    }
+                    false
+                };
                 for (object, kind) in found {
-                    if self.components.iter().any(|c| c.object == object) {
+                    if self.components.iter().any(|c| c.object == object)
+                        || (kind == Kind::Cnc && inside(object))
+                    {
                         continue;
                     }
                     let name = id_of(doc, object)
@@ -631,125 +722,175 @@ impl Cell {
                     .extend(std::mem::take(&mut self.parts).iter().map(|p| p.uid));
                 self.changed = true;
             }
-            "grip" => {
-                let gripper = uid("gripper")?;
-                let clamped_seats: Vec<DVec3> = self
-                    .components
-                    .iter()
-                    .filter(|c| self.machines.get(&c.object).is_some_and(|m| m.clamped))
-                    .filter_map(|c| self.seat(doc, c))
-                    .collect();
-                if self
-                    .parts
-                    .iter()
-                    .any(|p| p.held.is_some_and(|h| h.0 == gripper))
-                {
-                    return Err("이미 부품을 잡고 있습니다".into());
-                }
-                let at = Self::grip_point(doc, gripper).ok_or("no such gripper")?;
-                let near = self
-                    .parts
-                    .iter_mut()
-                    .filter(|p| p.held.is_none())
-                    .map(|p| (p.world.translation.distance(at.translation), p))
-                    .filter(|(d, _)| *d < GRIP_REACH)
-                    .min_by(|a, b| a.0.total_cmp(&b.0));
-                let Some((_, part)) = near else {
-                    return Err("잡을 부품이 그리퍼 가까이에 없습니다".into());
-                };
-                let here = part.world.translation;
-                if clamped_seats.iter().any(|s| s.distance(here) < SNAP) {
-                    return Err("척이 물려 있습니다. 척을 먼저 푸세요".into());
-                }
-                // Held as it stands, wherever the grip point turns.
-                part.held = Some((gripper, at.inverse() * part.world));
-                self.changed = true;
-            }
-            "release" => {
-                let gripper = uid("gripper")?;
-                let at = Self::grip_point(doc, gripper).ok_or("no such gripper")?;
-                let places = self.places(doc);
-                let Some(part) = self
-                    .parts
-                    .iter_mut()
-                    .find(|p| p.held.is_some_and(|h| h.0 == gripper))
-                else {
-                    return Err("잡고 있는 부품이 없습니다".into());
-                };
-                let (_, grip) = part.held.take().unwrap();
-                part.world = at * grip;
-                // Into a free place nearby, upright; or left where it is.
-                let here = part.world.translation;
-                if let Some((place, _)) = places
-                    .iter()
-                    .filter(|(p, taken)| !taken && p.distance(here) < SNAP)
-                    .min_by(|a, b| a.0.distance(here).total_cmp(&b.0.distance(here)))
-                {
-                    let half = part.size().1 / 2.0;
-                    part.world =
-                        DAffine3::from_translation(*place + DVec3::Z * (half - RAW.1 / 2.0));
-                }
-                self.changed = true;
-            }
+            "grip" => self.grip(doc, uid("gripper")?)?,
+            "release" => self.release(doc, uid("gripper")?)?,
             "machine" => {
-                let object = uid("object")?;
-                let c = self
-                    .components
-                    .iter()
-                    .find(|c| c.object == object && c.kind == Kind::Cnc)
-                    .cloned()
-                    .ok_or("CNC 장비가 아닙니다")?;
-                let in_chuck = self.seat(doc, &c).and_then(|seat| {
-                    self.parts
-                        .iter()
-                        .find(|p| p.held.is_none() && p.world.translation.distance(seat) < SNAP)
-                        .map(|p| p.finished)
-                });
-                let m = self.machines.entry(object).or_default();
-                let busy = m.machining.is_some();
-                match req["action"].as_str().ok_or("no action")? {
-                    "open" if busy => return Err("가공 중에는 문을 열 수 없습니다".into()),
-                    "open" => m.opening = true,
-                    "close" => m.opening = false,
-                    "clamp" => m.clamped = true,
-                    "unclamp" if busy => return Err("가공 중에는 척을 풀 수 없습니다".into()),
-                    "unclamp" => m.clamped = false,
-                    "start" => {
-                        if busy {
-                            return Err("이미 가공 중입니다".into());
-                        }
-                        if !m.shut() {
-                            return Err("문을 닫아야 가공을 시작할 수 있습니다".into());
-                        }
-                        match in_chuck {
-                            None => return Err("척에 소재가 없습니다".into()),
-                            Some(true) => return Err("척에 있는 것은 이미 완성품입니다".into()),
-                            Some(false) => {}
-                        }
-                        if !m.clamped {
-                            return Err("척을 물려야 가공을 시작할 수 있습니다".into());
-                        }
-                        m.machining = Some(0.0);
-                    }
-                    other => return Err(format!("unknown action {other:?}")),
-                }
-                self.changed = true;
+                let command = req["action"]
+                    .as_str()
+                    .and_then(Command::of)
+                    .ok_or("unknown action")?;
+                self.command(doc, uid("object")?, command)?;
             }
             other => return Err(format!("unknown op {other:?}")),
         }
         Ok(json!({ "ok": true }))
     }
 
-    /// Moves the machines on to `now`: doors at their pace, cycles at
-    /// theirs, a part done when its cycle is. `doc` is the scene the chucks
-    /// are in. Returns whether the viewers have anything to look at again:
-    /// at a change of state at once, and while running, every
-    /// [`REPORT`].
-    pub fn tick(&mut self, doc: &Document, now: Instant) -> bool {
-        let dt = self
-            .last_tick
-            .map_or(0.0, |t| now.duration_since(t).as_secs_f64());
-        self.last_tick = Some(now);
+    /// Closes grip point `gripper` on the part at it: within
+    /// [`GRIP_REACH`], not held, and not clamped in a chuck.
+    pub fn grip(&mut self, doc: &Document, gripper: u64) -> Result<(), String> {
+        let clamped_seats: Vec<DVec3> = self
+            .components
+            .iter()
+            .filter(|c| self.machines.get(&c.object).is_some_and(|m| m.clamped))
+            .filter_map(|c| self.seat(doc, c))
+            .collect();
+        if self
+            .parts
+            .iter()
+            .any(|p| p.held.is_some_and(|h| h.0 == gripper))
+        {
+            return Err("이미 부품을 잡고 있습니다".into());
+        }
+        let at = Self::grip_point(doc, gripper).ok_or("no such gripper")?;
+        let near = self
+            .parts
+            .iter_mut()
+            .filter(|p| p.held.is_none())
+            .map(|p| (p.world.translation.distance(at.translation), p))
+            .filter(|(d, _)| *d < GRIP_REACH)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((_, part)) = near else {
+            return Err("잡을 부품이 그리퍼 가까이에 없습니다".into());
+        };
+        let here = part.world.translation;
+        if clamped_seats.iter().any(|s| s.distance(here) < SNAP) {
+            return Err("척이 물려 있습니다. 척을 먼저 푸세요".into());
+        }
+        // Held as it stands, wherever the grip point turns.
+        part.held = Some((gripper, at.inverse() * part.world));
+        self.changed = true;
+        Ok(())
+    }
+
+    /// Opens grip point `gripper`: its part settles into a free place or
+    /// chuck within [`SNAP`], upright, or stays where it is.
+    pub fn release(&mut self, doc: &Document, gripper: u64) -> Result<(), String> {
+        let at = Self::grip_point(doc, gripper).ok_or("no such gripper")?;
+        let places = self.places(doc);
+        let Some(part) = self
+            .parts
+            .iter_mut()
+            .find(|p| p.held.is_some_and(|h| h.0 == gripper))
+        else {
+            return Err("잡고 있는 부품이 없습니다".into());
+        };
+        let (_, grip) = part.held.take().unwrap();
+        part.world = at * grip;
+        let here = part.world.translation;
+        if let Some((place, _)) = places
+            .iter()
+            .filter(|(p, taken)| !taken && p.distance(here) < SNAP)
+            .min_by(|a, b| a.0.distance(here).total_cmp(&b.0.distance(here)))
+        {
+            let half = part.size().1 / 2.0;
+            part.world = DAffine3::from_translation(*place + DVec3::Z * (half - RAW.1 / 2.0));
+        }
+        self.changed = true;
+        Ok(())
+    }
+
+    /// How long grip point `gripper` takes to open or close, seconds.
+    pub fn actuate_time(&self, gripper: u64) -> f64 {
+        self.components
+            .iter()
+            .find(|c| c.object == gripper)
+            .map_or(Props::default().actuate, |c| c.props.actuate)
+    }
+
+    /// What is in machine `c`'s chuck: `Some(finished)`, or `None`.
+    fn in_chuck(&self, doc: &Document, c: &Component) -> Option<bool> {
+        let seat = self.seat(doc, c)?;
+        self.parts
+            .iter()
+            .find(|p| p.held.is_none() && p.world.translation.distance(seat) < SNAP)
+            .map(|p| p.finished)
+    }
+
+    /// Tells CNC machine `machine` to do `command`, as a robot's output to
+    /// it would. Refused, with why, where the machine would refuse.
+    pub fn command(
+        &mut self,
+        doc: &Document,
+        machine: u64,
+        command: Command,
+    ) -> Result<(), String> {
+        let c = self
+            .components
+            .iter()
+            .find(|c| c.object == machine && c.kind == Kind::Cnc)
+            .cloned()
+            .ok_or("CNC 장비가 아닙니다")?;
+        let in_chuck = self.in_chuck(doc, &c);
+        let m = self.machines.entry(machine).or_default();
+        let busy = m.machining.is_some();
+        match command {
+            Command::Open if busy => return Err("가공 중에는 문을 열 수 없습니다".into()),
+            Command::Open => m.opening = true,
+            Command::Close => m.opening = false,
+            Command::Clamp => m.clamped = true,
+            Command::Unclamp if busy => return Err("가공 중에는 척을 풀 수 없습니다".into()),
+            Command::Unclamp => m.clamped = false,
+            Command::Start => {
+                if busy {
+                    return Err("이미 가공 중입니다".into());
+                }
+                if !m.shut() {
+                    return Err("문을 닫아야 가공을 시작할 수 있습니다".into());
+                }
+                match in_chuck {
+                    None => return Err("척에 소재가 없습니다".into()),
+                    Some(true) => return Err("척에 있는 것은 이미 완성품입니다".into()),
+                    Some(false) => {}
+                }
+                if !m.clamped {
+                    return Err("척을 물려야 가공을 시작할 수 있습니다".into());
+                }
+                m.machining = Some(0.0);
+            }
+        }
+        self.changed = true;
+        Ok(())
+    }
+
+    /// Whether CNC machine `machine` says `signal` now, as its output to a
+    /// robot would.
+    pub fn signal(&self, doc: &Document, machine: u64, signal: Signal) -> bool {
+        let Some(c) = self
+            .components
+            .iter()
+            .find(|c| c.object == machine && c.kind == Kind::Cnc)
+        else {
+            return false;
+        };
+        let m = self.machines.get(&machine).cloned().unwrap_or_default();
+        match signal {
+            Signal::DoorOpen => m.door >= 1.0 && m.opening,
+            Signal::DoorClosed => m.shut(),
+            Signal::Clamped => m.clamped,
+            Signal::Idle => m.machining.is_none(),
+            Signal::Done => m.machining.is_none() && self.in_chuck(doc, c) == Some(true),
+        }
+    }
+
+    /// Moves the machines on to `sim`, the simulation's clock in seconds:
+    /// doors at their pace, cycles at theirs, a part done when its cycle
+    /// is. `doc` is the scene the chucks are in. Returns whether the viewers
+    /// have anything to look at again: at a change of state at once, and
+    /// while running, every [`REPORT`] of real time `now`.
+    pub fn tick(&mut self, doc: &Document, sim: f64, now: Instant) -> bool {
+        let dt = self.last_tick.map_or(0.0, |t| (sim - t).max(0.0));
+        self.last_tick = Some(sim);
         let (moving, finished) = self.step(doc, dt);
         let due = self
             .last_report
@@ -840,6 +981,13 @@ impl Cell {
                 .insert((DatablockKind::Object, Uid::from_raw(uid)));
         }
         changes
+    }
+
+    /// Machine `machine`'s door, by identity.
+    pub fn door_of(&self, doc: &Document, machine: u64) -> Option<u64> {
+        let id = id_of(doc, machine)?;
+        doc.object_uid(part_named(doc, id, "door")?)
+            .map(|u| u.raw())
     }
 
     /// Each machine's door: its identity, how far open, and the machine's
@@ -1204,6 +1352,24 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_with_its_role_is_not_marked_again_by_a_part_of_it() {
+        let mut doc = Document::new();
+        let item = doc.add_object(Object::new("CNC 선반 1", ObjectData::Empty));
+        let inner = doc.add_object(Object::new("machine", ObjectData::Empty));
+        doc.set_parent(inner, Some(item)).unwrap();
+        for part in ["door", "chuck"] {
+            let id = doc.add_mesh_object(part, kreate_mesh::primitives::cube(0.2));
+            doc.set_parent(id, Some(inner)).unwrap();
+        }
+        let item_uid = doc.object_uid(item).unwrap().raw();
+        let mut cell = Cell::default();
+        cell.ensure(item_uid, "CNC 선반 1".into(), Kind::Cnc);
+        let a = ask(&mut cell, &doc, json!({"op": "auto"}));
+        assert_eq!(a["added"], 0, "{a}");
+        assert_eq!(cell.components().len(), 1);
+    }
+
+    #[test]
     fn a_grip_point_is_the_last_link_not_the_gripper_holding_it() {
         const ARM: &str = r#"<?xml version="1.0"?>
 <robot name="arm">
@@ -1265,13 +1431,13 @@ mod tests {
         };
         let t0 = Instant::now();
         let at = |s: f64| t0 + Duration::from_secs_f64(s);
-        cell.tick(&doc, at(0.0));
+        cell.tick(&doc, 0.0, at(0.0));
 
         // The door opens over its 3 s, and slides aside by its width.
         assert_eq!(act(&mut cell, &doc, "open")["ok"], true);
-        assert!(cell.tick(&doc, at(1.5)), "moving: reported");
+        assert!(cell.tick(&doc, 1.5, at(1.5)), "moving: reported");
         assert!((cell.machines[&machine].door - 0.5).abs() < 1e-9);
-        cell.tick(&doc, at(3.5));
+        cell.tick(&doc, 3.5, at(3.5));
         assert_eq!(cell.machines[&machine].door, 1.0);
         let mut shown = doc.clone();
         let changes = cell.apply(&mut shown);
@@ -1310,7 +1476,7 @@ mod tests {
             json!({"op": "release", "gripper": grip.to_string()}),
         );
         act(&mut cell, &doc, "close");
-        cell.tick(&doc, at(7.0));
+        cell.tick(&doc, 7.0, at(7.0));
         let a = act(&mut cell, &doc, "start");
         assert!(a["error"].as_str().unwrap().contains("척"), "{a}");
         act(&mut cell, &doc, "clamp");
@@ -1330,9 +1496,12 @@ mod tests {
         assert_eq!(act(&mut cell, &doc, "unclamp")["ok"], false);
 
         // 90 s later the part in the chuck is finished.
-        cell.tick(&doc, at(50.0));
+        cell.tick(&doc, 50.0, at(50.0));
         assert!(cell.is_running());
-        assert!(cell.tick(&doc, at(97.5)), "the cycle's end is reported");
+        assert!(
+            cell.tick(&doc, 97.5, at(97.5)),
+            "the cycle's end is reported"
+        );
         assert!(!cell.is_running());
         let part = cell
             .parts()

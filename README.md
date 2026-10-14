@@ -99,11 +99,22 @@ random restarts (`"restarts": n`) when the start is far from the goal.
 
 ### Programs
 
-Each robot card has a **프로그램** list of waypoints:
+Each robot card has a **프로그램**: a list of steps.
 
 1. Pose the robot with the controls above.
 2. Add the pose with **+ MoveJ** or **+ MoveL**.
-3. Repeat for each point. **▶ 재생** then plays the program in the viewer.
+3. Between moves, add an action from **+ 동작**:
+   - 그리퍼 잡기 / 놓기 (grip, release).
+   - 장비 명령: open or close a CNC machine's door, clamp or unclamp its
+     chuck, or start its cycle.
+   - 신호 대기: wait until a machine says its door is open or closed, its
+     chuck is clamped, it is idle, or its cycle is done.
+   - 시간 대기: wait a set number of seconds.
+
+   An action's machine, grip point, command or signal is changed in its
+   row. Clicking a step's row picks it, and the next step added goes
+   after it.
+4. **▶ 실행** runs the program (`apps/kynex/src/run.rs`).
 
 KYNEX times the moves (`kynex_kin::path`):
 
@@ -125,6 +136,28 @@ KYNEX times the moves (`kynex_kin::path`):
 - Each point has buttons to go to it (→), re-teach it from the current
   pose (⟳) or delete it (✕). Its J/L chip switches it between MoveJ and
   MoveL.
+- The time shown beside the program (**이동**) is its moves'. With
+  actions, a cycle also waits for machines, so the cycle time is measured
+  by running it.
+
+**Running**: steps run by the simulation's clock, and the CNC machines
+run by the same clock.
+
+- A move is planned when it starts, from wherever the robot is then.
+- A wait holds until the machine says what it waits for.
+- A step the cell refuses stops the run with an alarm that says why, as a
+  controller would. For example: starting a cycle with the door open,
+  gripping with nothing there, or opening the door while machining.
+- **배속** runs the clock 1–20 times real time, so a 90 s cycle takes
+  4.5 s at 20×.
+- With **순환 재생** the program runs again from its first step. The
+  panel shows the step running, how many cycles have run and how long
+  the last one took.
+- Moving the robot by hand (jog, IK, → to a point, 세션 자세로) stops the
+  run.
+- The path check (Collisions, below) takes the program's door commands
+  into account: a door the program has opened by a move is out of that
+  move's way.
 
 Programs, and the cell's roles (below), are saved to the project file
 `kynex-project.json` in the directory `kynex view` runs in. Use
@@ -136,7 +169,11 @@ objects anew, the program finds them again by name.
 
 **URScript** downloads the program as a `.script` file for a Universal
 Robots controller (`kynex_kin::urscript`). The program must be for a robot
-with six revolute joints.
+with six revolute joints. Actions are not exported yet, because they need
+the cell's I/O mapped to the controller's inputs and outputs. Each action
+is written as a comment where it falls between the moves
+(`# KYNEX, not exported until its I/O is mapped: …`), to be completed on
+the controller.
 
 - MoveJ becomes `movej` with the taught joint positions.
 - MoveL becomes `movel` to the taught tool pose, in the controller's base

@@ -32,6 +32,7 @@ mod collide;
 mod library;
 mod pose;
 mod program;
+mod run;
 mod view;
 
 const USAGE: &str = "\

@@ -50,15 +50,18 @@ fn a_ur_program_reads_as_movej_and_movel_in_the_base_frame() {
                 Move {
                     name: "P1",
                     waypoint: &a,
+                    notes: Vec::new(),
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
+                    notes: Vec::new(),
                 },
             ],
             close: false,
             base,
             flange,
+            trailing: Vec::new(),
         },
     )
     .unwrap();
@@ -110,15 +113,18 @@ fn a_closed_program_loops_back_to_its_first_point() {
                 Move {
                     name: "P1",
                     waypoint: &a,
+                    notes: Vec::new(),
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
+                    notes: Vec::new(),
                 },
             ],
             close: true,
             base,
             flange,
+            trailing: Vec::new(),
         },
     )
     .unwrap();
@@ -157,10 +163,12 @@ fn only_a_six_joint_arm_has_urscript() {
             moves: vec![Move {
                 name: "P1",
                 waypoint: &w,
+                notes: Vec::new(),
             }],
             close: false,
             base: root,
             flange: tip,
+            trailing: Vec::new(),
         },
     )
     .unwrap_err();
@@ -173,4 +181,57 @@ fn names_become_identifiers_and_comments_stay_ascii() {
     assert_eq!(function_name("1st"), "kynex_1st");
     assert_eq!(function_name("로봇"), "kynex___");
     assert_eq!(ascii("P1 집기"), "P1 ??");
+}
+
+#[test]
+fn what_cannot_be_said_yet_is_left_as_comments_in_its_place() {
+    let doc = load(UR5E);
+    let (_, root) = find(&doc, "base_link");
+    let (_, base) = find(&doc, "base");
+    let (_, flange) = find(&doc, "tool0");
+    let kin = Kinematics::of(&doc, root).unwrap();
+    let tool = kin.tool(flange, DAffine3::IDENTITY).unwrap();
+    let a = wp(MoveKind::Joint, [0.3, -1.2, 1.4, -1.6, -1.5, 0.2], 0.5);
+    let b = wp(MoveKind::Joint, [0.5, -1.0, 1.2, -1.7, -1.5, 0.4], 0.5);
+    let script = urscript(
+        &kin,
+        &tool,
+        &Export {
+            name: "notes",
+            moves: vec![
+                Move {
+                    name: "P1",
+                    waypoint: &a,
+                    notes: Vec::new(),
+                },
+                Move {
+                    name: "P2",
+                    waypoint: &b,
+                    notes: vec!["close gripper grip_a".into()],
+                },
+            ],
+            close: false,
+            base,
+            flange,
+            trailing: vec!["wait for machine".into()],
+        },
+    )
+    .unwrap();
+    let lines: Vec<&str> = script.lines().map(str::trim).collect();
+    let note = lines
+        .iter()
+        .position(|l| *l == "# close gripper grip_a")
+        .unwrap();
+    assert_eq!(lines[note + 1], "# P2", "before the move it comes before");
+    let last = lines
+        .iter()
+        .position(|l| *l == "# wait for machine")
+        .unwrap();
+    assert!(
+        lines[..last]
+            .iter()
+            .filter(|l| l.starts_with("movej"))
+            .count()
+            == 2
+    );
 }

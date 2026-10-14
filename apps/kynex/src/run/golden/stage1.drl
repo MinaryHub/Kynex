@@ -1,0 +1,731 @@
+# Made by KYNEX from program "Doosan M1013 + ?? ??? 1", for a Doosan Robotics controller.
+# Poses in the base frame (DR_BASE): millimetres, and ZYZ Euler angles in degrees.
+# Digital outputs used: 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13.
+
+# TCP "KYNEX", to register on the teach pendant: posx(0.000, 70.000, 170.000, 0.0000, 0.0000, 0.0000)
+set_tcp("KYNEX")
+
+def kynex_shift(p, places, to, frm):
+    return posx(p[0] + places[to][0] - places[frm][0], p[1] + places[to][1] - places[frm][1], p[2] + places[to][2] - places[frm][2], p[3], p[4], p[5])
+# The places of pallet
+kynex_places_0 = [[-1000.000, -100.000, -390.000], [-900.000, -100.000, -390.000], [-800.000, -100.000, -390.000], [-700.000, -100.000, -390.000], [-600.000, -100.000, -390.000], [-1000.000, 0.000, -390.000], [-900.000, 0.000, -390.000], [-800.000, 0.000, -390.000], [-700.000, 0.000, -390.000], [-600.000, 0.000, -390.000], [-1000.000, 100.000, -390.000], [-900.000, 100.000, -390.000], [-800.000, 100.000, -390.000], [-700.000, 100.000, -390.000], [-600.000, 100.000, -390.000], [-1000.000, 200.000, -390.000], [-900.000, 200.000, -390.000], [-800.000, 200.000, -390.000], [-700.000, 200.000, -390.000], [-600.000, 200.000, -390.000]]
+kynex_place_0 = 0
+# The places of pallet
+kynex_places_1 = [[-200.000, -950.000, -390.000], [-100.000, -950.000, -390.000], [0.000, -950.000, -390.000], [100.000, -950.000, -390.000], [200.000, -950.000, -390.000], [-200.000, -850.000, -390.000], [-100.000, -850.000, -390.000], [0.000, -850.000, -390.000], [100.000, -850.000, -390.000], [200.000, -850.000, -390.000], [-200.000, -750.000, -390.000], [-100.000, -750.000, -390.000], [0.000, -750.000, -390.000], [100.000, -750.000, -390.000], [200.000, -750.000, -390.000], [-200.000, -650.000, -390.000], [-100.000, -650.000, -390.000], [0.000, -650.000, -390.000], [100.000, -650.000, -390.000], [200.000, -650.000, -390.000]]
+kynex_place_1 = 0
+
+# P1
+j1 = posj(179.7421, 66.0453, 63.1447, 0.0000, 50.8098, -0.2578)
+p1 = posx(-999.999, -100.000, -240.000, 180.0000, 180.0000, 0.0000)
+# P2
+j2 = posj(179.7422, 76.7050, 58.1220, 0.0000, 45.1723, -0.2577)
+p2 = posx(-999.997, -100.000, -389.999, 179.9999, 180.0000, 0.0000)
+# P3
+j3 = posj(179.7421, 66.0449, 63.1455, 0.0000, 50.8089, -0.2577)
+p3 = posx(-999.997, -100.000, -240.000, 179.9999, 180.0000, 0.0000)
+# P4
+j4 = posj(84.6500, 12.3930, 142.7107, -0.0005, 24.8962, -95.3496)
+# P5
+j5 = posj(88.3103, 79.9900, 10.9600, 0.0000, 89.0494, -91.6897)
+p5 = posx(0.000, 1099.997, -40.000, -180.0000, 180.0000, 0.0000)
+# P6
+j6 = posj(88.3102, 86.0274, 13.7001, 0.0001, 80.2707, -91.6898)
+p6 = posx(0.000, 1099.991, -190.000, -180.0000, 180.0000, 0.0000)
+# P7
+j7 = posj(88.3102, 79.9869, 10.9665, 0.0000, 89.0454, -91.6898)
+p7 = posx(0.000, 1099.994, -40.001, -180.0000, 180.0000, 0.0000)
+# P8
+j8 = posj(84.6503, 12.3930, 142.7107, -0.0012, 24.8962, -95.3485)
+p8 = posx(-0.001, 300.000, -40.000, 179.9999, 180.0000, 0.0000)
+# P9
+j9 = posj(179.7421, 66.0453, 63.1447, 0.0000, 50.8098, -0.2578)
+p9 = posx(-999.999, -100.000, -240.000, 180.0000, 180.0000, 0.0000)
+# P10
+j10 = posj(179.7422, 76.7050, 58.1220, 0.0000, 45.1723, -0.2577)
+p10 = posx(-999.997, -100.000, -389.999, 179.9999, 180.0000, 0.0000)
+# P11
+j11 = posj(179.7421, 66.0449, 63.1455, 0.0000, 50.8089, -0.2577)
+p11 = posx(-999.997, -100.000, -240.000, 179.9999, 180.0000, 0.0000)
+# P12
+j12 = posj(199.5671, -8.2482, -148.8905, -180.0064, -337.1389, 199.5734)
+# P13
+j13 = posj(185.4349, -65.7010, -40.5708, -180.0000, -286.2720, 185.4348)
+p13 = posx(1099.999, 0.000, -40.000, -180.0000, 180.0000, 0.0000)
+# P14
+j14 = posj(185.4349, -73.0667, -41.4633, -180.0000, -294.5318, 185.4345)
+p14 = posx(1099.992, -0.001, -190.000, -179.9996, 180.0000, 0.0000)
+# P15
+j15 = posj(185.4349, -65.6985, -40.5760, -180.0001, -286.2766, 185.4345)
+p15 = posx(1099.991, -0.001, -40.001, -179.9996, 180.0000, 0.0000)
+# P16
+j16 = posj(199.5622, -8.2476, -148.8901, -179.9957, -337.1377, 199.5580)
+p16 = posx(300.001, -0.002, -40.000, -179.9997, 180.0000, 0.0000)
+# P17
+j17 = posj(3.6946, -66.0453, -63.1446, -180.0000, -309.1901, 3.6946)
+p17 = posx(-1000.000, -100.000, -240.000, 180.0000, 180.0000, 0.0000)
+# P18
+j18 = posj(3.6946, -76.7050, -58.1220, -180.0001, -314.8277, 3.6948)
+p18 = posx(-999.997, -100.000, -389.999, 179.9999, 180.0000, 0.0000)
+# P19
+j19 = posj(3.6946, -66.0449, -63.1455, -180.0001, -309.1911, 3.6948)
+p19 = posx(-999.997, -100.000, -240.000, 179.9999, 180.0000, 0.0000)
+# P1
+j20 = posj(-81.3729, 28.5183, -139.0737, -180.0001, -290.5554, -81.3728)
+# P2
+j21 = posj(-81.3729, -2.2945, -156.4586, -180.0003, -338.7531, -81.3727)
+p21 = posx(0.000, 160.000, -40.000, 180.0000, 180.0000, 0.0000)
+# P3
+j22 = posj(-88.0805, -57.4143, -57.4913, -180.0000, -294.9059, -88.0805)
+p22 = posx(0.000, 959.999, -40.001, 180.0000, 180.0000, 0.0000)
+# P4
+j23 = posj(-88.0805, -65.5735, -58.1546, -180.0000, -303.7289, -88.0805)
+p23 = posx(0.000, 959.997, -192.502, 180.0000, 180.0000, 0.0000)
+# P5
+j24 = posj(-88.0805, -57.4139, -57.4921, -180.0000, -294.9069, -88.0805)
+p24 = posx(0.000, 959.997, -40.002, 180.0000, 180.0000, 0.0000)
+# P6
+j25 = posj(-88.3103, -79.9898, -10.9605, -180.0000, -270.9509, -88.3102)
+p25 = posx(0.000, 1099.997, -40.000, 180.0000, 180.0000, 0.0000)
+# P7
+j26 = posj(-88.3102, -86.0274, -13.7001, -180.0000, -279.7293, -88.3102)
+p26 = posx(0.000, 1099.991, -190.000, 180.0000, 180.0000, 0.0000)
+# P8
+j27 = posj(-88.3102, -79.9869, -10.9665, -180.0000, -270.9546, -88.3102)
+p27 = posx(0.000, 1099.994, -40.001, 180.0000, 180.0000, 0.0000)
+# P9
+j28 = posj(-84.6503, -12.3930, -142.7107, -179.9988, -335.1038, -84.6515)
+p28 = posx(0.001, 300.000, -40.000, -179.9999, 180.0000, 0.0000)
+# P10
+j29 = posj(80.8084, -69.3904, -55.4982, -180.0000, -304.8888, 80.8084)
+p29 = posx(-200.000, -1089.999, -240.000, -180.0000, 180.0000, 0.0000)
+# P11
+j30 = posj(80.8084, -79.9913, -49.9998, -180.0000, -309.9923, 80.8084)
+p30 = posx(-199.999, -1089.995, -389.996, -180.0000, 180.0000, 0.0000)
+# P12
+j31 = posj(80.8084, -69.3896, -55.4999, -180.0000, -304.8905, 80.8084)
+p31 = posx(-199.999, -1089.996, -239.997, -180.0000, 180.0000, 0.0000)
+# P13
+j32 = posj(3.6947, -66.0450, -63.1452, -180.0006, -309.1907, 3.6954)
+p32 = posx(-999.998, -100.000, -240.000, 179.9998, 180.0000, 0.0000)
+# P14
+j33 = posj(3.6946, -76.7050, -58.1220, -180.0001, -314.8277, 3.6948)
+p33 = posx(-999.997, -100.000, -389.999, 179.9999, 180.0000, 0.0000)
+# P15
+j34 = posj(3.6946, -66.0449, -63.1455, -180.0001, -309.1911, 3.6948)
+p34 = posx(-999.997, -100.000, -240.000, 179.9999, 180.0000, 0.0000)
+# P16
+j35 = posj(127.0986, -15.0389, -108.6743, -179.9997, -303.7135, 127.0984)
+# P17
+j36 = posj(173.2961, 18.7628, -134.0241, -180.0000, -295.2614, 173.2961)
+# P18
+j37 = posj(173.2976, -8.2465, -148.8920, -180.0028, -337.1404, 173.3006)
+p37 = posx(299.992, -139.997, -39.998, 179.9996, 180.0000, 0.0000)
+# P19
+j38 = posj(178.1525, -65.7010, -40.5708, -180.0000, -286.2720, 178.1525)
+p38 = posx(1099.999, -140.000, -40.000, 180.0000, 180.0000, 0.0000)
+# P20
+j39 = posj(178.1525, -73.2118, -41.4306, -180.0001, -294.6444, 178.1529)
+p39 = posx(1099.990, -139.999, -192.499, 179.9996, 180.0000, 0.0000)
+# P21
+j40 = posj(178.1525, -65.7012, -40.5705, -180.0000, -286.2717, 178.1525)
+p40 = posx(1100.000, -140.000, -40.000, 180.0000, 180.0000, 0.0000)
+# P22
+j41 = posj(185.4349, -65.6991, -40.5748, -180.0001, -286.2756, 185.4346)
+p41 = posx(1099.993, -0.001, -40.001, -179.9997, 180.0000, 0.0000)
+# P23
+j42 = posj(185.4349, -73.0667, -41.4633, -180.0000, -294.5318, 185.4345)
+p42 = posx(1099.992, -0.001, -190.000, -179.9996, 180.0000, 0.0000)
+# P24
+j43 = posj(185.4349, -65.6985, -40.5760, -180.0001, -286.2766, 185.4345)
+p43 = posx(1099.991, -0.001, -40.001, -179.9996, 180.0000, 0.0000)
+# P25
+j44 = posj(199.5622, -8.2476, -148.8901, -179.9957, -337.1377, 199.5580)
+p44 = posx(300.001, -0.002, -40.000, -179.9997, 180.0000, 0.0000)
+# P26
+j45 = posj(80.8084, -69.3901, -55.4990, -180.0000, -304.8896, 80.8084)
+p45 = posx(-200.000, -1089.998, -239.999, -180.0000, 180.0000, 0.0000)
+# P27
+j46 = posj(80.8084, -79.9913, -49.9998, -180.0000, -309.9923, 80.8084)
+p46 = posx(-199.999, -1089.995, -389.996, -180.0000, 180.0000, 0.0000)
+# P28
+j47 = posj(80.8084, -69.3896, -55.4999, -180.0000, -304.8905, 80.8084)
+p47 = posx(-199.999, -1089.996, -239.997, -180.0000, 180.0000, 0.0000)
+# P29
+j48 = posj(3.6947, -66.0450, -63.1452, -180.0006, -309.1907, 3.6954)
+p48 = posx(-999.998, -100.000, -240.000, 179.9998, 180.0000, 0.0000)
+# P30
+j49 = posj(3.6946, -76.7050, -58.1220, -180.0001, -314.8277, 3.6948)
+p49 = posx(-999.997, -100.000, -389.999, 179.9999, 180.0000, 0.0000)
+# P31
+j50 = posj(3.6946, -66.0449, -63.1455, -180.0001, -309.1911, 3.6948)
+p50 = posx(-999.997, -100.000, -240.000, 179.9999, 180.0000, 0.0000)
+# P1
+j51 = posj(-81.3729, 28.5183, -139.0737, -180.0001, -290.5554, -81.3728)
+# P2
+j52 = posj(-81.3729, -2.2945, -156.4586, -180.0003, -338.7531, -81.3727)
+p52 = posx(0.000, 160.000, -40.000, 180.0000, 180.0000, 0.0000)
+# P3
+j53 = posj(-88.0805, -57.4143, -57.4913, -180.0000, -294.9059, -88.0805)
+p53 = posx(0.000, 959.999, -40.001, 180.0000, 180.0000, 0.0000)
+# P4
+j54 = posj(-88.0805, -65.5735, -58.1546, -180.0000, -303.7289, -88.0805)
+p54 = posx(0.000, 959.997, -192.502, 180.0000, 180.0000, 0.0000)
+# P5
+j55 = posj(-88.0805, -57.4139, -57.4921, -180.0000, -294.9069, -88.0805)
+p55 = posx(0.000, 959.997, -40.002, 180.0000, 180.0000, 0.0000)
+# P6
+j56 = posj(-88.3103, -79.9898, -10.9605, -180.0000, -270.9509, -88.3102)
+p56 = posx(0.000, 1099.997, -40.000, 180.0000, 180.0000, 0.0000)
+# P7
+j57 = posj(-88.3102, -86.0274, -13.7001, -180.0000, -279.7293, -88.3102)
+p57 = posx(0.000, 1099.991, -190.000, 180.0000, 180.0000, 0.0000)
+# P8
+j58 = posj(-88.3102, -79.9869, -10.9665, -180.0000, -270.9546, -88.3102)
+p58 = posx(0.000, 1099.994, -40.001, 180.0000, 180.0000, 0.0000)
+# P9
+j59 = posj(-84.6503, -12.3930, -142.7107, -179.9988, -335.1038, -84.6515)
+p59 = posx(0.001, 300.000, -40.000, -179.9999, 180.0000, 0.0000)
+# P10
+j60 = posj(80.8084, -69.3904, -55.4982, -180.0000, -304.8888, 80.8084)
+p60 = posx(-200.000, -1089.999, -240.000, -180.0000, 180.0000, 0.0000)
+# P11
+j61 = posj(80.8084, -79.9913, -49.9998, -180.0000, -309.9923, 80.8084)
+p61 = posx(-199.999, -1089.995, -389.996, -180.0000, 180.0000, 0.0000)
+# P12
+j62 = posj(80.8084, -69.3896, -55.4999, -180.0000, -304.8905, 80.8084)
+p62 = posx(-199.999, -1089.996, -239.997, -180.0000, 180.0000, 0.0000)
+# P13
+j63 = posj(3.6947, -66.0450, -63.1452, -180.0006, -309.1907, 3.6954)
+p63 = posx(-999.998, -100.000, -240.000, 179.9998, 180.0000, 0.0000)
+# P14
+j64 = posj(3.6946, -76.7050, -58.1220, -180.0001, -314.8277, 3.6948)
+p64 = posx(-999.997, -100.000, -389.999, 179.9999, 180.0000, 0.0000)
+# P15
+j65 = posj(3.6946, -66.0449, -63.1455, -180.0001, -309.1911, 3.6948)
+p65 = posx(-999.997, -100.000, -240.000, 179.9999, 180.0000, 0.0000)
+# P16
+j66 = posj(127.0986, -15.0389, -108.6743, -179.9997, -303.7135, 127.0984)
+# P17
+j67 = posj(173.2961, 18.7628, -134.0241, -180.0000, -295.2614, 173.2961)
+# P18
+j68 = posj(173.2976, -8.2465, -148.8920, -180.0028, -337.1404, 173.3006)
+p68 = posx(299.992, -139.997, -39.998, 179.9996, 180.0000, 0.0000)
+# P19
+j69 = posj(178.1525, -65.7010, -40.5708, -180.0000, -286.2720, 178.1525)
+p69 = posx(1099.999, -140.000, -40.000, 180.0000, 180.0000, 0.0000)
+# P20
+j70 = posj(178.1525, -73.2118, -41.4306, -180.0001, -294.6444, 178.1529)
+p70 = posx(1099.990, -139.999, -192.499, 179.9996, 180.0000, 0.0000)
+# P21
+j71 = posj(178.1525, -65.7012, -40.5705, -180.0000, -286.2717, 178.1525)
+p71 = posx(1100.000, -140.000, -40.000, 180.0000, 180.0000, 0.0000)
+# P22
+j72 = posj(185.4349, -65.6991, -40.5748, -180.0001, -286.2756, 185.4346)
+p72 = posx(1099.993, -0.001, -40.001, -179.9997, 180.0000, 0.0000)
+# P23
+j73 = posj(185.4349, -73.0667, -41.4633, -180.0000, -294.5318, 185.4345)
+p73 = posx(1099.992, -0.001, -190.000, -179.9996, 180.0000, 0.0000)
+# P24
+j74 = posj(185.4349, -65.6985, -40.5760, -180.0001, -286.2766, 185.4345)
+p74 = posx(1099.991, -0.001, -40.001, -179.9996, 180.0000, 0.0000)
+# P25
+j75 = posj(199.5622, -8.2476, -148.8901, -179.9957, -337.1377, 199.5580)
+p75 = posx(300.001, -0.002, -40.000, -179.9997, 180.0000, 0.0000)
+# P26
+j76 = posj(80.8084, -69.3901, -55.4990, -180.0000, -304.8896, 80.8084)
+p76 = posx(-200.000, -1089.998, -239.999, -180.0000, 180.0000, 0.0000)
+# P27
+j77 = posj(80.8084, -79.9913, -49.9998, -180.0000, -309.9923, 80.8084)
+p77 = posx(-199.999, -1089.995, -389.996, -180.0000, 180.0000, 0.0000)
+# P28
+j78 = posj(80.8084, -69.3896, -55.4999, -180.0000, -304.8905, 80.8084)
+p78 = posx(-199.999, -1089.996, -239.997, -180.0000, 180.0000, 0.0000)
+# P29
+j79 = posj(3.6947, -66.0450, -63.1452, -180.0006, -309.1907, 3.6954)
+p79 = posx(-999.998, -100.000, -240.000, 179.9998, 180.0000, 0.0000)
+# P30
+j80 = posj(3.6946, -76.7050, -58.1220, -180.0001, -314.8277, 3.6948)
+p80 = posx(-999.997, -100.000, -389.999, 179.9999, 180.0000, 0.0000)
+# P31
+j81 = posj(3.6946, -66.0449, -63.1455, -180.0001, -309.1911, 3.6948)
+p81 = posx(-999.997, -100.000, -240.000, 179.9999, 180.0000, 0.0000)
+
+# To the start
+tp_log("kynex mark 1")
+# P1
+movej(j1, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 1 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 2")
+# P2
+movel(kynex_shift(p2, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 2 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, ON)
+wait(0.50)
+tp_log("kynex mark 3")
+# P3
+movel(kynex_shift(p3, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 3 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_0 = (kynex_place_0 + 1) % 20
+set_digital_output(3, ON)
+wait(0.2)
+set_digital_output(3, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+tp_log("kynex mark 4")
+# P4
+movej(j4, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 4 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 5")
+# P5
+movel(p5, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 5 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 6")
+# P6
+movel(p6, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 6 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, OFF)
+wait(0.50)
+tp_log("kynex mark 7")
+# P7
+movel(p7, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 7 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 8")
+# P8
+movel(p8, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 8 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(5, ON)
+wait(0.2)
+set_digital_output(5, OFF)
+set_digital_output(4, ON)
+wait(0.2)
+set_digital_output(4, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_closed
+set_digital_output(7, ON)
+wait(0.2)
+set_digital_output(7, OFF)
+tp_log("kynex mark 9")
+# P9
+movejx(kynex_shift(p9, kynex_places_0, kynex_place_0, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j9))
+tp_log("kynex done 9 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 10")
+# P10
+movel(kynex_shift(p10, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 10 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, ON)
+wait(0.50)
+tp_log("kynex mark 11")
+# P11
+movel(kynex_shift(p11, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 11 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_0 = (kynex_place_0 + 1) % 20
+set_digital_output(9, ON)
+wait(0.2)
+set_digital_output(9, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_open
+tp_log("kynex mark 12")
+# P12
+movej(j12, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 12 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 13")
+# P13
+movel(p13, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 13 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 14")
+# P14
+movel(p14, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 14 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, OFF)
+wait(0.50)
+tp_log("kynex mark 15")
+# P15
+movel(p15, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 15 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 16")
+# P16
+movel(p16, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 16 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(11, ON)
+wait(0.2)
+set_digital_output(11, OFF)
+set_digital_output(10, ON)
+wait(0.2)
+set_digital_output(10, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_closed
+set_digital_output(13, ON)
+wait(0.2)
+set_digital_output(13, OFF)
+tp_log("kynex mark 17")
+# P17
+movejx(kynex_shift(p17, kynex_places_0, kynex_place_0, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j17))
+tp_log("kynex done 17 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 18")
+# P18
+movel(kynex_shift(p18, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 18 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, ON)
+wait(0.50)
+tp_log("kynex mark 19")
+# P19
+movel(kynex_shift(p19, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 19 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_0 = (kynex_place_0 + 1) % 20
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say done
+set_digital_output(3, ON)
+wait(0.2)
+set_digital_output(3, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+set_digital_output(6, ON)
+wait(0.2)
+set_digital_output(6, OFF)
+tp_log("kynex mark 20")
+# P1
+movej(j20, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 20 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 21")
+# P2
+movel(p21, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 21 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 22")
+# P3
+movel(p22, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 22 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 23")
+# P4
+movel(p23, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 23 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, ON)
+wait(0.50)
+tp_log("kynex mark 24")
+# P5
+movel(p24, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 24 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 25")
+# P6
+movel(p25, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 25 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 26")
+# P7
+movel(p26, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 26 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, OFF)
+wait(0.50)
+tp_log("kynex mark 27")
+# P8
+movel(p27, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 27 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 28")
+# P9
+movel(p28, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 28 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(5, ON)
+wait(0.2)
+set_digital_output(5, OFF)
+set_digital_output(4, ON)
+wait(0.2)
+set_digital_output(4, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_closed
+set_digital_output(7, ON)
+wait(0.2)
+set_digital_output(7, OFF)
+tp_log("kynex mark 29")
+# P10
+movejx(kynex_shift(p29, kynex_places_1, kynex_place_1, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j29))
+tp_log("kynex done 29 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 30")
+# P11
+movel(kynex_shift(p30, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 30 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, OFF)
+wait(0.50)
+tp_log("kynex mark 31")
+# P12
+movel(kynex_shift(p31, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 31 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_1 = (kynex_place_1 + 1) % 20
+tp_log("kynex mark 32")
+# P13
+movejx(kynex_shift(p32, kynex_places_0, kynex_place_0, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j32))
+tp_log("kynex done 32 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 33")
+# P14
+movel(kynex_shift(p33, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 33 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, ON)
+wait(0.50)
+tp_log("kynex mark 34")
+# P15
+movel(kynex_shift(p34, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 34 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_0 = (kynex_place_0 + 1) % 20
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say done
+set_digital_output(9, ON)
+wait(0.2)
+set_digital_output(9, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_open
+set_digital_output(12, ON)
+wait(0.2)
+set_digital_output(12, OFF)
+tp_log("kynex mark 35")
+# P16
+movej(j35, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 35 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 36")
+# P17
+movej(j36, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 36 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 37")
+# P18
+movel(p37, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 37 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 38")
+# P19
+movel(p38, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 38 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 39")
+# P20
+movel(p39, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 39 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, ON)
+wait(0.50)
+tp_log("kynex mark 40")
+# P21
+movel(p40, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 40 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 41")
+# P22
+movel(p41, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 41 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 42")
+# P23
+movel(p42, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 42 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, OFF)
+wait(0.50)
+tp_log("kynex mark 43")
+# P24
+movel(p43, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 43 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 44")
+# P25
+movel(p44, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 44 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(11, ON)
+wait(0.2)
+set_digital_output(11, OFF)
+set_digital_output(10, ON)
+wait(0.2)
+set_digital_output(10, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_closed
+set_digital_output(13, ON)
+wait(0.2)
+set_digital_output(13, OFF)
+tp_log("kynex mark 45")
+# P26
+movejx(kynex_shift(p45, kynex_places_1, kynex_place_1, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j45))
+tp_log("kynex done 45 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 46")
+# P27
+movel(kynex_shift(p46, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 46 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, OFF)
+wait(0.50)
+tp_log("kynex mark 47")
+# P28
+movel(kynex_shift(p47, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 47 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_1 = (kynex_place_1 + 1) % 20
+tp_log("kynex mark 48")
+# P29
+movejx(kynex_shift(p48, kynex_places_0, kynex_place_0, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j48))
+tp_log("kynex done 48 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 49")
+# P30
+movel(kynex_shift(p49, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 49 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, ON)
+wait(0.50)
+tp_log("kynex mark 50")
+# P31
+movel(kynex_shift(p50, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 50 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_0 = (kynex_place_0 + 1) % 20
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say done
+set_digital_output(3, ON)
+wait(0.2)
+set_digital_output(3, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+set_digital_output(6, ON)
+wait(0.2)
+set_digital_output(6, OFF)
+tp_log("kynex mark 51")
+# P1
+movej(j51, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 51 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 52")
+# P2
+movel(p52, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 52 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 53")
+# P3
+movel(p53, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 53 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 54")
+# P4
+movel(p54, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 54 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, ON)
+wait(0.50)
+tp_log("kynex mark 55")
+# P5
+movel(p55, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 55 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 56")
+# P6
+movel(p56, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 56 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 57")
+# P7
+movel(p57, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 57 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, OFF)
+wait(0.50)
+tp_log("kynex mark 58")
+# P8
+movel(p58, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 58 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 59")
+# P9
+movel(p59, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 59 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(5, ON)
+wait(0.2)
+set_digital_output(5, OFF)
+set_digital_output(4, ON)
+wait(0.2)
+set_digital_output(4, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_closed
+set_digital_output(7, ON)
+wait(0.2)
+set_digital_output(7, OFF)
+tp_log("kynex mark 60")
+# P10
+movejx(kynex_shift(p60, kynex_places_1, kynex_place_1, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j60))
+tp_log("kynex done 60 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 61")
+# P11
+movel(kynex_shift(p61, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 61 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, OFF)
+wait(0.50)
+tp_log("kynex mark 62")
+# P12
+movel(kynex_shift(p62, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 62 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_1 = (kynex_place_1 + 1) % 20
+tp_log("kynex mark 63")
+# P13
+movejx(kynex_shift(p63, kynex_places_0, kynex_place_0, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j63))
+tp_log("kynex done 63 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 64")
+# P14
+movel(kynex_shift(p64, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 64 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, ON)
+wait(0.50)
+tp_log("kynex mark 65")
+# P15
+movel(kynex_shift(p65, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 65 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_0 = (kynex_place_0 + 1) % 20
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say done
+set_digital_output(9, ON)
+wait(0.2)
+set_digital_output(9, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_open
+set_digital_output(12, ON)
+wait(0.2)
+set_digital_output(12, OFF)
+tp_log("kynex mark 66")
+# P16
+movej(j66, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 66 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 67")
+# P17
+movej(j67, vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00])
+tp_log("kynex done 67 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 68")
+# P18
+movel(p68, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 68 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 69")
+# P19
+movel(p69, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 69 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 70")
+# P20
+movel(p70, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 70 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, ON)
+wait(0.50)
+tp_log("kynex mark 71")
+# P21
+movel(p71, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 71 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 72")
+# P22
+movel(p72, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 72 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 73")
+# P23
+movel(p73, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 73 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, OFF)
+wait(0.50)
+tp_log("kynex mark 74")
+# P24
+movel(p74, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 74 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 75")
+# P25
+movel(p75, vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 75 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(11, ON)
+wait(0.2)
+set_digital_output(11, OFF)
+set_digital_output(10, ON)
+wait(0.2)
+set_digital_output(10, OFF)
+# KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_closed
+set_digital_output(13, ON)
+wait(0.2)
+set_digital_output(13, OFF)
+tp_log("kynex mark 76")
+# P26
+movejx(kynex_shift(p76, kynex_places_1, kynex_place_1, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j76))
+tp_log("kynex done 76 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 77")
+# P27
+movel(kynex_shift(p77, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 77 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(2, OFF)
+wait(0.50)
+tp_log("kynex mark 78")
+# P28
+movel(kynex_shift(p78, kynex_places_1, kynex_place_1, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 78 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_1 = (kynex_place_1 + 1) % 20
+tp_log("kynex mark 79")
+# P29
+movejx(kynex_shift(p79, kynex_places_0, kynex_place_0, 0), vel=[60.00, 60.00, 90.00, 112.50, 112.50, 112.50], acc=[360.00, 360.00, 540.00, 675.00, 675.00, 675.00], sol=get_solution_space(j79))
+tp_log("kynex done 79 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+tp_log("kynex mark 80")
+# P30
+movel(kynex_shift(p80, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 80 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+set_digital_output(1, ON)
+wait(0.50)
+tp_log("kynex mark 81")
+# P31
+movel(kynex_shift(p81, kynex_places_0, kynex_place_0, 0), vel=[250.0, 57.30], acc=[1200.0, 114.59], ref=DR_BASE)
+tp_log("kynex done 81 %s %s" % (get_current_posj(), get_current_posx(ref=DR_BASE)[0]))
+kynex_place_0 = (kynex_place_0 + 1) % 20
+tp_log("kynex mark 82")

@@ -615,7 +615,8 @@ impl Program {
     }
 
     /// The program as URScript for a UR controller, and a file name for it
-    /// (see [`Program::export`]).
+    /// (see [`Program::export`]): for the tests, which check URScript.
+    #[cfg(test)]
     pub fn urscript(
         &self,
         root: u64,
@@ -943,7 +944,7 @@ impl Program {
     }
 }
 
-/// What a program's export needs of the cell (see [`Program::urscript`]).
+/// What a program's export needs of the cell (see [`Program::export`]).
 #[derive(Clone, Debug, Default)]
 pub struct CellIo {
     /// The digital I/O each component is wired to, by its identity and
@@ -1037,6 +1038,7 @@ pub fn is_op(op: &str) -> bool {
             | "clear"
             | "goto"
             | "urscript"
+            | "export"
             | "copy"
             | "shift"
             | "routine_new"

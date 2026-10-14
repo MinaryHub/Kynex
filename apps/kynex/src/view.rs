@@ -383,7 +383,7 @@ impl Stage {
                 reply
             } else {
                 let scene = self.base.as_ref().unwrap_or(doc);
-                if op == "urscript" {
+                if op == "urscript" || op == "export" {
                     self.posing.cell_io = self.cell.export(scene);
                 }
                 let (reply, changed) = self.posing.handle(scene, &request.body);

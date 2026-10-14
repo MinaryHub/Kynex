@@ -440,7 +440,9 @@ export class RobotPanel {
           </div>
           <div class="prog-foot">
             <label class="check" title="마지막 지점에서 첫 지점으로 돌아와 반복합니다"><input type="checkbox" data-opt="close"> 순환 재생</label>
-            <button class="text-btn quiet" data-act="urscript" title="UR 컨트롤러용 URScript 파일로 내려받기">URScript</button>
+            <button class="text-btn quiet" data-act="export" data-vendor="ur" title="UR 컨트롤러용 URScript 파일로 내려받기">URScript</button>
+            <button class="text-btn quiet" data-act="export" data-vendor="abb" title="ABB 컨트롤러용 RAPID 모듈로 내려받기">RAPID</button>
+            <button class="text-btn quiet" data-act="export" data-vendor="doosan" title="두산 로보틱스 컨트롤러용 DRL 프로그램으로 내려받기">DRL</button>
             <button class="text-btn quiet danger" data-act="clear">모두 지우기</button>
           </div>
         </div>`
@@ -478,7 +480,11 @@ export class RobotPanel {
       }
       section.querySelector('[data-act="routine-delete"]').hidden = !program?.active;
       section.querySelector('[data-act="clear"]').hidden = !points.length;
-      section.querySelector('[data-act="urscript"]').hidden = !points.length;
+      // The language of the robot's controller, or every one when it is not
+      // known whose the robot is.
+      section
+        .querySelectorAll('[data-act="export"]')
+        .forEach((b) => (b.hidden = !points.length || (r.vendor != null && b.dataset.vendor !== r.vendor)));
       if (!points.length) {
         list.innerHTML =
           '<li class="points-empty">로봇을 원하는 자세로 옮긴 뒤 <b>+ MoveJ</b> 또는 <b>+ MoveL</b>로 지점을 추가하세요.</li>';
@@ -1051,8 +1057,8 @@ export class RobotPanel {
     } else if (act === 'play') {
       const going = this.running?.robot === r.root && !['done', 'alarm'].includes(this.running.state);
       this.programOp(r, { op: going ? 'stop' : 'play' });
-    } else if (act === 'urscript') {
-      this.programOp(r, { op: 'urscript' }, (answer) => {
+    } else if (act === 'export') {
+      this.programOp(r, { op: 'export', vendor: e.target.closest('[data-vendor]').dataset.vendor }, (answer) => {
         // Handed to the browser as a file to keep.
         const link = document.createElement('a');
         link.href = URL.createObjectURL(new Blob([answer.script], { type: 'text/plain' }));

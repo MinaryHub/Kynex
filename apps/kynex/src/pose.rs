@@ -539,11 +539,19 @@ impl Posing {
                 self.programs_changed = true;
             }
         }
-        // Exported as it runs: its calls replaced by what they call.
-        if op == "urscript" {
+        // Exported as it runs: its calls replaced by what they call, for
+        // the controller of the vendor asked for (Universal Robots unless
+        // another is).
+        if op == "urscript" || op == "export" {
+            let writer: &dyn kynex_kin::post::Writer = match req["vendor"].as_str() {
+                None | Some("ur") => &kynex_kin::urscript::Ur,
+                Some("abb") => &kynex_kin::rapid::Abb,
+                Some("doosan") => &kynex_kin::drl::Doosan,
+                Some(other) => return Err(format!("no writer for {other}")),
+            };
             let program = programs.active().expect("a program worked on");
             let (flat, _) = programs.run(program)?;
-            let (script, file) = flat.urscript(root, doc, kin, false, &self.cell_io)?;
+            let (script, file) = flat.export(root, doc, kin, false, &self.cell_io, writer)?;
             return Ok(json!({ "ok": true, "script": script, "file": file }));
         }
         let program = programs.active_mut();
@@ -1166,5 +1174,26 @@ mod tests {
         );
         assert_eq!(answer["ok"], false);
         assert!(answer["error"].as_str().unwrap().contains("6"));
+    }
+
+    #[test]
+    fn a_program_is_exported_for_the_vendor_asked_for() {
+        let (doc, base, joint, tip) = arm();
+        let mut p = Posing::default();
+        teach_two(&mut p, &doc, base, joint, tip);
+        for vendor in ["abb", "kuka"] {
+            let (answer, _) = ask(
+                &mut p,
+                &doc,
+                json!({"op": "export", "vendor": vendor, "robot": base.to_string()}),
+            );
+            // Refused: the arm is no six-axis one, and KUKA has no writer.
+            assert_eq!(answer["ok"], false);
+            let error = answer["error"].as_str().unwrap();
+            assert!(
+                error.contains(if vendor == "abb" { "6" } else { "kuka" }),
+                "{error}"
+            );
+        }
     }
 }

@@ -45,10 +45,16 @@ fn cell1() -> Cell1 {
 /// The M1 cell with `cncs` machines (one or two), each machining for
 /// `cycle` seconds. The second stands on the robot's right, facing it.
 fn cell_with(cncs: usize, cycle: f64) -> Cell1 {
+    cell_for("ur10e_tending", 0.7, cncs, cycle)
+}
+
+/// [`cell_with`], its robot the library's `robot` on a pedestal `height`
+/// metres high.
+fn cell_for(robot: &str, height: f64, cncs: usize, cycle: f64) -> Cell1 {
     let mut library = Library::default();
     let mut placed = vec![
         ("pedestal", [0.0, 0.0, 0.0], 0.0),
-        ("ur10e_tending", [0.0, 0.0, 0.7], 0.0),
+        (robot, [0.0, 0.0, height], 0.0),
         ("cnc_lathe", [0.0, 0.75, 0.0], 0.0),
         ("infeed_station", [-0.8, 0.05, 0.0], 0.0),
         ("outfeed_station", [0.0, -0.8, 0.0], 0.0),
@@ -60,6 +66,10 @@ fn cell_with(cncs: usize, cycle: f64) -> Cell1 {
         library.handle(
             &json!({"op": "place", "template": template, "at": at, "yaw": yaw}).to_string(),
         );
+    }
+    if height != 0.7 {
+        library
+            .handle(&json!({"op": "resize", "item": 1, "params": {"height": height}}).to_string());
     }
     let mut doc = Document::new();
     library.apply(&mut doc);
@@ -127,11 +137,8 @@ impl Cell1 {
             let turn = (want.y.atan2(want.x) - now.y.atan2(now.x) + std::f64::consts::PI)
                 .rem_euclid(std::f64::consts::TAU)
                 - std::f64::consts::PI;
-            let pan = kin
-                .vars
-                .iter()
-                .position(|v| v.name == "shoulder_pan_joint")
-                .unwrap();
+            // The first joint: a UR's shoulder pan, Doosan's joint 1.
+            let pan = 0;
             ask_posing(
                 &mut self.posing,
                 &self.doc,
@@ -1287,7 +1294,13 @@ fn swap(c: &mut Cell1, machine: u64, via: Option<DVec3>) {
 /// machines of 90 s, a double gripper. The main program loads both, then
 /// calls the swap at each, `times` over.
 fn stage_one(times: u32) -> Cell1 {
-    let mut c = cell_with(2, 90.0);
+    stage_one_with("ur10e_tending", 0.7, times)
+}
+
+/// [`stage_one`], its robot the library's `robot` on a pedestal `height`
+/// metres high.
+fn stage_one_with(robot: &str, height: f64, times: u32) -> Cell1 {
+    let mut c = cell_for(robot, height, 2, 90.0);
     let (m1, m2) = (c.machines[0], c.machines[1]);
     pick_raw(&mut c);
     load_first(&mut c, m1);
@@ -1371,7 +1384,37 @@ fn stage_ones_cell_runs_half_an_hour_with_both_machines_busy() {
 #[ignore = "writes target/ursim for tools/ursim/check.py --name stage1"]
 fn ursim_stage_one() {
     let c = stage_one(2);
+    stage_one_files(&c, &kynex_kin::urscript::Ur, "ursim", 1);
+    // The same cell for an ABB controller.
     let (flat, _) = c.posing.runnable(c.robot).unwrap();
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let (module, _) = flat
+        .export(
+            c.robot,
+            &c.doc,
+            &kin,
+            true,
+            &stage_one_io(&c),
+            &kynex_kin::rapid::Abb,
+        )
+        .unwrap();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ursim");
+    std::fs::write(dir.join("stage1.mod"), module).unwrap();
+}
+
+#[test]
+#[ignore = "writes target/doosan for tools/doosan/check.py --name stage1"]
+fn doosan_stage_one() {
+    // Its arm shorter than a UR10e's to a tool held down, the M1013 stands
+    // higher, over the machines' seats.
+    let c = stage_one_with("m1013_tending", 1.2, 2);
+    stage_one_files(&c, &kynex_kin::drl::Doosan, "doosan", 1);
+}
+
+/// Stage 1's cell wired: grip_a closes on output 0, grip_b on 1; the first
+/// machine's commands on 2–6, the second's on 8–12; no inputs, so waits go
+/// as notes and the program runs on a controller with nothing attached.
+fn stage_one_io(c: &Cell1) -> crate::program::CellIo {
     let mut io = c.cell.export(&c.doc);
     io.io.insert((c.grip_a, "close".into()), 0);
     io.io.insert((c.grip_b, "close".into()), 1);
@@ -1384,8 +1427,26 @@ fn ursim_stage_one() {
         io.io
             .insert((c.machines[1], command.to_string()), 8 + k as u32);
     }
+    io
+}
+
+/// Stage 1's program for the controller `writer` writes for, with its
+/// markers, in `target/<dir>/stage1.<extension>`, and beside it what KYNEX
+/// plans: each move's start and length, and where the tool ends each move
+/// in the controller's base frame (`stage1.json`, for the checks in
+/// `tools/`). The gripper closes on output `gripper_output`.
+fn stage_one_files(
+    c: &Cell1,
+    writer: &dyn kynex_kin::post::Writer,
+    dir: &str,
+    gripper_output: u32,
+) {
+    let (flat, _) = c.posing.runnable(c.robot).unwrap();
+    let io = stage_one_io(c);
     let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
-    let (script, _) = flat.urscript(c.robot, &c.doc, &kin, true, &io).unwrap();
+    let (script, _) = flat
+        .export(c.robot, &c.doc, &kin, true, &io, writer)
+        .unwrap();
     let plan = flat.plan(&kin).unwrap();
     let names: Vec<&str> = flat.moves().map(|(_, p)| p.name.as_str()).collect();
     let moves: Vec<serde_json::Value> = plan
@@ -1445,9 +1506,11 @@ fn ursim_stage_one() {
             _ => {}
         }
     }
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ursim");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("stage1.script"), script).unwrap();
+    std::fs::write(dir.join(format!("stage1.{}", writer.extension())), script).unwrap();
     std::fs::write(
         dir.join("stage1.json"),
         serde_json::to_string_pretty(&json!({
@@ -1455,7 +1518,7 @@ fn ursim_stage_one() {
             "moves": moves,
             "duration": plan.duration,
             "ends": ends,
-            "gripper_output": 1,
+            "gripper_output": gripper_output,
         }))
         .unwrap(),
     )
@@ -1465,21 +1528,26 @@ fn ursim_stage_one() {
 /// The programs exported as they were when the export was taken apart
 /// into a vendor's writer over a program any vendor reads
 /// (`kynex_kin::post`): the M1 program timed, the M1 program wired, and
-/// stage 1's cell. Kept in `golden/`; an export that writes them otherwise
-/// fails here. When a change to them is meant, write them again with the
-/// ignored `ursim_*` tests and copy them from `target/ursim`.
+/// stage 1's cell; stage 1's cell for ABB, as RAPID; and stage 1's cell on
+/// a Doosan M1013, as DRL. Kept in `golden/`; an export that writes them
+/// otherwise fails here. When a change to them is meant, write them again
+/// with the ignored `ursim_*` and `doosan_*` tests and copy them from
+/// `target/ursim` and `target/doosan`.
 #[test]
 fn the_exports_are_as_they_were() {
     ursim_program();
     ursim_wired_program();
     ursim_stage_one();
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ursim");
+    doosan_stage_one();
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
     for (name, golden) in [
-        ("m1", include_str!("golden/m1.script")),
-        ("m1_io", include_str!("golden/m1_io.script")),
-        ("stage1", include_str!("golden/stage1.script")),
+        ("ursim/m1.script", include_str!("golden/m1.script")),
+        ("ursim/m1_io.script", include_str!("golden/m1_io.script")),
+        ("ursim/stage1.script", include_str!("golden/stage1.script")),
+        ("ursim/stage1.mod", include_str!("golden/stage1.mod")),
+        ("doosan/stage1.drl", include_str!("golden/stage1.drl")),
     ] {
-        let made = std::fs::read_to_string(dir.join(format!("{name}.script"))).unwrap();
+        let made = std::fs::read_to_string(target.join(name)).unwrap();
         let (made, golden) = (made.replace("\r\n", "\n"), golden.replace("\r\n", "\n"));
         if made != golden {
             let at = made

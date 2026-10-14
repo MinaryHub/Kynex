@@ -110,6 +110,8 @@ Each robot card has a **프로그램**: a list of steps.
    - 신호 대기: wait until a machine says its door is open or closed, its
      chuck is clamped, it is idle, or its cycle is done.
    - 시간 대기: wait a set number of seconds.
+   - 팔레트 다음 칸: move a pallet's count on to its next place (see
+     below).
 
    An action's machine, grip point, command or signal is changed in its
    row. Clicking a step's row picks it, and the next step added goes
@@ -134,8 +136,18 @@ KYNEX times the moves (`kynex_kin::path`):
   arm configuration than the one taught.
 - The tool's path is drawn in the scene in blue, and the points in white.
 - Each point has buttons to go to it (→), re-teach it from the current
-  pose (⟳) or delete it (✕). Its J/L chip switches it between MoveJ and
-  MoveL.
+  pose (⟳) or delete it (✕). They show while the row is pointed at. Its
+  J/L chip switches it between MoveJ and MoveL.
+- **▦** sets a point on the nearest pallet. Teach the moves over one
+  place of the pallet: above it, down to it, back up. Then set those
+  points with ▦. A run takes each such point to the place the pallet's
+  count has reached, at the same height and turn, keeping the arm's
+  posture. **팔레트 다음 칸** moves the count on, from the last place
+  back to the first. One program then goes through the whole pallet: the
+  infeed place by place, the outfeed filling up.
+  - The place a point was taught over is the one nearest the tool point
+    or a grip point, so a double gripper's offset grip points count too.
+  - A place the arm cannot reach stops the run with an alarm.
 - The time shown beside the program (**이동**) is its moves'. With
   actions, a cycle also waits for machines, so the cycle time is measured
   by running it.
@@ -155,8 +167,10 @@ run by the same clock.
   the last one took.
 - A run starts with the infeed stocked: every free place gets a raw part.
   While a program runs round, an operator is assumed to keep the cell
-  supplied, as in a scenario comparison: the infeed is restocked and
-  finished parts are taken off the outfeed as they are set down.
+  supplied. A pallet the program goes through with 팔레트 다음 칸 is
+  changed whole: the infeed once it is empty, the outfeed once it is
+  full. A pallet the program always uses at one place is kept supplied
+  place by place, as in a scenario comparison.
 - Moving the robot by hand (jog, IK, → to a point, 세션 자세로) stops the
   run.
 - The path check (Collisions, below) takes the program's door commands

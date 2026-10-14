@@ -413,6 +413,7 @@ dependencies = [
  "kynex-link",
  "kynex-model",
  "kynex-view",
+ "rayon",
  "serde_json",
 ]
 

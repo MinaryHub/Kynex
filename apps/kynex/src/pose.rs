@@ -266,22 +266,32 @@ impl Posing {
                 })
                 .collect();
             let hits: Vec<Vec<String>> = match &plan {
-                Some(plan) => collider
-                    .along(doc, *root, plan, &open)
-                    .into_iter()
-                    .map(|hit| {
-                        hit.map(|(t, c)| {
-                            format!(
+                Some(plan) => {
+                    let hits = collider.along(doc, *root, plan, &open);
+                    // Near where it does not touch: but where a gripper works.
+                    let work = program.work_places(&kin, plan);
+                    let near =
+                        collider.nearest_along(doc, *root, plan, &open, &work, collide::CLEARANCE);
+                    hits.into_iter()
+                        .zip(near)
+                        .map(|(hit, near)| match (hit, near) {
+                            (Some((t, c)), _) => vec![format!(
                                 "충돌: {} ↔ {} ({:.2} s)",
                                 collide::label(doc, c.part),
                                 collide::label(doc, c.other),
                                 t
-                            )
+                            )],
+                            (None, Some(n)) => vec![format!(
+                                "근접: {} ↔ {} {:.0} mm ({:.2} s)",
+                                collide::label(doc, n.part),
+                                collide::label(doc, n.other),
+                                n.distance * 1000.0,
+                                n.t
+                            )],
+                            (None, None) => Vec::new(),
                         })
-                        .into_iter()
                         .collect()
-                    })
-                    .collect(),
+                }
                 None => Vec::new(),
             };
             out.insert(

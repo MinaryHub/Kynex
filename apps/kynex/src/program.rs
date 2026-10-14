@@ -677,6 +677,31 @@ impl Program {
             .collect()
     }
 
+    /// Move by move in `plan`'s order, where a gripper works at either end:
+    /// at a point a grip or a release follows, the grip point there; at one
+    /// it departs from after a grip or a release, the same.
+    pub fn work_places(&self, kin: &Kinematics, plan: &Plan) -> Vec<Vec<DVec3>> {
+        let moves: Vec<usize> = self.moves().map(|(i, _)| i).collect();
+        let waypoints = self.waypoints(kin);
+        let at = |m: usize| -> Option<DVec3> {
+            let i = *moves.get(m)?;
+            let gripper = match self.steps.get(i + 1)? {
+                Step::Do(Action::Grip { gripper } | Action::Release { gripper }) => *gripper,
+                _ => return None,
+            };
+            let tool = kin.tool(gripper, DAffine3::IDENTITY)?;
+            Some(kin.pose(&waypoints[m].positions, &tool).translation)
+        };
+        plan.segments
+            .iter()
+            .map(|seg| {
+                let to = seg.to;
+                let from = if to == 0 { moves.len() - 1 } else { to - 1 };
+                at(to).into_iter().chain(at(from)).collect()
+            })
+            .collect()
+    }
+
     /// Move by move in the plan's order, the machines this program has
     /// opened by then: their doors are out of the way. A closed program's
     /// move back to its start comes last, with the machines open at its end.

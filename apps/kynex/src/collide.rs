@@ -16,11 +16,33 @@ use kreate_scene::{Changes, DatablockKind, Document, Object, ObjectData, ObjectI
 use kynex_collide::{contact, Body, Obstacles, Shape};
 use kynex_kin::path::Plan;
 use kynex_kin::Kinematics;
+use rayon::prelude::*;
 use serde_json::{json, Value};
 
 /// How finely a program's path is checked, seconds: at a linear move's
 /// 250 mm/s, every 5 mm.
 pub const PATH_STEP: f64 = 0.02;
+
+/// How near the robot may come to the rest of the cell along a path before
+/// the path is warned of, metres: a margin for the cell as built against
+/// the cell as drawn.
+pub const CLEARANCE: f64 = 0.02;
+
+/// Around where a gripper works — a part to take or set down — nearness is
+/// what the work is, not a warning: this far, metres, which takes in the
+/// whole of a double gripper, its other jaws as low as the working ones.
+pub const WORK_ZONE: f64 = 0.2;
+
+/// The nearest a move brings the robot to the rest of the cell: when, how
+/// near, and which of its parts to what, where.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Near {
+    pub t: f64,
+    pub distance: f64,
+    pub part: u64,
+    pub other: u64,
+    pub at: DVec3,
+}
 
 /// Contact found: a robot's part, and what it runs into.
 #[derive(Clone, Debug, PartialEq)]
@@ -299,6 +321,89 @@ impl Collider {
     }
 }
 
+impl Collider {
+    /// Move by move along `plan`, the nearest robot `root` comes to the rest
+    /// of `doc` within `within` metres, if it does: but to the doors in
+    /// `open` (as [`Collider::along`]), and near the places in `work` —
+    /// move by move, where a gripper works at either end — within
+    /// [`WORK_ZONE`].
+    pub fn nearest_along(
+        &mut self,
+        doc: &Document,
+        root: u64,
+        plan: &Plan,
+        open: &[HashSet<u64>],
+        work: &[Vec<DVec3>],
+        within: f64,
+    ) -> Vec<Option<Near>> {
+        let robots = self.robots(doc);
+        let Some(robot) = robots.iter().find(|r| r.root == root) else {
+            return vec![None; plan.segments.len()];
+        };
+        let samples: Vec<Vec<(f64, Posed)>> = plan
+            .segments
+            .iter()
+            .map(|seg| {
+                let steps = ((seg.duration / PATH_STEP).ceil() as usize).max(1);
+                (0..=steps)
+                    .map(|k| {
+                        let t = seg.duration * k as f64 / steps as f64;
+                        (t, robot.bodies(&plan.at(seg.start + t)))
+                    })
+                    .collect()
+            })
+            .collect();
+        let region = samples
+            .iter()
+            .flatten()
+            .flat_map(|(_, parts)| parts)
+            .fold(Aabb::EMPTY, |b, (part, _)| b.union(part.bounds()))
+            .expanded(within as f32);
+        let own: HashSet<u64> = robot.kin.uids().collect();
+        let obstacles = self.obstacles(doc, &robots, region, &HashSet::new());
+        let none = HashSet::new();
+        let nowhere = Vec::new();
+        // Every sample of every move on its own, across the cores; then the
+        // nearest of each move's.
+        let found: Vec<(usize, Near)> = samples
+            .iter()
+            .enumerate()
+            .flat_map(|(i, seg)| seg.iter().map(move |sample| (i, sample)))
+            .collect::<Vec<_>>()
+            .par_iter()
+            .filter_map(|(i, (t, parts))| {
+                let away = open.get(*i).unwrap_or(&none);
+                let work = work.get(*i).unwrap_or(&nowhere);
+                // What rides on no joint stands where it is placed — a base
+                // on its pedestal — and is not the path's to warn of.
+                parts
+                    .iter()
+                    .filter(|(_, carrier)| carrier.is_some())
+                    .filter_map(|(part, _)| {
+                        let (other, distance, _, at) = obstacles
+                            .nearest(part, within, |u| own.contains(&u) || away.contains(&u))?;
+                        (!work.iter().any(|w| w.distance(at) < WORK_ZONE)).then_some(Near {
+                            t: *t,
+                            distance,
+                            part: part.uid,
+                            other,
+                            at,
+                        })
+                    })
+                    .min_by(|a, b| a.distance.total_cmp(&b.distance))
+                    .map(|n| (*i, n))
+            })
+            .collect();
+        let mut nearest: Vec<Option<Near>> = vec![None; samples.len()];
+        for (i, n) in found {
+            if nearest[i].as_ref().is_none_or(|b| n.distance < b.distance) {
+                nearest[i] = Some(n);
+            }
+        }
+        nearest
+    }
+}
+
 impl Robot {
     /// Its colliding parts at positions `q`, each with the joint it rides on.
     fn bodies(&self, q: &[f64]) -> Posed {
@@ -486,5 +591,37 @@ mod tests {
         let angle = plan.at(plan.segments[0].start + t)[0];
         assert!(angle > 1.3 && angle < 1.5, "{angle} rad");
         assert!(hits[1].is_none(), "{:?}", hits[1]);
+    }
+
+    #[test]
+    fn a_path_that_passes_close_by_is_warned_of_but_not_where_it_works() {
+        let (mut doc, root, _, tip) = scene();
+        // The block raised: its underside 15 mm over the arm as it swings.
+        let block = doc.objects().find(|(_, o)| o.name == "block").unwrap().0;
+        doc.object_mut(block).unwrap().transform.translation = DVec3::new(0.0, 1.0, 0.565 + 0.1);
+        let kin = Kinematics::of(&doc, root).unwrap();
+        let tool = kin.tool(tip, DAffine3::IDENTITY).unwrap();
+        let w = |q: f64| Waypoint {
+            kind: MoveKind::Joint,
+            positions: vec![q],
+            speed: 1.0,
+            blend: 0.0,
+            via: None,
+        };
+        let plan = path::plan(&kin, &tool, &[w(0.0), w(3.0)], false);
+        let mut collider = Collider::default();
+        assert!(
+            collider.along(&doc, root, &plan, &[])[0].is_none(),
+            "no contact"
+        );
+        let near = collider.nearest_along(&doc, root, &plan, &[], &[], CLEARANCE);
+        let n = near[0].as_ref().expect("within 20 mm");
+        assert!((n.distance - 0.015).abs() < 1e-6, "{}", n.distance);
+        assert_eq!(label(&doc, n.part), "arm");
+        assert_eq!(label(&doc, n.other), "block");
+        // Not within 10 mm; and not where the work is.
+        assert!(collider.nearest_along(&doc, root, &plan, &[], &[], 0.01)[0].is_none());
+        let work = vec![vec![DVec3::new(0.0, 1.0, 0.56)]];
+        assert!(collider.nearest_along(&doc, root, &plan, &[], &work, CLEARANCE)[0].is_none());
     }
 }

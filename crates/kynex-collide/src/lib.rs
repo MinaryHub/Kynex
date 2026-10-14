@@ -11,6 +11,10 @@
 //! What it does not see: one closed mesh wholly inside another, with no
 //! surfaces crossing. Along a path the surfaces cross on the way in, and a
 //! path is sampled finely enough to catch it there.
+//!
+//! How near two bodies come ([`nearest`]) is exact on the triangles too:
+//! the least distance between any two, found among the pairs the
+//! hierarchy brings within reach.
 
 use std::sync::Arc;
 
@@ -117,6 +121,173 @@ pub fn contact(a: &Body, b: &Body) -> Option<DVec3> {
     None
 }
 
+/// How near `a` and `b` come, if nearer than `within` metres: the distance,
+/// and the nearest points on each, in the world. Zero where they cross.
+pub fn nearest(a: &Body, b: &Body, within: f64) -> Option<(f64, DVec3, DVec3)> {
+    let (big, small, swapped) = if a.shape.triangles() >= b.shape.triangles() {
+        (a, b, false)
+    } else {
+        (b, a, true)
+    };
+    if small.shape.triangles() == 0
+        || !big
+            .bounds()
+            .expanded(within as f32)
+            .intersects(&small.bounds())
+    {
+        return None;
+    }
+    // Looked up in the big one's own space, its reach grown by the most
+    // that space is shrunk from the world's.
+    let m = big.world.matrix3;
+    let shrink = m
+        .x_axis
+        .length()
+        .min(m.y_axis.length())
+        .min(m.z_axis.length());
+    if shrink <= 0.0 {
+        return None;
+    }
+    let reach_local = (within / shrink) as f32;
+    let into_big = big.world.inverse() * small.world;
+    let mut best: Option<(f64, DVec3, DVec3)> = None;
+    let mut near = Vec::new();
+    for i in 0..small.shape.triangles() as u32 {
+        let local = small.shape.triangle(i).map(|p| p.as_dvec3());
+        let in_big = local.map(|p| into_big.transform_point3(p));
+        let reach = Aabb::from_points(in_big.map(|p| p.as_vec3())).expanded(reach_local + 1e-6);
+        big.shape.bvh.overlaps(&reach, &mut near);
+        if near.is_empty() {
+            continue;
+        }
+        let tri = local.map(|p| small.world.transform_point3(p));
+        for &j in &near {
+            let other = big
+                .shape
+                .triangle(j)
+                .map(|p| big.world.transform_point3(p.as_dvec3()));
+            let (d, p, q) = triangle_distance(&tri, &other);
+            if d < within && best.is_none_or(|b| d < b.0) {
+                best = Some((d, p, q));
+            }
+        }
+    }
+    // Found from the small one's side: its point first.
+    best.map(|(d, on_small, on_big)| {
+        if swapped {
+            (d, on_small, on_big)
+        } else {
+            (d, on_big, on_small)
+        }
+    })
+}
+
+/// The least distance between two triangles, and the nearest points on
+/// each: zero where they cross. Otherwise it is between a corner of one and
+/// the other's face, or between an edge of each.
+fn triangle_distance(a: &[DVec3; 3], b: &[DVec3; 3]) -> (f64, DVec3, DVec3) {
+    if crossing(a, b) {
+        let lo = |t: &[DVec3; 3]| t[0].min(t[1]).min(t[2]);
+        let hi = |t: &[DVec3; 3]| t[0].max(t[1]).max(t[2]);
+        let mid = (lo(a).max(lo(b)) + hi(a).min(hi(b))) / 2.0;
+        return (0.0, mid, mid);
+    }
+    let mut best = (f64::INFINITY, DVec3::ZERO, DVec3::ZERO);
+    let mut keep = |p: DVec3, q: DVec3| {
+        let d = p.distance(q);
+        if d < best.0 {
+            best = (d, p, q);
+        }
+    };
+    for p in a {
+        keep(*p, closest_on_triangle(*p, b));
+    }
+    for q in b {
+        keep(closest_on_triangle(*q, a), *q);
+    }
+    for i in 0..3 {
+        for j in 0..3 {
+            let (p, q) = closest_between_segments(a[i], a[(i + 1) % 3], b[j], b[(j + 1) % 3]);
+            keep(p, q);
+        }
+    }
+    best
+}
+
+/// The point of triangle `t` nearest `p` (Ericson, Real-Time Collision
+/// Detection, 5.1.5).
+fn closest_on_triangle(p: DVec3, t: &[DVec3; 3]) -> DVec3 {
+    let [a, b, c] = *t;
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return a + ab * (d1 / (d1 - d3));
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return a + ac * (d2 / (d2 - d6));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    let denom = va + vb + vc;
+    if denom.abs() < 1e-300 {
+        return a;
+    }
+    a + ab * (vb / denom) + ac * (vc / denom)
+}
+
+/// The nearest points of segments `p1`–`q1` and `p2`–`q2` (Ericson,
+/// 5.1.9).
+fn closest_between_segments(p1: DVec3, q1: DVec3, p2: DVec3, q2: DVec3) -> (DVec3, DVec3) {
+    let (d1, d2, r) = (q1 - p1, q2 - p2, p1 - p2);
+    let (a, e, f) = (d1.length_squared(), d2.length_squared(), d2.dot(r));
+    const TINY: f64 = 1e-18;
+    let (s, t) = if a <= TINY && e <= TINY {
+        (0.0, 0.0)
+    } else if a <= TINY {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if e <= TINY {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            let mut s = if denom > TINY {
+                ((b * f - c * e) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    (p1 + d1 * s, p2 + d2 * t)
+}
+
 /// Whether two triangles pass through each other by more than
 /// [`PENETRATION`], by the separating axis test: they do unless some axis
 /// keeps their shadows apart.
@@ -207,6 +378,25 @@ impl Obstacles {
 
     pub fn is_empty(&self) -> bool {
         self.bodies.is_empty()
+    }
+
+    /// The obstacle `body` comes nearest, if nearer than `within`, but
+    /// those `skip` names: its identity, the distance, and the nearest
+    /// points on `body` and on it.
+    pub fn nearest(
+        &self,
+        body: &Body,
+        within: f64,
+        skip: impl Fn(u64) -> bool,
+    ) -> Option<(u64, f64, DVec3, DVec3)> {
+        let mut near = Vec::new();
+        self.boxes
+            .overlaps(&body.bounds().expanded(within as f32), &mut near);
+        near.iter()
+            .map(|&i| &self.bodies[i as usize])
+            .filter(|other| !skip(other.uid))
+            .filter_map(|other| nearest(body, other, within).map(|(d, p, q)| (other.uid, d, p, q)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
     }
 
     /// Every obstacle `body` is in contact with, but those `skip` names:

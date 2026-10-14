@@ -105,3 +105,52 @@ fn obstacles_find_what_a_body_runs_into() {
         .contacts(&at(1, &probe, 3.3, 4.0, 0.0), |u| u == 134)
         .is_empty());
 }
+
+#[test]
+fn how_near_two_bodies_come_is_measured_in_the_world() {
+    let cube = Arc::new(Shape::of(&kreate_mesh::primitives::cube(1.0)));
+    let body = |uid: u64, world: DAffine3| Body {
+        uid,
+        shape: cube.clone(),
+        world,
+    };
+    // A block 0.2 m across, and another stretched to 2 m long, their
+    // faces 15 mm apart.
+    let a = body(1, DAffine3::from_scale(DVec3::splat(0.2)));
+    let b = body(
+        2,
+        DAffine3::from_scale_rotation_translation(
+            DVec3::new(2.0, 0.2, 0.2),
+            DQuat::IDENTITY,
+            DVec3::new(0.0, 0.215, 0.0),
+        ),
+    );
+    let (d, p, q) = nearest(&a, &b, 0.02).expect("within 20 mm");
+    assert!((d - 0.015).abs() < 1e-9, "{d}");
+    assert!((p.y - 0.1).abs() < 1e-9 && (q.y - 0.115).abs() < 1e-9);
+    assert!(nearest(&a, &b, 0.01).is_none(), "not within 10 mm");
+    // Corner to corner across a gap.
+    let c = body(
+        3,
+        DAffine3::from_scale_rotation_translation(
+            DVec3::splat(0.2),
+            DQuat::IDENTITY,
+            DVec3::new(0.21, 0.21, 0.21),
+        ),
+    );
+    let (d, ..) = nearest(&a, &c, 0.1).unwrap();
+    assert!((d - (3.0f64 * 0.01 * 0.01).sqrt()).abs() < 1e-9, "{d}");
+    // Through each other: none.
+    let e = body(
+        4,
+        DAffine3::from_translation(DVec3::new(0.15, 0.0, 0.0))
+            * DAffine3::from_scale(DVec3::splat(0.2)),
+    );
+    assert_eq!(nearest(&a, &e, 0.02).unwrap().0, 0.0);
+    // Among obstacles, the nearest: the long block's face, 15 mm, before
+    // the corner, 17 mm.
+    let obstacles = Obstacles::new(vec![b.clone(), c.clone()]);
+    let (uid, d, ..) = obstacles.nearest(&a, 0.05, |_| false).unwrap();
+    assert_eq!(uid, 2);
+    assert!((d - 0.015).abs() < 1e-9, "{d}");
+}

@@ -431,7 +431,18 @@ and against the robot's own links (`crates/kynex-collide`).
   A mesh wholly inside another, with no surfaces crossing, is not seen.
   Along a path, the surfaces cross on the way in, so the path check
   still catches it.
-- There is no clearance check (minimum distance) yet.
+- **Clearance**: a move that touches nothing but brings the robot within
+  20 mm of the rest of the cell shows how near, under it, for example
+  `근접: forearm_link ↔ door 12 mm (0.40 s)`: a margin for the cell as
+  built against the cell as drawn. The distance is exact on the
+  triangles.
+  - Around where a gripper works, at a point a grip or a release follows
+    and leaving one after, nearness is the work: within 0.2 m of the grip
+    point it is not warned of. A tool going into a machine's door is
+    still checked away from the chuck.
+  - A robot's base, which rides on no joint, is not checked: it stands on
+    its pedestal.
+  - The check runs across the cores: some 30 ms for the M1 program.
 - Cost: a scene without robots costs a scan of its objects. With robots,
   only the obstacles whose boxes reach the robots' space are tested.
   `kynex bench` measures it (`contacts`, `+arm`). With one arm, a check

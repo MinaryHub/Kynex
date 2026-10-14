@@ -16,3 +16,4 @@ kreate-mesh.workspace = true
 kynex-kin.workspace = true
 kynex-collide.workspace = true
 serde_json.workspace = true
+rayon.workspace = true

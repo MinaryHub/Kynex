@@ -159,6 +159,52 @@ run by the same clock.
   into account: a door the program has opened by a move is out of that
   move's way.
 
+**타임라인** (toolbar) shows what the robot and each CNC machine did
+while the program ran, as a Gantt chart (`apps/kynex/src/timeline.rs`):
+
+- The robot's lane: moving, gripping, waiting for a machine's signal,
+  waiting a set time, and the alarm that stopped the run.
+- Each machine's lane: cutting, its door moving, a finished part waiting
+  to be taken out, and idle.
+- Beside each lane is its share of the run: a machine's utilization (the
+  time it cut), the robot's working and waiting time.
+- At the top: the time run, the parts finished and the parts an hour.
+  Run with 순환 재생 for the rate of a steady cycle.
+- A new run starts a new timeline. The panel keeps the last one.
+
+**시나리오 비교** (the panel's second tab) answers questions such as "how
+many parts an hour with one CNC machine, and with two?"
+(`apps/kynex/src/scenario.rs`):
+
+1. Lay out the cell and make its program. Save it with **현재 구성 저장**.
+   A scenario holds the equipment, the cell's roles and the programs, in
+   the project file.
+2. Change something, such as a second machine, a machining cycle or a
+   gripper, and save again under another name. The same name saves over.
+3. **▶ 모두 실행** runs every scenario for 1, 8 or 24 hours on the
+   simulation's clock, away from the view. The table shows each one's
+   parts finished, parts an hour (the best is marked), CNC utilization,
+   and the robot's work and waiting time. A program that stops on an
+   alarm shows why.
+4. **불러오기** puts a scenario's equipment, roles and programs back, to
+   change it further.
+
+While comparing:
+
+- Every program runs round and round.
+- An operator is assumed to keep the cell supplied: a raw part on every
+  free place of the infeed, and finished parts taken off the outfeed as
+  they are set down. These count as the parts delivered.
+- The first cycle, before a part is done, is in the figures, so a longer
+  run gives a rate closer to steady.
+
+The same comparison runs from the command line, without the viewer:
+
+```
+cargo run -p kynex -- compare --project kynex-project.json --hours 8
+cargo run -p kynex -- compare --file cell.kreate --json   # the session's scene from a file
+```
+
 Programs, and the cell's roles (below), are saved to the project file
 `kynex-project.json` in the directory `kynex view` runs in. Use
 `--project FILE` to keep them somewhere else. An older

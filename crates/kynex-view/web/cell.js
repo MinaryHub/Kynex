@@ -17,6 +17,8 @@ const KINDS = [
   ['amr', 'AMR'],
   ['amr_stop', 'AMR 정지 위치'],
   ['positioner', '포지셔너'],
+  ['door', '문 (장비의 움직이는 부분)'],
+  ['connector', '연결점'],
 ];
 
 // What each I/O point is, in words: the robot's outputs and its inputs.
@@ -73,7 +75,19 @@ const FIELDS = {
   ],
   amr: [['speed', '주행 속도', 'mm/s', 1000]],
   positioner: [['speed', '회전 속도', '°/s', 180 / Math.PI]],
+  // A choice is a list of [value, label].
+  door: [
+    ['swing', '동작', '', 1, [[0, '미닫이'], [1, '여닫이']]],
+    ['axis', '축', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
+    ['travel', '거리', 'mm', 1000],
+    ['angle', '각도', '°', 180 / Math.PI],
+  ],
+  connector: [
+    ['plug', '종류', '', 1, [[0, '로봇 받침면'], [1, '컨베이어 입구'], [2, '컨베이어 출구'], [3, '받침면에 올라섬']]],
+  ],
 };
+// Settings that may be below zero: a way back, a turn the other way.
+const SIGNED = new Set(['travel', 'angle']);
 FIELDS.outfeed = FIELDS.infeed;
 
 async function post(request) {
@@ -109,6 +123,10 @@ export class CellPanel {
       if (stop) this.send({ op: 'drive', object: this.ctx.selected(), stop });
       const turn = e.target.closest('[data-turn]')?.dataset.turn;
       if (turn != null) this.send({ op: 'turn', object: this.ctx.selected(), angle: (Number(turn) * Math.PI) / 180 });
+      if (e.target.closest('[data-pick]')) {
+        this.pickingFor = this.ctx.selected();
+        this.showFor(this.pickingFor);
+      }
     });
     document.getElementById('cell-io').addEventListener('change', (e) => {
       const key = e.target.dataset.io;
@@ -202,6 +220,18 @@ export class CellPanel {
         [0, 180]
           .map((a) => `<button class="text-btn" data-turn="${a}"${p?.turning ? ' disabled' : ''}>→ ${a}°</button>`)
           .join('') + `<span class="muted">${p?.turning ? '회전 중' : `지금 ${angle}°`}</span>`;
+    } else if (c && (c.kind === 'door' || c.kind === 'connector')) {
+      const mm = (c.point ?? []).map((v) => Math.round(v * 1000)).join(', ');
+      const what = c.kind === 'door' ? '회전 중심' : '연결점';
+      actions =
+        this.pickingFor === uid
+          ? `<span class="muted">${what}이 될 점을 3D 화면에서 누르세요 (Esc 취소)</span>`
+          : `<button class="text-btn" data-pick="1">${what} 찍기</button><span class="muted">${mm} mm</span>`;
+      if (c.kind === 'door') {
+        actions += c.machine_of
+          ? '<span class="muted">거리 0: 장비 X 방향으로 자기 폭만큼. 각도·거리가 음수면 반대로</span>'
+          : '<span class="warn-text">CNC·사출기 역할 물체 아래에 있어야 움직입니다</span>';
+      }
     } else if (c && c.kind === 'gripper' && !c.robot) {
       actions = '<span class="warn-text">로봇의 링크가 아닙니다</span>';
     }
@@ -241,12 +271,34 @@ export class CellPanel {
 
   fieldsHtml(c, fields) {
     return fields
-      .map(([key, label, unit, scale]) => {
+      .map(([key, label, unit, scale, choices]) => {
         const v = c.props[key] * scale;
+        if (choices) {
+          const options = choices.map(([value, text]) => `<option value="${value}"${value === v ? ' selected' : ''}>${text}</option>`).join('');
+          return `<label class="insp-field">${label}<select data-prop="${key}" data-scale="${scale}">${options}</select></label>`;
+        }
         const shown = Number.isInteger(v) ? v : Number(v.toFixed(3));
-        return `<label class="insp-field">${label}<input type="number" class="num" data-prop="${key}" data-scale="${scale}" value="${shown}" min="0" step="${unit === 'mm' ? 10 : unit === 's' ? 0.5 : 1}">${unit ? `<span>${unit}</span>` : ''}</label>`;
+        const min = SIGNED.has(key) ? '' : ' min="0"';
+        return `<label class="insp-field">${label}<input type="number" class="num" data-prop="${key}" data-scale="${scale}" value="${shown}"${min} step="${unit === 'mm' ? 10 : unit === 's' ? 0.5 : 1}">${unit ? `<span>${unit}</span>` : ''}</label>`;
       })
       .join('');
+  }
+
+  // Picking a point on a shape for the selected door's hinge or connector.
+  picking() {
+    return this.pickingFor != null;
+  }
+
+  stopPicking() {
+    this.pickingFor = null;
+    const selected = this.ctx.selected();
+    if (selected != null) this.showFor(selected);
+  }
+
+  pickPoint(p) {
+    const object = this.pickingFor;
+    this.pickingFor = null;
+    this.send({ op: 'point', object, at: [p.x, p.y, p.z] }, () => this.ctx.toast('점을 정했습니다'));
   }
 
   // The role as the inspector has it now, to KYNEX.
@@ -273,9 +325,12 @@ export class CellPanel {
     }
     const slots = this.cell.components.flatMap((c) => c.slots.flat());
     const seats = this.cell.components.filter((c) => c.seat).flatMap((c) => c.seat);
+    // Doors' hinges and connectors.
+    const pins = this.cell.components.filter((c) => c.point).flatMap((c) => c.point);
     for (const [points, color, size] of [
       [slots, 0xb8c2d0, 5],
       [seats, 0xff8a3d, 9],
+      [pins, 0x3ddc84, 10],
     ]) {
       if (!points.length) continue;
       const geometry = new THREE.BufferGeometry();

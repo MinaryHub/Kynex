@@ -741,3 +741,41 @@ fn equipment_saved_from_the_scene_places_again_with_its_role() {
     let (a, _) = ask(&mut again, json!({"op": "delete_custom", "key": key}));
     assert_eq!(a["ok"], false);
 }
+
+/// Equipment of the user's own with a connector: a stand whose top is
+/// marked where a robot stands. Placed turned, a robot let go near it
+/// stands on that point.
+#[test]
+fn a_connector_on_the_user_s_equipment_takes_a_robot() {
+    let mut doc = Document::new();
+    let stand = doc.add_mesh_object("stand", kreate_mesh::primitives::cube(1.0));
+    {
+        let o = doc.object_mut(stand).unwrap();
+        o.transform.scale = DVec3::new(0.5, 0.5, 0.9);
+        o.transform.translation = DVec3::new(2.0, 0.0, 0.45);
+    }
+    let uid = doc.object_uid(stand).unwrap().raw();
+    // Its top's centre, a little off to its side, in its own frame.
+    let top = DVec3::new(0.2, 0.0, 0.5);
+    let roles = vec![(
+        stand,
+        Kind::Connector,
+        json!({"plug": 0, "point": [top.x, top.y, top.z]}),
+    )];
+    let mut library = Library::default();
+    let key = library.save_custom(&doc, uid, "받침", &roles).unwrap();
+
+    ask(
+        &mut library,
+        json!({"op": "place", "template": key, "at": [5.0, 0.0, 0.0], "yaw": std::f64::consts::FRAC_PI_2}),
+    );
+    // The point: 0.2 × 0.5 m out along the stand's X, turned to Y; 0.9 m up.
+    let point = DVec3::new(5.0, 0.1, 0.9);
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "ur5e", "at": [5.1, 0.2, 0.0], "snap": true}),
+    );
+    assert_eq!(a["snapped"], "받침 1", "{a}");
+    let robot = library.items.last().unwrap();
+    assert!((robot.at - point).length() < 1e-9, "{}", robot.at);
+}

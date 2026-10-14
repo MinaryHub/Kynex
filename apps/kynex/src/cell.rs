@@ -142,10 +142,18 @@ pub enum Kind {
     /// angle from where it was placed, its top plate (`…top…`) and the
     /// parts on it with it.
     Positioner,
+    /// A machine's door, or any part of it that moves as its door does: it
+    /// slides along, or swings about, an axis of its own as the machine
+    /// opens it. A machine's part named `…door…` is its door without one.
+    Door,
+    /// A connection point on equipment of the user's own: where a robot
+    /// stands, where a conveyor's belt starts or ends, or where this
+    /// stands on another's mount.
+    Connector,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Amr,
         Kind::Stop,
         Kind::Cnc,
@@ -156,6 +164,8 @@ impl Kind {
         Kind::Molder,
         Kind::Conveyor,
         Kind::Positioner,
+        Kind::Door,
+        Kind::Connector,
     ];
 
     pub fn tag(self) -> &'static str {
@@ -170,6 +180,8 @@ impl Kind {
             Kind::Amr => "amr",
             Kind::Stop => "amr_stop",
             Kind::Positioner => "positioner",
+            Kind::Door => "door",
+            Kind::Connector => "connector",
         }
     }
 
@@ -209,7 +221,25 @@ pub struct Props {
     pub speed: f64,
     pub feed: f64,
     pub drain: f64,
+    /// Door: whether it swings (1) about its axis rather than slides (0)
+    /// along it; the axis, its own X, Y or Z (0, 1, 2); how far it slides,
+    /// metres (0: aside by its own width, along its machine's X); how far
+    /// it swings, radians.
+    pub swing: f64,
+    pub axis: u32,
+    pub travel: f64,
+    pub angle: f64,
+    /// Door: the point its hinge passes through; connector: where it is.
+    /// In the object's own frame.
+    pub point: [f64; 3],
+    /// Connector: what it takes (see [`PLUGS`]).
+    pub plug: u32,
 }
+
+/// What a connector takes, by its number: a robot standing on it, a
+/// conveyor's start (where parts come on), its end, or this standing on
+/// another's mount.
+pub const PLUGS: [&str; 4] = ["mount", "belt_in", "belt_out", "foot"];
 
 impl Default for Props {
     /// The roadmap's industry-typical values.
@@ -225,6 +255,12 @@ impl Default for Props {
             speed: 0.2,
             feed: 0.0,
             drain: 0.0,
+            swing: 0.0,
+            axis: 0,
+            travel: 0.0,
+            angle: std::f64::consts::FRAC_PI_2,
+            point: [0.0; 3],
+            plug: 0,
         }
     }
 }
@@ -274,6 +310,26 @@ impl Props {
         self.drain = v["drain"]
             .as_f64()
             .map_or(self.drain, |x| if x > 0.5 { 1.0 } else { 0.0 });
+        self.swing = v["swing"]
+            .as_f64()
+            .map_or(self.swing, |x| if x > 0.5 { 1.0 } else { 0.0 });
+        self.axis = v["axis"]
+            .as_f64()
+            .map_or(self.axis, |x| x.clamp(0.0, 2.0) as u32);
+        self.travel = v["travel"]
+            .as_f64()
+            .map_or(self.travel, |x| x.clamp(-10.0, 10.0));
+        self.angle = v["angle"].as_f64().map_or(self.angle, |x| {
+            x.clamp(-std::f64::consts::TAU, std::f64::consts::TAU)
+        });
+        if let Some([x, y, z]) = v["point"].as_array().map(Vec::as_slice) {
+            if let (Some(x), Some(y), Some(z)) = (x.as_f64(), y.as_f64(), z.as_f64()) {
+                self.point = [x, y, z].map(|c| c.clamp(-100.0, 100.0));
+            }
+        }
+        self.plug = v["plug"]
+            .as_f64()
+            .map_or(self.plug, |x| x.clamp(0.0, (PLUGS.len() - 1) as f64) as u32);
     }
 
     fn to_json(self) -> Value {
@@ -288,6 +344,12 @@ impl Props {
             "speed": self.speed,
             "feed": self.feed,
             "drain": self.drain,
+            "swing": self.swing,
+            "axis": self.axis,
+            "travel": self.travel,
+            "angle": self.angle,
+            "point": self.point,
+            "plug": self.plug,
         })
     }
 }
@@ -1166,7 +1228,11 @@ impl Cell {
                 self.components.retain(|c| c.object != object);
                 if let Some(tag) = req["kind"].as_str() {
                     let kind = Kind::of(tag).ok_or("unknown role")?;
-                    let mut props = Props::for_kind(kind);
+                    // What the request does not name stays as it was.
+                    let mut props = was
+                        .as_ref()
+                        .filter(|c| c.kind == kind)
+                        .map_or(Props::for_kind(kind), |c| c.props);
                     props.update(&req["props"]);
                     self.components.push(Component {
                         object,
@@ -1273,6 +1339,32 @@ impl Cell {
             "clear_parts" => {
                 self.removed
                     .extend(std::mem::take(&mut self.parts).iter().map(|p| p.uid));
+                self.changed = true;
+            }
+            // A door's hinge or a connector picked in the scene: from the
+            // world into the object's own frame.
+            "point" => {
+                let object = uid("object")?;
+                let id = id_of(doc, object).ok_or("no such object")?;
+                let at = match req["at"].as_array().map(Vec::as_slice) {
+                    Some([x, y, z]) => DVec3::new(
+                        x.as_f64().ok_or("no at")?,
+                        y.as_f64().ok_or("no at")?,
+                        z.as_f64().ok_or("no at")?,
+                    ),
+                    _ => return Err("no at".into()),
+                };
+                let c = self
+                    .components
+                    .iter_mut()
+                    .find(|c| c.object == object && matches!(c.kind, Kind::Door | Kind::Connector))
+                    .ok_or("문이나 연결점 역할이 아닙니다")?;
+                c.props.point = doc
+                    .world_transform(id)
+                    .inverse()
+                    .transform_point3(at)
+                    .to_array();
+                self.roles_changed = true;
                 self.changed = true;
             }
             "drive" => self.drive(doc, uid("object")?, uid("stop")?)?,
@@ -1974,7 +2066,7 @@ impl Cell {
     /// the scene has them.
     pub fn untouched(&mut self, doc: &Document) -> Changes {
         let mut changes = self.take_removed();
-        for uid in self.doors(doc).into_iter().map(|(uid, _, _)| uid) {
+        for uid in self.doors(doc).into_iter().map(|(uid, ..)| uid) {
             changes
                 .changed
                 .insert((DatablockKind::Object, Uid::from_raw(uid)));
@@ -1985,30 +2077,55 @@ impl Cell {
     /// Machine `machine`'s door, by identity.
     pub fn door_of(&self, doc: &Document, machine: u64) -> Option<u64> {
         let id = id_of(doc, machine)?;
-        doc.object_uid(part_named(doc, id, "door")?)
-            .map(|u| u.raw())
+        let (door, _) = self.door_parts(doc, id).into_iter().next()?;
+        doc.object_uid(door).map(|u| u.raw())
     }
 
-    /// Each machine's door: its identity, how far open, and the machine's
-    /// own X axis it slides along.
-    fn doors(&self, doc: &Document) -> Vec<(u64, f64, ObjectId)> {
-        self.components
+    /// The parts of machine `machine` that move as its door does: those
+    /// with the door role, with how they move; or else the part named for
+    /// it, which slides aside.
+    fn door_parts(&self, doc: &Document, machine: ObjectId) -> Vec<(ObjectId, Option<Props>)> {
+        let marked: Vec<_> = self
+            .components
             .iter()
-            .filter(|c| c.kind.machine())
+            .filter(|c| c.kind == Kind::Door)
             .filter_map(|c| {
-                let machine = id_of(doc, c.object)?;
-                let door = part_named(doc, machine, "door")?;
-                let open = self.machines.get(&c.object).map_or(0.0, |m| m.door);
-                Some((doc.object_uid(door)?.raw(), open, machine))
+                let id = id_of(doc, c.object)?;
+                is_below(doc, id, machine).then_some((id, Some(c.props)))
             })
+            .collect();
+        if !marked.is_empty() {
+            return marked;
+        }
+        part_named(doc, machine, "door")
+            .map(|id| (id, None))
+            .into_iter()
             .collect()
     }
 
-    /// Slides each open door aside in `doc`, along its machine's X, by its
-    /// own width.
+    /// Each machine's door parts: identity, how far open, the machine, and
+    /// how the part moves if it was told.
+    fn doors(&self, doc: &Document) -> Vec<(u64, f64, ObjectId, Option<Props>)> {
+        let mut out = Vec::new();
+        for c in self.components.iter().filter(|c| c.kind.machine()) {
+            let Some(machine) = id_of(doc, c.object) else {
+                continue;
+            };
+            let open = self.machines.get(&c.object).map_or(0.0, |m| m.door);
+            for (door, props) in self.door_parts(doc, machine) {
+                if let Some(uid) = doc.object_uid(door) {
+                    out.push((uid.raw(), open, machine, props));
+                }
+            }
+        }
+        out
+    }
+
+    /// Moves each open door in `doc` as far as it is open: as its door role
+    /// says, or else aside along its machine's X by its own width.
     fn open_doors(&self, doc: &mut Document) -> Vec<u64> {
         let mut uids = Vec::new();
-        for (uid, open, machine) in self.doors(doc) {
+        for (uid, open, machine, props) in self.doors(doc) {
             uids.push(uid);
             let Some(door) = id_of(doc, uid) else {
                 continue;
@@ -2016,22 +2133,44 @@ impl Cell {
             if open <= 0.0 {
                 continue;
             }
-            let along = doc
-                .world_transform(machine)
-                .matrix3
-                .x_axis
-                .normalize_or_zero();
-            let Some((lo, hi)) = bounds(doc, door) else {
-                continue;
-            };
-            let width = (hi - lo).dot(along).abs();
-            let shift = along * (width + 0.02) * open;
-            // From the world into the door's own transform.
             let world = doc.world_transform(door);
+            let own = |p: &Props| {
+                let unit = [DVec3::X, DVec3::Y, DVec3::Z][p.axis.min(2) as usize];
+                (world.matrix3 * unit).normalize_or_zero()
+            };
+            let moved = match props {
+                Some(p) if p.swing > 0.5 => {
+                    let pivot = world.transform_point3(DVec3::from_array(p.point));
+                    DAffine3::from_translation(pivot)
+                        * DAffine3::from_axis_angle(own(&p), p.angle * open)
+                        * DAffine3::from_translation(-pivot)
+                        * world
+                }
+                Some(p) if p.travel != 0.0 => {
+                    DAffine3::from_translation(own(&p) * p.travel * open) * world
+                }
+                _ => {
+                    let along = doc
+                        .world_transform(machine)
+                        .matrix3
+                        .x_axis
+                        .normalize_or_zero();
+                    let Some((lo, hi)) = bounds(doc, door) else {
+                        continue;
+                    };
+                    let width = (hi - lo).dot(along).abs();
+                    DAffine3::from_translation(along * (width + 0.02) * open) * world
+                }
+            };
+            // From the world into the door's own transform.
             let Some(o) = doc.object(door) else { continue };
             let above = world * o.transform.to_affine().inverse();
-            let local = above.matrix3.inverse() * shift;
-            doc.object_mut(door).unwrap().transform.translation += local;
+            let (scale, rotation, translation) =
+                (above.inverse() * moved).to_scale_rotation_translation();
+            let t = &mut doc.object_mut(door).unwrap().transform;
+            t.translation = translation;
+            t.rotation = rotation;
+            t.scale = scale;
         }
         uids
     }
@@ -2142,6 +2281,22 @@ impl Cell {
                     "slots": self.slots(doc, c).into_iter().map(point).collect::<Vec<_>>(),
                     "seat": self.seat(doc, c).map(point),
                     "holding": self.parts.iter().any(|p| p.held.is_some_and(|h| h.0 == c.object)),
+                    // A door's hinge, a connector: where it is in the world.
+                    "point": matches!(c.kind, Kind::Door | Kind::Connector)
+                        .then(|| id_of(doc, c.object))
+                        .flatten()
+                        .map(|id| point(doc.world_transform(id).transform_point3(DVec3::from_array(c.props.point)))),
+                    // The machine a door moves with.
+                    "machine_of": (c.kind == Kind::Door)
+                        .then(|| id_of(doc, c.object))
+                        .flatten()
+                        .and_then(|id| {
+                            self.components.iter().find(|m| {
+                                m.kind.machine()
+                                    && id_of(doc, m.object).is_some_and(|mid| is_below(doc, id, mid))
+                            })
+                        })
+                        .map(|m| m.object.to_string()),
                     "positioner": (c.kind == Kind::Positioner).then(|| {
                         let r = self.rover(doc, c);
                         json!({
@@ -2212,6 +2367,7 @@ pub fn is_op(op: &str) -> bool {
             | "drive"
             | "turn"
             | "io"
+            | "point"
     )
 }
 
@@ -2857,5 +3013,79 @@ mod tests {
         let io = again.export(&doc);
         assert_eq!(io.io.len(), 1);
         assert_eq!(io.io.get(&(m, "start".into())), Some(&4));
+    }
+
+    /// A lathe's door told how it moves: swung 90° about its own Z through
+    /// a hinge picked on its corner, the hinge staying where it is; then
+    /// lifted 0.4 m along its own Z instead. Kept in the project file.
+    #[test]
+    fn a_door_moves_as_its_role_says() {
+        let (doc, mut cell, machine) = equipment("cnc_lathe", json!({"door": 1.0}));
+        let door = part_named(&doc, id_of(&doc, machine).unwrap(), "door").unwrap();
+        let door_uid = doc.object_uid(door).unwrap().raw();
+        let before = doc.world_transform(door);
+        let (lo, _) = bounds(&doc, door).unwrap();
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": door_uid.to_string(), "kind": "door",
+                   "props": {"swing": 1, "axis": 2, "angle": std::f64::consts::FRAC_PI_2}}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "point", "object": door_uid.to_string(), "at": [lo.x, lo.y, lo.z]}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        assert_eq!(cell.door_of(&doc, machine), Some(door_uid));
+        let open = |cell: &mut Cell| {
+            ask(
+                cell,
+                &doc,
+                json!({"op": "machine", "object": machine.to_string(), "action": "open"}),
+            );
+            run_for(cell, &doc, 0.0, 2.0);
+            let mut shown = doc.clone();
+            cell.apply(&mut shown);
+            shown.world_transform(id_of(&shown, door_uid).unwrap())
+        };
+        let swung = open(&mut cell);
+        let turn = DAffine3::from_translation(lo)
+            * DAffine3::from_rotation_z(std::f64::consts::FRAC_PI_2)
+            * DAffine3::from_translation(-lo);
+        let want = turn * before;
+        assert!(swung.abs_diff_eq(want, 1e-9), "{swung:?}\n{want:?}");
+        // The hinge stays put.
+        let hinge = before.inverse().transform_point3(lo);
+        assert!((swung.transform_point3(hinge) - lo).length() < 1e-9);
+
+        // Lifted instead: the same request keeps the hinge it does not name.
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": door_uid.to_string(), "kind": "door",
+                   "props": {"swing": 0, "travel": 0.4}}),
+        );
+        let c = cell
+            .components
+            .iter()
+            .find(|c| c.object == door_uid)
+            .unwrap();
+        assert!((DVec3::from_array(c.props.point) - hinge).length() < 1e-9);
+        let lifted = open(&mut cell);
+        let up = (before.matrix3 * DVec3::Z).normalize() * 0.4;
+        assert!((lifted.translation - before.translation - up).length() < 1e-9);
+
+        // Saved and read back.
+        let mut again = Cell::from_saved(cell.to_saved());
+        again.adopt(&doc);
+        let c = again
+            .components
+            .iter()
+            .find(|c| c.object == door_uid)
+            .unwrap();
+        assert_eq!(c.kind, Kind::Door);
+        assert!((c.props.travel - 0.4).abs() < 1e-12);
     }
 }

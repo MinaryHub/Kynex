@@ -801,6 +801,12 @@ canvas.addEventListener('pointerup', (e) => {
     if (shape) robotPanel.pickEdge(uidOf(shape), shape.point);
     return;
   }
+  // Picking a door's hinge or a connector: a point on any shape.
+  if (cellPanel.picking()) {
+    const shape = hits.find((h) => h.batchId !== undefined);
+    if (shape) cellPanel.pickPoint(shape.point);
+    return;
+  }
   select(hit ? uidOf(hit) : null);
 });
 
@@ -1027,6 +1033,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'escape') {
     libraryPanel.arm(null);
     if (view.measure) setToggle('measure', false);
+    if (cellPanel.picking()) return cellPanel.stopPicking();
     select(null);
   }
   else return;

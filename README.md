@@ -110,6 +110,17 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   settings — in the library under 내 장비, saved with the project, to be
   placed again like any template (✕ takes it out, once none is placed).
   An object with a robot in it cannot be saved so.
+- **Moving parts and connection points** (roles, so they are saved with
+  the project and with 내 장비): a part below a CNC machine or moulding
+  machine given the role **문** moves as that machine's door does —
+  **미닫이** slides along its own X, Y or Z by **거리** (0: aside by its
+  own width along the machine's X, as a part named `door` does), and
+  **여닫이** swings by **각도** about that axis through a hinge picked on
+  the shape with **회전 중심 찍기**. A machine may have several. A part
+  given the role **연결점** at a picked point makes it a connection point
+  of the equipment saved from it: a robot's stand, a conveyor's start or
+  end, or the foot it stands on another's mount by. Both show as green
+  dots.
 - **Reach**: **범위** draws where the flange reaches within the joints'
   limits, see-through, swept round the first joint, with its section
   outlined; it follows the robot when moved. As a datasheet's working

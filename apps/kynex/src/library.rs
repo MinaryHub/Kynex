@@ -455,9 +455,40 @@ impl Plug {
 /// metres.
 pub const SNAP: f64 = 0.25;
 
+impl Custom {
+    /// Its connection points, from its origin: the connectors among its
+    /// parts.
+    fn plugs(&self) -> Vec<(Plug, DVec3)> {
+        self.nodes
+            .iter()
+            .filter_map(|n| {
+                let (Kind::Connector, v) = n.role.as_ref()? else {
+                    return None;
+                };
+                let p: Vec<f64> = v["point"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(Value::as_f64).collect())
+                    .unwrap_or_default();
+                let point = match p.as_slice() {
+                    [x, y, z] => DVec3::new(*x, *y, *z),
+                    _ => DVec3::ZERO,
+                };
+                let plug = match crate::cell::PLUGS.get(v["plug"].as_u64().unwrap_or(0) as usize) {
+                    Some(&"belt_in") => Plug::BeltIn,
+                    Some(&"belt_out") => Plug::BeltOut,
+                    Some(&"foot") => Plug::Foot,
+                    _ => Plug::Mount,
+                };
+                Some((plug, n.at.transform_point3(point)))
+            })
+            .collect()
+    }
+}
+
 impl Item {
     /// Its connection points, where it stands: what each takes, and where.
-    fn plugs(&self) -> Vec<(Plug, DVec3)> {
+    /// The user's own equipment, `customs`, has those its connectors say.
+    fn plugs(&self, customs: &[Custom]) -> Vec<(Plug, DVec3)> {
         let local: Vec<(Plug, DVec3)> = match self.template.as_str() {
             "pedestal" => vec![(Plug::Mount, DVec3::Z * self.param("height"))],
             "amr" => vec![(Plug::Mount, DVec3::Z * self.param("height"))],
@@ -473,7 +504,11 @@ impl Item {
             t if template(t).is_some_and(|t| t.group == "로봇") => {
                 vec![(Plug::Foot, DVec3::ZERO)]
             }
-            _ => Vec::new(),
+            t => customs
+                .iter()
+                .find(|c| c.key == t)
+                .map(Custom::plugs)
+                .unwrap_or_default(),
         };
         let turn = DQuat::from_rotation_z(self.yaw);
         local
@@ -482,25 +517,23 @@ impl Item {
             .collect()
     }
 
-    /// Moved so its connection point `mine` stands on `theirs` of `other`:
-    /// a robot on its mount, as it was turned; a conveyor on in line with
+    /// Moved so its connection point `mine` stands on `at`, `other`'s: a
+    /// robot on its mount, as it was turned; a conveyor on in line with
     /// the other, flowing the same way, its belt as high.
-    fn snapped_to(&self, mine: Plug, other: &Item, at: DVec3) -> (DVec3, f64) {
-        match mine {
-            Plug::Foot => (at, self.yaw),
-            _ => {
-                let yaw = other.yaw;
-                let mut moved = self.clone();
-                moved.yaw = yaw;
-                moved.at = DVec3::ZERO;
-                let local = moved
-                    .plugs()
-                    .into_iter()
-                    .find(|(p, _)| *p == mine)
-                    .map_or(DVec3::ZERO, |(_, p)| p);
-                (at - local, yaw)
-            }
-        }
+    fn snapped_to(&self, mine: Plug, other: &Item, at: DVec3, customs: &[Custom]) -> (DVec3, f64) {
+        let yaw = match mine {
+            Plug::Foot => self.yaw,
+            _ => other.yaw,
+        };
+        let mut moved = self.clone();
+        moved.yaw = yaw;
+        moved.at = DVec3::ZERO;
+        let local = moved
+            .plugs(customs)
+            .into_iter()
+            .find(|(p, _)| *p == mine)
+            .map_or(DVec3::ZERO, |(_, p)| p);
+        (at - local, yaw)
     }
 }
 
@@ -755,15 +788,16 @@ impl Library {
     /// name.
     fn snap(&self, item: &mut Item) -> Option<String> {
         let flat = |v: DVec3| DVec3::new(v.x, v.y, 0.0).length();
+        let customs = &self.customs;
         let (mine, other, theirs, _) = item
-            .plugs()
+            .plugs(customs)
             .into_iter()
             .flat_map(|(mine, here)| {
                 self.items
                     .iter()
                     .filter(|o| o.id != item.id)
                     .flat_map(move |o| {
-                        o.plugs()
+                        o.plugs(customs)
                             .into_iter()
                             .filter(move |(theirs, _)| mine.fits(*theirs))
                             .map(move |(_, there)| (mine, o, there, flat(there - here)))
@@ -771,7 +805,7 @@ impl Library {
             })
             .filter(|(.., gap)| *gap <= SNAP)
             .min_by(|a, b| a.3.total_cmp(&b.3))?;
-        let (at, yaw) = item.snapped_to(mine, other, theirs);
+        let (at, yaw) = item.snapped_to(mine, other, theirs, customs);
         item.at = at;
         item.yaw = yaw;
         Some(other.name.clone())

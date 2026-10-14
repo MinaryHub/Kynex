@@ -657,6 +657,81 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .insp-item[hidden] { display: none; }
 .insp-item-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 
+/* ---- the timeline: a Gantt chart of the run ---------------------------- */
+.timeline {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 60px;
+  max-height: 42%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: rgba(20, 23, 28, 0.94);
+  backdrop-filter: blur(8px);
+  z-index: 4;
+}
+.timeline[hidden] { display: none; }
+.tl-tabs { display: flex; gap: 2px; }
+.tl-tabs button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tl-tabs button.on { background: var(--line); color: var(--text); }
+.tl-view { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: auto; }
+.tl-view[hidden] { display: none; }
+.sc-bar { display: flex; align-items: center; gap: 8px; }
+.sc-bar .chip-btn { margin-left: 0; }
+.sc-gap { flex: 1; }
+.sc-bar input, .sc-bar select {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  outline: none;
+}
+.sc-bar input { width: 180px; }
+.sc-bar input:focus { border-color: var(--accent); }
+.sc-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.sc-table th { text-align: right; font-weight: 500; color: var(--faint); padding: 3px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.sc-table td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); font-family: var(--mono); white-space: nowrap; }
+.sc-table th:first-child, .sc-table td:first-child { text-align: left; font-family: inherit; }
+.sc-table td.sc-alarm { color: #ff5f5f; font-family: inherit; white-space: normal; text-align: left; }
+.sc-table tr.best td.sc-rate { color: var(--accent); font-weight: 700; }
+.sc-table .sc-acts { white-space: nowrap; }
+.sc-table .sc-acts button { height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; }
+.sc-table .sc-acts button:hover { color: var(--text); background: var(--line); }
+.sc-bar-rate { display: inline-block; height: 6px; margin-right: 6px; border-radius: 2px; background: var(--accent); vertical-align: 1px; }
+.sc-note { margin: 0; font-size: 10.5px; }
+.tl-head { display: flex; align-items: center; gap: 10px; }
+.tl-stats { font-size: 11.5px; color: var(--muted); }
+.tl-head .icon-btn { margin-left: auto; }
+.tl-lanes { display: flex; flex-direction: column; gap: 4px; overflow: auto; min-height: 0; }
+.tl-empty { margin: 4px 0; font-size: 12px; }
+.tl-lane { display: grid; grid-template-columns: 150px minmax(0, 1fr) 150px; align-items: center; gap: 10px; font-size: 11.5px; }
+.tl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-track { position: relative; height: 16px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.tl-track span { position: absolute; top: 0; bottom: 0; min-width: 1px; }
+.tl-share { text-align: right; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.tl-share b { color: var(--text); }
+.tl-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10.5px; color: var(--faint); }
+.tl-legend i { display: inline-block; width: 9px; height: 9px; margin-right: 4px; border-radius: 2px; vertical-align: -1px; }
+
 /* ---- toast ------------------------------------------------------------ */
 .toast {
   position: fixed;

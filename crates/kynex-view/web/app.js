@@ -10,6 +10,7 @@ import { Outline } from '/outline.js';
 import { RobotPanel } from '/robot.js';
 import { CellPanel } from '/cell.js';
 import { LibraryPanel } from '/library.js';
+import { TimelinePanel } from '/timeline.js';
 
 // ---- state ------------------------------------------------------------------
 
@@ -25,7 +26,7 @@ const BENCH = new URLSearchParams(location.search).has('bench');
 let benchStarted = false;
 let benchUpdates = 0;
 const collapsed = new Set();
-const view = { joints: true, wire: false, grid: true };
+const view = { joints: true, wire: false, grid: true, timeline: false };
 
 // ---- renderer, camera, lights ----------------------------------------------
 
@@ -466,6 +467,8 @@ function connect() {
   source.addEventListener('programs', (e) => robotPanel.setPrograms(JSON.parse(e.data)));
   source.addEventListener('contacts', (e) => setContacts(JSON.parse(e.data)));
   source.addEventListener('library', (e) => libraryPanel.setLibrary(JSON.parse(e.data)));
+  source.addEventListener('timeline', (e) => timelinePanel.setTimeline(JSON.parse(e.data)));
+  source.addEventListener('scenarios', (e) => timelinePanel.setScenarios(JSON.parse(e.data)));
   source.addEventListener('cell', (e) => {
     const cell = JSON.parse(e.data);
     cellPanel.setCell(cell);
@@ -653,6 +656,8 @@ function pick(x, y) {
   return at.ray.intersectPlane(_floor, new THREE.Vector3());
 }
 
+const timelinePanel = new TimelinePanel({ escapeHtml, toast, toggle: (on) => setToggle('timeline', on) });
+
 const libraryPanel = new LibraryPanel({
   records,
   scene,
@@ -827,6 +832,10 @@ function setToggle(name, on) {
   document.querySelector(`[data-toggle="${name}"]`)?.classList.toggle('on', on);
   if (name === 'grid') grid.visible = on;
   if (name === 'joints') for (const [uid, g] of gizmos) g.visible = on && records.get(uid)?.visible !== false;
+  if (name === 'timeline') {
+    timelinePanel.show(on);
+    document.getElementById('hint').hidden = on;
+  }
   if (name === 'wire') {
     surface.wireframe = on;
     outline.enabled = !on;

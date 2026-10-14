@@ -73,6 +73,9 @@
       <span class="sep"></span>
       <button data-toggle="joints" class="on" title="관절·링크 표시 (J)"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v4M10 13.5v4"/></svg></button>
       <button data-toggle="wire" title="와이어프레임 (W)"><svg viewBox="0 0 20 20"><path d="M3 6l7-3 7 3v8l-7 3-7-3zM3 6l7 3 7-3M10 9v8"/></svg></button>
+      <button data-toggle="timeline" title="타임라인: 로봇과 장비가 한 일, 가동률">
+        <svg viewBox="0 0 20 20"><path d="M3 5h8M3 10h12M3 15h6M14 5h3M8 15h9"/></svg>
+      </button>
       <button data-toggle="grid" class="on" title="그리드 (G)"><svg viewBox="0 0 20 20"><path d="M3 3h14v14H3zM3 8h14M3 12.5h14M8 3v14M12.5 3v14"/></svg></button>
     </div>
 
@@ -99,6 +102,36 @@
     <div class="stale" id="stale" role="status" hidden>
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l8 14H2zM10 8v4M10 14.5v.5"/></svg>
       <span id="stale-text">연결이 끊겼습니다 · 마지막으로 받은 장면입니다</span>
+    </div>
+
+    <div class="timeline" id="timeline" hidden>
+      <div class="tl-head">
+        <div class="tl-tabs" role="tablist">
+          <button class="on" data-tl-tab="timeline" role="tab">타임라인</button>
+          <button data-tl-tab="scenarios" role="tab">시나리오 비교</button>
+        </div>
+        <span class="tl-stats num" id="tl-stats"></span>
+        <button class="icon-btn small" id="tl-close" aria-label="타임라인 닫기"><svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
+      </div>
+      <div class="tl-view" id="tl-view-timeline">
+        <div class="tl-lanes" id="tl-lanes"></div>
+        <div class="tl-legend" id="tl-legend"></div>
+      </div>
+      <div class="tl-view" id="tl-view-scenarios" hidden>
+        <div class="sc-bar">
+          <input id="sc-name" type="text" maxlength="40" placeholder="이름 (예: CNC 2대)" aria-label="시나리오 이름">
+          <button class="chip-btn" id="sc-save" title="지금의 장비, 셀 역할, 프로그램을 시나리오로 저장">현재 구성 저장</button>
+          <span class="sc-gap"></span>
+          <select id="sc-hours" aria-label="실행 시간">
+            <option value="1">1시간</option>
+            <option value="8">8시간</option>
+            <option value="24">24시간</option>
+          </select>
+          <button class="chip-btn" id="sc-run" title="저장한 시나리오를 모두 실행해 비교">▶ 모두 실행</button>
+        </div>
+        <div class="sc-list" id="sc-list"></div>
+        <p class="sc-note muted">프로그램을 반복 실행하고, 작업자가 투입대를 계속 채우고 배출대의 완성품을 치운다고 봅니다.</p>
+      </div>
     </div>
 
     <div class="hint" id="hint">드래그: 회전 · 오른쪽 드래그: 이동 · 휠: 확대</div>

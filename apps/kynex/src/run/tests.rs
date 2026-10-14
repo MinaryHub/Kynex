@@ -732,3 +732,61 @@ fn blended_points_shorten_the_cycle_and_the_parts_still_go_round() {
     assert_eq!(parts.iter().filter(|p| p["finished"] == true).count(), 1);
     assert!(parts.iter().all(|p| p["held"].is_null()));
 }
+
+#[test]
+fn a_circular_move_is_taught_twice_saved_exported_and_run() {
+    let mut c = cell1();
+    let seat = c.seat();
+    let start = seat + DVec3::new(0.0, -0.6, 0.15);
+    c.teach(start, "joint");
+    // Round a quarter of a circle about the start's left: via, then end.
+    let (r, t) = (c.robot.to_string(), c.grip_a.to_string());
+    let mut taught = |at: DVec3| {
+        let a = ask_posing(
+            &mut c.posing,
+            &c.doc,
+            json!({"op": "ik", "robot": r, "tool": t, "position": [at.x, at.y, at.z],
+                   "rotation": [1.0, 0.0, 0.0, 0.0], "restarts": 30}),
+        );
+        assert_eq!(a["reached"], true, "{a}");
+        ask_posing(
+            &mut c.posing,
+            &c.doc,
+            json!({"op": "teach", "robot": r, "tool": t, "kind": "circular"}),
+        )
+    };
+    let centre = start + DVec3::new(-0.15, 0.0, 0.0);
+    let s = std::f64::consts::FRAC_1_SQRT_2 * 0.15;
+    let first = taught(centre + DVec3::new(s, -s, 0.0));
+    assert_eq!(first["via"], true, "the via point first: {first}");
+    let end = centre + DVec3::new(0.0, -0.15, 0.0);
+    let second = taught(end);
+    assert_eq!(second["ok"], true, "{second}");
+    let program = c.posing.program(c.robot).unwrap().clone();
+    assert_eq!(program.steps.len(), 2);
+    let Step::Move(p) = &program.steps[1] else {
+        panic!("a move")
+    };
+    assert_eq!(p.kind, MoveKind::Circular);
+    assert!(p.via.is_some());
+
+    // Saved and read back, exported, and run.
+    let saved = c.posing.saved_programs(&c.doc);
+    let (_, again) = crate::program::Program::from_saved(&saved[0], &c.doc).unwrap();
+    assert_eq!(again, program);
+    let script = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "urscript", "robot": c.robot.to_string()}),
+    );
+    assert!(
+        script["script"].as_str().unwrap().contains("movec("),
+        "{script}"
+    );
+    let (runner, t) = c.run(20.0);
+    assert_eq!(runner.to_json(t)["state"], "done");
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let tool = kin.tool(c.grip_a, kreate_math::DAffine3::IDENTITY).unwrap();
+    let q = c.posing.positions(&kin, c.robot);
+    assert!(kin.pose(&q, &tool).translation.distance(end) < 1e-3);
+}

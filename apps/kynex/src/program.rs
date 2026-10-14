@@ -70,6 +70,9 @@ pub struct Point {
     /// See [`Waypoint::blend`]: metres. Only into another move; before an
     /// action the robot stops.
     pub blend: f64,
+    /// For a circular move, the point its arc passes through: joint
+    /// positions, as `positions`.
+    pub via: Option<BTreeMap<u64, f64>>,
 }
 
 /// What the robot does between moves.
@@ -92,6 +95,9 @@ pub enum Action {
 
 /// One line of a program: a move to a point, or an action.
 #[derive(Clone, Debug, PartialEq)]
+// A program is tens of steps: a point's size beside an action's costs
+// nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 pub enum Step {
     Move(Point),
     Do(Action),
@@ -111,19 +117,27 @@ pub struct Program {
 
 impl Program {
     /// A point at `positions`, after step `after` or at the end.
-    pub fn teach(&mut self, kind: MoveKind, positions: BTreeMap<u64, f64>, after: Option<usize>) {
+    /// A circular move takes `via`, the point its arc passes through.
+    pub fn teach(
+        &mut self,
+        kind: MoveKind,
+        positions: BTreeMap<u64, f64>,
+        via: Option<BTreeMap<u64, f64>>,
+        after: Option<usize>,
+    ) {
         self.taught += 1;
         let point = Point {
             name: format!("P{}", self.taught),
             kind,
             speed: match kind {
                 MoveKind::Joint => JOINT_SPEED,
-                MoveKind::Linear => LINEAR_SPEED,
+                MoveKind::Linear | MoveKind::Circular => LINEAR_SPEED,
             },
             positions,
             pallet: None,
             frame: None,
             blend: 0.0,
+            via: via.filter(|_| kind == MoveKind::Circular),
         };
         self.insert(Step::Move(point), after);
     }
@@ -316,6 +330,11 @@ impl Program {
                     "frame_name": p.frame.map(|f| name(f.object)),
                     "frame_at": p.frame.map(|f| affine_json(&f.taught_in)),
                     "blend": p.blend,
+                    "via": p.via.as_ref().map(|via| via.iter().map(|(uid, q)| json!({
+                        "uid": uid.to_string(),
+                        "name": var_name.get(uid).copied().unwrap_or(""),
+                        "position": q,
+                    })).collect::<Vec<_>>()),
                 }),
                 Step::Do(a) => action_json(a, &|u| name(u)),
             }).collect::<Vec<_>>(),
@@ -363,16 +382,20 @@ impl Program {
         for s in saved_steps {
             let step = match s["type"].as_str().unwrap_or("move") {
                 "move" => {
-                    let mut positions = BTreeMap::new();
-                    for j in s["joints"].as_array().into_iter().flatten() {
-                        let Some(position) = j["position"].as_f64() else {
-                            continue;
-                        };
-                        let name = text(&j["name"]).filter(|n| !n.is_empty());
-                        if let Some(var) = pick(uid(&j["uid"]), name, &vars) {
-                            positions.insert(var, position);
+                    let joints = |list: &Value| {
+                        let mut positions = BTreeMap::new();
+                        for j in list.as_array().into_iter().flatten() {
+                            let Some(position) = j["position"].as_f64() else {
+                                continue;
+                            };
+                            let name = text(&j["name"]).filter(|n| !n.is_empty());
+                            if let Some(var) = pick(uid(&j["uid"]), name, &vars) {
+                                positions.insert(var, position);
+                            }
                         }
-                    }
+                        positions
+                    };
+                    let positions = joints(&s["joints"]);
                     let mut point = Point {
                         name: text(&s["name"]).unwrap_or_else(|| format!("P{}", steps.len() + 1)),
                         kind: kind_of(s["kind"].as_str().unwrap_or("joint"))?,
@@ -391,6 +414,7 @@ impl Program {
                             None
                         },
                         blend: s["blend"].as_f64().unwrap_or(0.0).clamp(0.0, MAX_BLEND),
+                        via: s["via"].is_array().then(|| joints(&s["via"])),
                     };
                     // Saved before points had frames: a pallet point is in
                     // its pallet's frame, where the pallet stands now.
@@ -535,6 +559,7 @@ impl Program {
             .map(|(i, p)| Waypoint {
                 kind: p.kind,
                 positions: kin.with(&p.positions),
+                via: p.via.as_ref().map(|v| kin.with(v)),
                 speed: p.speed,
                 // A blend into the next move only: an action stops the robot.
                 blend: match self.steps.get(i + 1) {
@@ -650,6 +675,13 @@ impl Program {
                         "frame": p.frame.map(|f| f.object.to_string()),
                         "frame_name": p.frame.map(|f| name(f.object)),
                         "blend": p.blend,
+                        "via_at": match (&p.via, &tool) {
+                            (Some(via), Some(t)) => {
+                                let v = kin.pose(&kin.with(via), t).translation;
+                                Some([v.x, v.y, v.z])
+                            }
+                            _ => None,
+                        },
                     })
                 }
                 Step::Do(a) => action_json(a, &name),
@@ -786,6 +818,7 @@ pub fn kind_tag(kind: MoveKind) -> &'static str {
     match kind {
         MoveKind::Joint => "joint",
         MoveKind::Linear => "linear",
+        MoveKind::Circular => "circular",
     }
 }
 
@@ -793,6 +826,7 @@ pub fn kind_of(tag: &str) -> Option<MoveKind> {
     match tag {
         "joint" => Some(MoveKind::Joint),
         "linear" => Some(MoveKind::Linear),
+        "circular" => Some(MoveKind::Circular),
         _ => None,
     }
 }
@@ -811,7 +845,7 @@ fn describe(kin: &Kinematics, problem: &Problem) -> String {
                 miss.push_str(&format!(", {:.1}°", rotation.to_degrees()));
             }
             format!(
-                "직선 경로 {:.0}% 지점부터 도달 불가 (최대 {miss} 벗어남)",
+                "경로 {:.0}% 지점부터 도달 불가 (최대 {miss} 벗어남)",
                 along * 100.0
             )
         }

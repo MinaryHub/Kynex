@@ -472,6 +472,7 @@ mod tests {
             positions: vec![q],
             speed: 1.0,
             blend: 0.0,
+            via: None,
         };
         // Most of a half turn: through the block. Then a little back, clear
         // of it.

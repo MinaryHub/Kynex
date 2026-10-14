@@ -35,6 +35,9 @@ pub struct Posing {
     /// Each program as last saved, for a robot that has since left the
     /// scene: still written back.
     saved: BTreeMap<u64, Value>,
+    /// By robot root: the via point of a circular move being taught, until
+    /// its end is.
+    via: BTreeMap<u64, BTreeMap<u64, f64>>,
 }
 
 /// What the project file holds besides programs, as saved.
@@ -395,14 +398,32 @@ impl Posing {
             "program" => return Ok(json!({ "ok": true })),
             "teach" => {
                 let kind = program::kind_of(req["kind"].as_str().unwrap_or("joint"))
-                    .ok_or("kind is joint or linear")?;
+                    .ok_or("kind is joint, linear or circular")?;
                 let after = req["after"].as_u64().map(|i| i as usize);
-                program.teach(kind, here, after);
+                // A circular move is taught twice: its via point, then its end.
+                let via = match kind {
+                    MoveKind::Circular => match self.via.remove(&root) {
+                        Some(via) => Some(via),
+                        None => {
+                            self.via.insert(root, here);
+                            return Ok(json!({ "ok": true, "via": true }));
+                        }
+                    },
+                    _ => None,
+                };
+                program.teach(kind, here, via, after);
             }
             "add" => {
                 let action = program::action_of(&req["step"])?;
                 let after = req["after"].as_u64().map(|i| i as usize);
                 program.insert(Step::Do(action), after);
+            }
+            "retouch" if req["via"] == true => {
+                let point = program.point_mut(index()?).ok_or_else(not_a_move)?;
+                if point.kind != MoveKind::Circular {
+                    return Err("원호 이동이 아닙니다".into());
+                }
+                point.via = Some(here);
             }
             "retouch" => {
                 let point = program.point_mut(index()?).ok_or_else(not_a_move)?;
@@ -426,17 +447,25 @@ impl Posing {
                 if let Some(kind) = req["kind"].as_str() {
                     let kind = program::kind_of(kind).ok_or("kind is joint or linear")?;
                     if kind != point.kind {
+                        if kind == MoveKind::Circular && point.via.is_none() {
+                            return Err("원호 이동은 + MoveC로 경유점과 함께 티칭하세요".into());
+                        }
+                        if point.kind == MoveKind::Joint || kind == MoveKind::Joint {
+                            point.speed = match kind {
+                                MoveKind::Joint => program::JOINT_SPEED,
+                                _ => program::LINEAR_SPEED,
+                            };
+                        }
                         point.kind = kind;
-                        point.speed = match kind {
-                            MoveKind::Joint => program::JOINT_SPEED,
-                            MoveKind::Linear => program::LINEAR_SPEED,
-                        };
+                        if kind != MoveKind::Circular {
+                            point.via = None;
+                        }
                     }
                 }
                 if let Some(speed) = req["speed"].as_f64() {
                     point.speed = match point.kind {
                         MoveKind::Joint => speed.clamp(0.01, 1.0),
-                        MoveKind::Linear => speed.clamp(0.001, 5.0),
+                        MoveKind::Linear | MoveKind::Circular => speed.clamp(0.001, 5.0),
                     };
                 }
                 if let Some(name) = req["name"].as_str() {
@@ -484,7 +513,10 @@ impl Posing {
             "clear" => program.clear(),
             "goto" => {
                 let point = program.point_mut(index()?).ok_or_else(not_a_move)?;
-                let q = kin.with(&point.positions);
+                let q = match (&point.via, req["via"] == true) {
+                    (Some(via), true) => kin.with(via),
+                    _ => kin.with(&point.positions),
+                };
                 self.held
                     .insert(root, kin.vars.iter().map(|v| v.uid).zip(q).collect());
                 mark_joints(kin.joints(), touched);

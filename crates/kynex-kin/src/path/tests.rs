@@ -53,6 +53,7 @@ fn wp(kind: MoveKind, positions: &[f64], speed: f64) -> Waypoint {
         positions: positions.to_vec(),
         speed,
         blend: 0.0,
+        via: None,
     }
 }
 
@@ -357,4 +358,54 @@ fn a_blended_waypoint_is_passed_without_stopping() {
         })
         .fold(f64::INFINITY, f64::min);
     assert!(nearest > 0.002 && nearest < 0.05, "{nearest}");
+}
+
+#[test]
+fn a_circular_move_goes_round_the_arc_through_its_via_point() {
+    let (kin, tool) = robot(UR5E, "base_link");
+    // Elbow bent, well clear of a singularity.
+    let start = vec![0.3, -1.2, 1.4, -1.6, -1.5, 0.2];
+    let p0 = kin.pose(&start, &tool);
+    let turn = p0.to_scale_rotation_translation().1;
+    let at = |dx: f64, dy: f64, seed: &[f64]| {
+        let goal = Goal {
+            position: p0.translation + DVec3::new(dx, dy, 0.0),
+            rotation: Some(turn),
+        };
+        let found = kin.solve(&tool, &goal, seed, &Options::default());
+        assert!(found.reached);
+        found.positions
+    };
+    // A half circle of radius 0.1 m about (0.1, 0): through (0.1, 0.1) to
+    // (0.2, 0).
+    let a = at(0.0, 0.0, &start);
+    let via = at(0.1, 0.1, &a);
+    let c = at(0.2, 0.0, &via);
+    let mut end = wp(MoveKind::Circular, &c, 0.1);
+    end.via = Some(via.clone());
+    let plan = plan(&kin, &tool, &[wp(MoveKind::Joint, &a, 1.0), end], false);
+    let seg = &plan.segments[0];
+    assert_eq!(seg.kind, MoveKind::Circular);
+    assert!(seg.problems.is_empty(), "{:?}", seg.problems);
+    // Every point on the way 0.1 m from the centre, and the via point
+    // passed.
+    let centre = p0.translation + DVec3::new(0.1, 0.0, 0.0);
+    let mut nearest_via = f64::INFINITY;
+    for k in 0..=100 {
+        let q = plan.at(seg.duration * k as f64 / 100.0);
+        let p = kin.pose(&q, &tool).translation;
+        assert!(
+            (p.distance(centre) - 0.1).abs() < 1e-3,
+            "{k}: {}",
+            p.distance(centre)
+        );
+        nearest_via = nearest_via.min(p.distance(kin.pose(&via, &tool).translation));
+    }
+    assert!(nearest_via < 2e-3, "{nearest_via}");
+    // Half a circle's length, π·0.1 m, at 0.1 m/s: a little over π s.
+    assert!(
+        seg.duration > std::f64::consts::PI && seg.duration < 3.6,
+        "{}",
+        seg.duration
+    );
 }

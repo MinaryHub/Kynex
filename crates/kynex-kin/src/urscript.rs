@@ -115,6 +115,32 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
                     w.speed
                 );
             }
+            MoveKind::Circular => {
+                let at = base.inverse() * kin.pose(&w.positions, tool);
+                // Without its via point, as a line.
+                match &w.via {
+                    Some(via) => {
+                        let via = base.inverse() * kin.pose(via, tool);
+                        let _ = writeln!(
+                            out,
+                            "{indent}movec({}, {}, a={:.4}, v={:.4}{r}, mode=0)",
+                            pose(&via),
+                            pose(&at),
+                            path::LINEAR_ACCELERATION,
+                            w.speed
+                        );
+                    }
+                    None => {
+                        let _ = writeln!(
+                            out,
+                            "{indent}movel({}, a={:.4}, v={:.4}{r})",
+                            pose(&at),
+                            path::LINEAR_ACCELERATION,
+                            w.speed
+                        );
+                    }
+                }
+            }
         }
     };
     // Wherever the robot stands, it goes to the first point by its joints:

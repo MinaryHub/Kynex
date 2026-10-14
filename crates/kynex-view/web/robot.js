@@ -384,6 +384,7 @@ export class RobotPanel {
           <div class="prog-actions">
             <button class="chip-btn" data-act="teach" data-kind="joint" title="현재 자세를 관절 이동(MoveJ) 지점으로 추가">+ MoveJ</button>
             <button class="chip-btn" data-act="teach" data-kind="linear" title="현재 자세를 직선 이동(MoveL) 지점으로 추가">+ MoveL</button>
+            <button class="chip-btn" data-act="teach" data-kind="circular" title="원호 이동(MoveC): 경유점 자세에서 한 번, 끝 자세에서 한 번 누릅니다">+ MoveC</button>
             <select class="step-pick" data-opt="newstep" aria-label="동작 추가" title="고른 단계 다음에 동작을 넣습니다">
               <option value="">+ 동작</option>
               <option value="grip">그리퍼 잡기</option>
@@ -451,7 +452,8 @@ export class RobotPanel {
       this.renderCopyBar(section, span);
       const rows = points.map((p, i) => {
         if (p.type !== 'move') return this.actionRow(r, p, i, i === ui.cursor, inRange(i));
-        const linear = p.kind === 'linear';
+        const linear = p.kind !== 'joint';
+        const circular = p.kind === 'circular';
         const speed = linear ? Math.round(p.speed * 1000) : Math.round(p.speed * 100);
         const bad = p.move?.problems?.length;
         // The first point is where the program starts: nothing moves into it,
@@ -461,7 +463,7 @@ export class RobotPanel {
           <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}">
             <span class="pidx num">${i + 1}</span>
             <span class="pname">${escapeHtml(p.name)}${p.blend ? ` <span class="pblend" title="블렌드 반경: 멈추지 않고 지나감">◠${Math.round(p.blend * 1000)}</span>` : ''}</span>
-            <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${linear ? 'L' : 'J'}</button>
+            <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${circular ? '원호 이동 (MoveC) · 눌러서 직선 이동으로' : linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${circular ? 'C' : linear ? 'L' : 'J'}</button>
             <input class="pspeed num" type="number" data-opt="speed" value="${speed}" min="1" step="${linear ? 10 : 5}"${into ? '' : ' disabled'} aria-label="속도">
             <span class="unit">${linear ? 'mm/s' : '%'}</span>
             <span class="ptime num">${p.move ? seconds(p.move.duration) : i === firstMove ? '시작' : ''}</span>
@@ -472,7 +474,8 @@ export class RobotPanel {
               <button class="icon-mini" data-act="delete" title="삭제">✕</button>
             </span>
             ${p.frame ? this.frameLine(p) : ''}
-            ${i === ui.cursor ? `<div class="pslot">블렌드 <input class="pblend-in num" type="number" data-opt="blend" value="${Math.round((p.blend || 0) * 1000)}" min="0" max="500" step="10" aria-label="블렌드 반경"> mm <span class="muted">${points[i + 1]?.type === 'move' ? '0이면 멈춤' : '다음이 동작이라 멈춤'}</span></div>` : ''}
+            ${circular && i === ui.cursor ? `<div class="pslot"><span>경유점</span> <button class="icon-mini" data-act="goto-via" title="경유점으로 이동">→</button><button class="icon-mini" data-act="retouch-via" title="현재 자세를 경유점으로">⟳</button></div>` : ''}
+            ${i === ui.cursor ? `<div class="pslot"><span>블렌드</span> <input class="pblend-in num" type="number" data-opt="blend" value="${Math.round((p.blend || 0) * 1000)}" min="0" max="500" step="10" aria-label="블렌드 반경"> mm <span class="muted">${points[i + 1]?.type === 'move' ? '0이면 멈춤' : '다음이 동작이라 멈춤'}</span></div>` : ''}
             ${problems(p.move)}
           </li>`;
       });
@@ -556,7 +559,7 @@ export class RobotPanel {
     ];
     const value = p.pallet ? `p:${p.pallet}` : `m:${p.frame}`;
     if (!options.some(([v]) => v === value)) options.push([value, `${p.frame_name || '?'} (없음)`]);
-    return `<div class="pslot">⌖ 기준 <select data-opt="frame">${options
+    return `<div class="pslot"><span>⌖ 기준</span> <select data-opt="frame">${options
       .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
       .join('')}</select></div>`;
   }
@@ -955,8 +958,11 @@ export class RobotPanel {
       const gripper = e.target.closest('[data-gripper]').dataset.gripper;
       this.programOp(r, { op: act, gripper });
     } else if (act === 'teach') {
-      this.programOp(r, { op: 'teach', kind: e.target.closest('[data-kind]').dataset.kind, after: ui.cursor ?? undefined });
-      if (ui.cursor != null) ui.cursor += 1;
+      const kind = e.target.closest('[data-kind]').dataset.kind;
+      this.programOp(r, { op: 'teach', kind, after: ui.cursor ?? undefined }, (a) => {
+        if (a.via) return this.ctx.toast('경유점을 저장했습니다. 끝 자세로 옮긴 뒤 + MoveC를 다시 누르세요');
+        if (ui.cursor != null) ui.cursor += 1;
+      });
     } else if (act === 'play') {
       const going = this.running?.robot === r.root && !['done', 'alarm'].includes(this.running.state);
       this.programOp(r, { op: going ? 'stop' : 'play' });
@@ -992,8 +998,11 @@ export class RobotPanel {
         else if (machine) this.programOp(r, { op: 'edit', index, frame: machine });
         else this.ctx.toast('이 지점 가까이에 CNC나 팔레트가 없습니다. 아래 줄에서 직접 고를 수도 있습니다');
       }
+    } else if ((act === 'goto-via' || act === 'retouch-via') && index != null) {
+      this.programOp(r, { op: act === 'goto-via' ? 'goto' : 'retouch', index, via: true });
     } else if (act === 'kind' && index != null) {
       const point = this.programs[r.root]?.steps[index];
+      // C goes to L, L to J, J to L.
       if (point) this.programOp(r, { op: 'edit', index, kind: point.kind === 'linear' ? 'joint' : 'linear' });
     } else if (['goto', 'retouch', 'delete'].includes(act) && index != null) {
       if (act === 'delete' && ui.cursor != null && ui.cursor >= index) ui.cursor = ui.cursor > 0 ? ui.cursor - 1 : null;

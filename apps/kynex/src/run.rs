@@ -239,6 +239,7 @@ impl Runner {
                     positions: posing.positions(&self.kin, self.root),
                     speed: 1.0,
                     blend: 0.0,
+                    via: None,
                 }];
                 for (k, i) in chain.iter().enumerate() {
                     let Step::Move(point) = &self.program.steps[*i] else {
@@ -246,7 +247,11 @@ impl Runner {
                     };
                     waypoints.push(Waypoint {
                         kind: point.kind,
-                        positions: self.target(point, cell, scene)?,
+                        positions: self.target(point, &point.positions, cell, scene)?,
+                        via: match &point.via {
+                            Some(via) => Some(self.target(point, via, cell, scene)?),
+                            None => None,
+                        },
                         speed: point.speed,
                         // The last stops: an action comes next.
                         blend: if k + 1 < chain.len() {
@@ -299,8 +304,15 @@ impl Runner {
     /// pallet — over the place the pallet's count has reached, as far
     /// from it and turned as it was taught. The joints are solved from the
     /// taught ones, so the arm keeps the posture it was taught in.
-    fn target(&self, point: &Point, cell: &Cell, scene: &Document) -> Result<Vec<f64>, String> {
-        let taught = self.kin.with(&point.positions);
+    /// `positions` are the point's own, or its via point's.
+    fn target(
+        &self,
+        point: &Point,
+        positions: &BTreeMap<u64, f64>,
+        cell: &Cell,
+        scene: &Document,
+    ) -> Result<Vec<f64>, String> {
+        let taught = self.kin.with(positions);
         let mut pose = self.kin.pose(&taught, &self.tool);
         // How the equipment has moved since: the identity if it has not.
         let mut moved = kreate_math::DAffine3::IDENTITY;

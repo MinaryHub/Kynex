@@ -102,7 +102,11 @@ random restarts (`"restarts": n`) when the start is far from the goal.
 Each robot card has a **프로그램**: a list of steps.
 
 1. Pose the robot with the controls above.
-2. Add the pose with **+ MoveJ** or **+ MoveL**.
+2. Add the pose with **+ MoveJ** or **+ MoveL**. **+ MoveC** (a circular
+   move) is pressed twice: at the pose its arc passes through, then at
+   its end. The tool goes along the arc of the circle through where it
+   starts, the via point and the end. A picked circular point shows its
+   via point, to go to (→) or re-teach (⟳).
 3. Between moves, add an action from **+ 동작**:
    - 그리퍼 잡기 / 놓기 (grip, release).
    - 장비 명령: open or close a CNC machine's door, clamp or unclamp its
@@ -160,7 +164,7 @@ KYNEX times the moves (`kynex_kin::path`):
   within about the radius (`◠50` beside its name). Only into another
   move: before an action the robot stops, as it must to grip or wait.
   The moves' time and a run both count the time saved. URScript writes
-  it as the move's `r=`.
+  it as the move's `r=`, and a circular move as `movec`.
 - **Order**: a picked step, or a span picked with Shift-click, moves up
   or down past its neighbour with ↑ and ↓ under the add buttons. Tending
   two machines in turn is laid out this way: load one, load the other,

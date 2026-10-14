@@ -12,6 +12,10 @@
 //!   shows up here and not on the shop floor. An arm with fewer than six
 //!   joints cannot turn its tool every way, so for it the line holds the
 //!   tool point only and the orientation goes where the joints take it.
+//! - **Circular** (MoveC): the tool along the arc of the circle through
+//!   where it starts, a via point and where it ends, its orientation
+//!   turning evenly from start to end, worked out as a line is. Three
+//!   points in a line make a line.
 //!
 //! Each move speeds up, cruises and slows down (a trapezoid). Where a line
 //! would need a joint faster than it goes, the move is slowed to what the
@@ -52,6 +56,7 @@ pub const JUMP_SLIDE: f64 = 0.005;
 pub enum MoveKind {
     Joint,
     Linear,
+    Circular,
 }
 
 /// A taught pose and how to get to it.
@@ -66,6 +71,9 @@ pub struct Waypoint {
     /// Metres: how close the tool comes to this waypoint before the next
     /// move takes over, without stopping. Zero stops at it.
     pub blend: f64,
+    /// For a circular move, the joint positions of the point its arc
+    /// passes through on the way.
+    pub via: Option<Vec<f64>>,
 }
 
 /// What is wrong with a move. The move is still planned, as near as it
@@ -262,7 +270,15 @@ pub fn plan(kin: &Kinematics, tool: &Tool, waypoints: &[Waypoint], close: bool) 
         let (a, b) = (&waypoints[from], &waypoints[to]);
         let mut seg = match b.kind {
             MoveKind::Joint => joint_move(kin, &a.positions, &b.positions, b.speed),
-            MoveKind::Linear => linear_move(kin, tool, &a.positions, &b.positions, b.speed),
+            MoveKind::Linear => linear_move(kin, tool, &a.positions, &b.positions, None, b.speed),
+            MoveKind::Circular => linear_move(
+                kin,
+                tool,
+                &a.positions,
+                &b.positions,
+                b.via.as_deref(),
+                b.speed,
+            ),
         };
         // Through the waypoint between, if it blends: this move starts
         // before the last one ends.
@@ -351,9 +367,114 @@ fn joint_move(kin: &Kinematics, from: &[f64], to: &[f64], speed: f64) -> Segment
     }
 }
 
-fn linear_move(kin: &Kinematics, tool: &Tool, from: &[f64], to: &[f64], speed: f64) -> Segment {
+/// Where the tool point goes on a line or an arc: from its start (0) to its
+/// end (1).
+enum Track {
+    Line(DVec3, DVec3),
+    /// About `centre`, from `centre + radius·x` turning towards `y` by
+    /// `angle` radians.
+    Arc {
+        centre: DVec3,
+        x: DVec3,
+        y: DVec3,
+        radius: f64,
+        angle: f64,
+        /// Where along it (0 to 1) it passes the via point.
+        via: f64,
+    },
+}
+
+impl Track {
+    /// The arc from `a` through `b` to `c`, or the line from `a` to `c`
+    /// where the three are in a line.
+    fn through(a: DVec3, b: DVec3, c: DVec3) -> Self {
+        let (u, v) = (b - a, c - a);
+        let w = u.cross(v);
+        if w.length_squared() < 1e-12 {
+            return Track::Line(a, c);
+        }
+        let centre = a
+            + (v.cross(w) * u.length_squared() + w.cross(u) * v.length_squared())
+                / (2.0 * w.length_squared());
+        let radius = a.distance(centre);
+        let x = (a - centre) / radius;
+        let y = w.normalize().cross(x);
+        // Going round from `a` about `w`, `b` comes before `c`.
+        let at = |p: DVec3| {
+            let d = p - centre;
+            let t = d.dot(y).atan2(d.dot(x));
+            if t < 0.0 {
+                t + std::f64::consts::TAU
+            } else {
+                t
+            }
+        };
+        let angle = at(c);
+        Track::Arc {
+            centre,
+            x,
+            y,
+            radius,
+            angle,
+            via: at(b) / angle,
+        }
+    }
+
+    fn point(&self, s: f64) -> DVec3 {
+        match self {
+            Track::Line(a, b) => a.lerp(*b, s),
+            Track::Arc {
+                centre,
+                x,
+                y,
+                radius,
+                angle,
+                ..
+            } => {
+                let t = angle * s;
+                *centre + (*x * t.cos() + *y * t.sin()) * *radius
+            }
+        }
+    }
+
+    fn length(&self) -> f64 {
+        match self {
+            Track::Line(a, b) => a.distance(*b),
+            Track::Arc { radius, angle, .. } => radius * angle,
+        }
+    }
+}
+
+fn linear_move(
+    kin: &Kinematics,
+    tool: &Tool,
+    from: &[f64],
+    to: &[f64],
+    via: Option<&[f64]>,
+    speed: f64,
+) -> Segment {
     let (_, r0, p0) = kin.pose(from, tool).to_scale_rotation_translation();
     let (_, mut r1, p1) = kin.pose(to, tool).to_scale_rotation_translation();
+    let track = match via {
+        Some(via) => Track::through(p0, kin.pose(via, tool).translation, p1),
+        None => Track::Line(p0, p1),
+    };
+    // How the joints go along it, roughly: straight from one taught set to
+    // the next, by way of the via point's on an arc. The solver keeps to
+    // the track; this keeps it to the configuration taught.
+    let guide = |s: f64| -> Vec<f64> {
+        match (&track, via) {
+            (Track::Arc { via: sv, .. }, Some(v)) if s < *sv => {
+                let k = s / sv;
+                from.iter().zip(v).map(|(a, b)| a + (b - a) * k).collect()
+            }
+            (Track::Arc { via: sv, .. }, Some(v)) => {
+                let k = (s - sv) / (1.0 - sv).max(1e-9);
+                v.iter().zip(to).map(|(a, b)| a + (b - a) * k).collect()
+            }
+            _ => from.iter().zip(to).map(|(a, b)| a + (b - a) * s).collect(),
+        }
+    };
     // The short way round.
     if r0.dot(r1) < 0.0 {
         r1 = -r1;
@@ -361,7 +482,7 @@ fn linear_move(kin: &Kinematics, tool: &Tool, from: &[f64], to: &[f64], speed: f
     // Fewer than six joints cannot hold every orientation on the way.
     let orient = kin.vars.len() >= 6;
     let angle = if orient { turn(r0, r1) } else { 0.0 };
-    let along = Profile::new(p1.distance(p0), speed.max(1e-3), LINEAR_ACCELERATION);
+    let along = Profile::new(track.length(), speed.max(1e-3), LINEAR_ACCELERATION);
     let turning = Profile::new(angle, ANGULAR_SPEED, ANGULAR_ACCELERATION);
     let profile = if along.duration >= turning.duration {
         along
@@ -387,7 +508,7 @@ fn linear_move(kin: &Kinematics, tool: &Tool, from: &[f64], to: &[f64], speed: f
         for k in 1..=n {
             let s = profile.fraction(duration * k as f64 / n as f64, duration);
             let goal = Goal {
-                position: p0.lerp(p1, s),
+                position: track.point(s),
                 rotation: orient.then(|| r0.slerp(r1, s)),
             };
             // From the last sample, stepped on as the joints would step
@@ -396,12 +517,13 @@ fn linear_move(kin: &Kinematics, tool: &Tool, from: &[f64], to: &[f64], speed: f
             // tool where it is; so in those ways — the freedom an arm has
             // past what the line asks — it follows the step, and arrives in
             // the configuration taught rather than wherever it drifted.
+            let (g0, g1) = (guide(last_s), guide(s));
             let seed: Vec<f64> = samples
                 .last()
                 .unwrap()
                 .iter()
-                .zip(from.iter().zip(to))
-                .map(|(q, (a, b))| q + (b - a) * (s - last_s))
+                .zip(g0.iter().zip(&g1))
+                .map(|(q, (a, b))| q + (b - a))
                 .collect();
             last_s = s;
             let found = kin.solve(tool, &goal, &seed, &opts);
@@ -466,7 +588,11 @@ fn linear_move(kin: &Kinematics, tool: &Tool, from: &[f64], to: &[f64], speed: f
     }
 
     Segment {
-        kind: MoveKind::Linear,
+        kind: if via.is_some() {
+            MoveKind::Circular
+        } else {
+            MoveKind::Linear
+        },
         to: 0,
         start: 0.0,
         duration,

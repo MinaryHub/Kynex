@@ -23,6 +23,7 @@ fn wp(kind: MoveKind, positions: [f64; 6], speed: f64) -> Waypoint {
         positions: positions.to_vec(),
         speed,
         blend: 0.0,
+        via: None,
     }
 }
 
@@ -156,6 +157,7 @@ fn only_a_six_joint_arm_has_urscript() {
         positions: kin.current.clone(),
         speed: 0.5,
         blend: 0.0,
+        via: None,
     };
     let err = urscript(
         &kin,

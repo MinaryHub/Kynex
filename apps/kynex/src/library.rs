@@ -690,23 +690,25 @@ fn build(item: &Item) -> Result<Built, String> {
         }
         "conveyor" => {
             let c = Colours::new(&mut doc);
-            conveyor(
+            let belt = conveyor(
                 &mut doc,
                 &c,
                 item.param("length"),
                 item.param("width"),
                 item.param("height"),
             );
+            roles.push((belt, Kind::Conveyor));
         }
         "injection_molder" => {
             let c = Colours::new(&mut doc);
-            molder(
+            let machine = molder(
                 &mut doc,
                 &c,
                 item.param("length"),
                 item.param("width"),
                 item.param("height"),
             );
+            roles.push((machine, Kind::Molder));
         }
         "amr" => {
             let c = Colours::new(&mut doc);
@@ -831,6 +833,7 @@ fn post(
 }
 
 /// A cylinder lying along X (`along_x`) or else Y, its centre at `centre`.
+#[allow(clippy::too_many_arguments)]
 fn bar(
     doc: &mut Document,
     name: &str,
@@ -839,8 +842,9 @@ fn bar(
     centre: [f64; 3],
     along_x: bool,
     colour: MaterialId,
+    parent: Option<ObjectId>,
 ) -> ObjectId {
-    let id = post(doc, name, radius, length, centre, colour, None);
+    let id = post(doc, name, radius, length, centre, colour, parent);
     doc.object_mut(id).unwrap().transform.rotation = if along_x {
         DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2)
     } else {
@@ -948,9 +952,9 @@ fn cnc(doc: &mut Document, c: &Colours, item: &Item) -> ObjectId {
 
 /// A belt conveyor `l` long along X, centred on the origin, its belt `w`
 /// wide with its top at `h`: side frames, legs at most 1.5 m apart, and a
-/// drum at each end.
-fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
-    block(
+/// drum at each end. Returns the belt, which carries parts towards +X.
+fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
+    let belt = block(
         doc,
         "belt",
         [l, w, 0.02],
@@ -990,18 +994,24 @@ fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
             [x * l / 2.0, 0.0, h - 0.05],
             false,
             c.dark,
+            None,
         );
     }
+    belt
 }
 
 /// An injection moulding machine `l` long along X, its operator's side at
 /// y = 0 facing −Y as a CNC machine's front: a bed, the clamping unit on
-/// the left (platens, tie bars, the mould behind a guard), the injection
-/// unit on the right (barrel and hopper), and the control panel.
-fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
+/// the left (platens, tie bars, the mould behind its guard), the injection
+/// unit on the right (barrel and hopper), and the control panel. The
+/// machine is the returned empty; its guard is its `door` and its mould
+/// `mould` (see `crate::cell`), the moulded part standing on top of it.
+fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
+    let machine = doc.add_object(Object::new("machine", ObjectData::Empty));
+    let m = Some(machine);
     let bed = 0.9;
     let (x0, y0) = (-l / 2.0, w / 2.0);
-    block(doc, "bed", [l, w, bed], [0.0, y0, bed / 2.0], c.body, None);
+    block(doc, "bed", [l, w, bed], [0.0, y0, bed / 2.0], c.body, m);
     // The clamp: a fixed and a moving platen, the mould between.
     let clamp = l * 0.45;
     let tall = (h - bed - 0.35).max(0.6);
@@ -1017,16 +1027,16 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
             [0.15, w * 0.75, tall],
             [x0 + x, y0, bed + tall / 2.0],
             c.door,
-            None,
+            m,
         );
     }
     block(
         doc,
         "mould",
-        [clamp - 0.75, w * 0.5, tall * 0.7],
-        [x0 + (0.55 + clamp - 0.2) / 2.0, y0, bed + tall / 2.0],
+        [clamp - 0.75, w * 0.5, tall * 0.5],
+        [x0 + (0.55 + clamp - 0.2) / 2.0, y0, bed + tall * 0.25],
         c.steel,
-        None,
+        m,
     );
     for (k, (dy, dz)) in [(-1.0, 0.15), (1.0, 0.15), (-1.0, 0.85), (1.0, 0.85)]
         .iter()
@@ -1040,16 +1050,18 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
             [x0 + clamp / 2.0, y0 + dy * w * 0.3, bed + tall * dz],
             true,
             c.steel,
+            m,
         );
     }
-    // The guard over the clamp, on the operator's side.
+    // The guard over the clamp, on the operator's side: the door the robot
+    // reaches in by.
     block(
         doc,
-        "guard",
+        "door",
         [clamp, 0.03, tall + 0.2],
         [x0 + clamp / 2.0, -0.02, bed + (tall + 0.2) / 2.0],
         c.accent,
-        None,
+        m,
     );
     // The injection unit: the barrel into the fixed platen, the hopper on it.
     let unit = l - clamp - 0.2;
@@ -1061,6 +1073,7 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         [x0 + clamp + unit / 2.0, y0, bed + tall / 2.0],
         true,
         c.steel,
+        m,
     );
     block(
         doc,
@@ -1068,20 +1081,17 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         [unit * 0.45, w * 0.55, tall * 0.55],
         [x0 + clamp + unit * 0.7, y0, bed + tall * 0.5],
         c.door,
-        None,
+        m,
     );
+    let hopper = (h - top).max(0.3);
     post(
         doc,
         "hopper",
         0.18,
-        (h - top).max(0.3),
-        [
-            x0 + clamp + unit * 0.45,
-            y0,
-            top + (h - top).max(0.3) / 2.0 - 0.05,
-        ],
+        hopper,
+        [x0 + clamp + unit * 0.45, y0, top + hopper / 2.0 - 0.05],
         c.body,
-        None,
+        m,
     );
     block(
         doc,
@@ -1089,8 +1099,9 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
         [0.5, 0.06, 0.6],
         [x0 + clamp + 0.4, -0.03, bed + 0.5],
         c.dark,
-        None,
+        m,
     );
+    machine
 }
 
 /// An autonomous mobile robot `l` × `w` × `h`, centred on the origin: a
@@ -1139,6 +1150,7 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
             [0.0, y * (w / 2.0 - 0.03), 0.08],
             false,
             c.belt,
+            None,
         );
     }
     post(

@@ -465,6 +465,7 @@ pub fn signal_label(signal: Signal) -> &'static str {
         Signal::Clamped => "척 물림",
         Signal::Idle => "가공 대기",
         Signal::Done => "가공 완료",
+        Signal::PartAtEnd => "부품 도착",
     }
 }
 

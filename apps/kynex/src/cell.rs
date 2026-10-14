@@ -77,15 +77,18 @@ pub enum Signal {
     Idle,
     /// Not machining, and a finished part in the chuck.
     Done,
+    /// A conveyor's sensor at its end: a part has come to it.
+    PartAtEnd,
 }
 
 impl Signal {
-    pub const ALL: [Signal; 5] = [
+    pub const ALL: [Signal; 6] = [
         Signal::DoorOpen,
         Signal::DoorClosed,
         Signal::Clamped,
         Signal::Idle,
         Signal::Done,
+        Signal::PartAtEnd,
     ];
 
     pub fn tag(self) -> &'static str {
@@ -95,6 +98,7 @@ impl Signal {
             Signal::Clamped => "clamped",
             Signal::Idle => "idle",
             Signal::Done => "done",
+            Signal::PartAtEnd => "part_at_end",
         }
     }
 
@@ -117,15 +121,25 @@ pub enum Kind {
     Gripper,
     /// A safety fence: only marked.
     Fence,
+    /// An injection moulding machine: as a CNC machine, an object with its
+    /// door (guard) and its mould among its children (`…door…`,
+    /// `…mould…`). It makes its parts itself: at the end of each cycle a
+    /// moulded part stands in the mould, to be taken out.
+    Molder,
+    /// A belt conveyor: the belt, a box whose top it carries parts along,
+    /// along its own X, to its end.
+    Conveyor,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Cnc,
         Kind::Infeed,
         Kind::Outfeed,
         Kind::Gripper,
         Kind::Fence,
+        Kind::Molder,
+        Kind::Conveyor,
     ];
 
     pub fn tag(self) -> &'static str {
@@ -135,6 +149,8 @@ impl Kind {
             Kind::Outfeed => "outfeed",
             Kind::Gripper => "gripper",
             Kind::Fence => "fence",
+            Kind::Molder => "molder",
+            Kind::Conveyor => "conveyor",
         }
     }
 
@@ -144,6 +160,11 @@ impl Kind {
 
     fn pallet(self) -> bool {
         matches!(self, Kind::Infeed | Kind::Outfeed)
+    }
+
+    /// A machine a robot tends: a door, a cycle, a part inside.
+    pub fn machine(self) -> bool {
+        matches!(self, Kind::Cnc | Kind::Molder)
     }
 }
 
@@ -162,6 +183,12 @@ pub struct Props {
     pub pitch: f64,
     /// Gripper: opening, and again closing, seconds.
     pub actuate: f64,
+    /// Conveyor: its belt's speed, metres a second; every how many seconds
+    /// a raw part is put on at its start (0: none); and whether a part
+    /// that reaches its end is taken away (1) or waits there (0).
+    pub speed: f64,
+    pub feed: f64,
+    pub drain: f64,
 }
 
 impl Default for Props {
@@ -175,11 +202,28 @@ impl Default for Props {
             cols: 5,
             pitch: 0.1,
             actuate: 0.5,
+            speed: 0.2,
+            feed: 0.0,
+            drain: 0.0,
         }
     }
 }
 
 impl Props {
+    /// The typical values for a component of kind `kind`.
+    pub fn for_kind(kind: Kind) -> Self {
+        match kind {
+            // A moulding cycle of half a minute; a guard quicker than a
+            // machine tool's door.
+            Kind::Molder => Self {
+                cycle: 30.0,
+                door: 1.5,
+                ..Self::default()
+            },
+            _ => Self::default(),
+        }
+    }
+
     /// Takes the settings `v` names, held to sensible ranges.
     fn update(&mut self, v: &Value) {
         let time = |key: &str, now: f64| v[key].as_f64().map_or(now, |x| x.clamp(0.0, 3600.0));
@@ -193,6 +237,13 @@ impl Props {
         self.pitch = v["pitch"]
             .as_f64()
             .map_or(self.pitch, |x| x.clamp(0.01, 2.0));
+        self.speed = v["speed"]
+            .as_f64()
+            .map_or(self.speed, |x| x.clamp(0.01, 2.0));
+        self.feed = time("feed", self.feed);
+        self.drain = v["drain"]
+            .as_f64()
+            .map_or(self.drain, |x| if x > 0.5 { 1.0 } else { 0.0 });
     }
 
     fn to_json(self) -> Value {
@@ -204,6 +255,9 @@ impl Props {
             "cols": self.cols,
             "pitch": self.pitch,
             "actuate": self.actuate,
+            "speed": self.speed,
+            "feed": self.feed,
+            "drain": self.drain,
         })
     }
 }
@@ -257,6 +311,50 @@ impl Machine {
     }
 }
 
+/// A conveyor's belt where it stands: the middle of its top, its axes
+/// (along it, across it) and its size.
+struct Belt {
+    object: u64,
+    props: Props,
+    centre: DVec3,
+    along: DVec3,
+    across: DVec3,
+    length: f64,
+    width: f64,
+}
+
+impl Belt {
+    /// How far along the belt from its middle part `p` stands, if it
+    /// stands on it.
+    fn along_of(&self, p: &Part) -> Option<f64> {
+        let foot = p.world.translation - DVec3::Z * (p.size().1 / 2.0);
+        let d = foot - self.centre;
+        let (x, y) = (d.dot(self.along), d.dot(self.across));
+        (x.abs() <= self.length / 2.0 + 1e-6 && y.abs() <= self.width / 2.0 && d.z.abs() < 0.01)
+            .then_some(x)
+    }
+
+    /// The part waiting at its end, by index.
+    fn at_end(&self, parts: &[Part]) -> Option<usize> {
+        let end = self.length / 2.0 - RAW.0;
+        parts
+            .iter()
+            .position(|p| p.held.is_none() && self.along_of(p).is_some_and(|x| x >= end - 0.003))
+    }
+
+    /// Its top's height under `at`, a part's centre `half` its height up,
+    /// if `at` is over the belt and not far above it.
+    fn top_under(&self, at: DVec3, half: f64) -> Option<f64> {
+        let d = at - self.centre;
+        let (x, y) = (d.dot(self.along), d.dot(self.across));
+        let above = d.z - half;
+        (x.abs() <= self.length / 2.0
+            && y.abs() <= self.width / 2.0
+            && (-0.01..0.1).contains(&above))
+        .then_some(self.centre.z)
+    }
+}
+
 /// The cell: roles, and parts.
 #[derive(Debug, Default)]
 pub struct Cell {
@@ -277,6 +375,12 @@ pub struct Cell {
     /// time it last said it changed while running.
     last_tick: Option<f64>,
     last_report: Option<Instant>,
+    /// Each feeding conveyor's seconds since it last put a part on.
+    fed: BTreeMap<u64, f64>,
+    /// Whether a conveyor carried a part on its last step.
+    conveying: bool,
+    /// Parts taken away at a conveyor's end since last counted.
+    drained: usize,
 }
 
 /// How often a running cell tells the viewers how it is getting on.
@@ -334,12 +438,24 @@ pub fn guess(doc: &Document) -> Vec<(u64, Kind)> {
         let machine = |at: ObjectId| {
             part_named(doc, at, "door").is_some() && part_named(doc, at, "chuck").is_some()
         };
+        let molder = |at: ObjectId| {
+            part_named(doc, at, "door").is_some() && part_named(doc, at, "mould").is_some()
+        };
         let kind = if machine(id)
             && !doc
                 .objects()
                 .any(|(c, o)| o.parent == Some(id) && machine(c))
         {
             Some(Kind::Cnc)
+        } else if molder(id)
+            && !doc
+                .objects()
+                .any(|(c, o)| o.parent == Some(id) && molder(c))
+        {
+            Some(Kind::Molder)
+        } else if !link && object.mesh().is_some() && (name == "belt" || name.contains("conveyor"))
+        {
+            Some(Kind::Conveyor)
         } else if !link && object.mesh().is_some() && pallet(&name, &["infeed", "투입"]) {
             Some(Kind::Infeed)
         } else if !link && object.mesh().is_some() && pallet(&name, &["outfeed", "배출"]) {
@@ -419,7 +535,7 @@ impl Cell {
                 (Some(object), Some(kind))
                     if !self.components.iter().any(|c| c.object == object) =>
                 {
-                    let mut props = Props::default();
+                    let mut props = Props::for_kind(kind);
                     props.update(&saved["props"]);
                     self.components.push(Component {
                         object,
@@ -484,7 +600,7 @@ impl Cell {
             object,
             name,
             kind,
-            props: Props::default(),
+            props: Props::for_kind(kind),
         });
         self.roles_changed = true;
         self.changed = true;
@@ -532,7 +648,8 @@ impl Cell {
             self.removed.extend(gone.iter().map(|p| p.uid));
             self.changed |= !gone.is_empty();
         }
-        taken
+        // And those carried away at a conveyor's end.
+        taken + self.take_drained()
     }
 
     /// The same, as an operator changes whole pallets, for the pallets in
@@ -699,12 +816,15 @@ impl Cell {
             .unwrap_or_default()
     }
 
-    /// Where a part's centre stands in a CNC machine's chuck.
+    /// Where a part's centre stands in a CNC machine's chuck, or on an
+    /// injection moulding machine's mould, made.
     pub fn seat(&self, doc: &Document, c: &Component) -> Option<DVec3> {
-        if c.kind != Kind::Cnc {
-            return None;
-        }
-        let chuck = part_named(doc, id_of(doc, c.object)?, "chuck")?;
+        let holder = match c.kind {
+            Kind::Cnc => "chuck",
+            Kind::Molder => "mould",
+            _ => return None,
+        };
+        let chuck = part_named(doc, id_of(doc, c.object)?, holder)?;
         let (lo, hi) = bounds(doc, chuck)?;
         Some(DVec3::new(
             (lo.x + hi.x) / 2.0,
@@ -773,7 +893,7 @@ impl Cell {
                 self.components.retain(|c| c.object != object);
                 if let Some(tag) = req["kind"].as_str() {
                     let kind = Kind::of(tag).ok_or("unknown role")?;
-                    let mut props = Props::default();
+                    let mut props = Props::for_kind(kind);
                     props.update(&req["props"]);
                     self.components.push(Component {
                         object,
@@ -864,7 +984,7 @@ impl Cell {
                         object,
                         name,
                         kind,
-                        props: Props::default(),
+                        props: Props::for_kind(kind),
                     });
                     added += 1;
                 }
@@ -933,6 +1053,7 @@ impl Cell {
     pub fn release(&mut self, doc: &Document, gripper: u64) -> Result<(), String> {
         let at = Self::grip_point(doc, gripper).ok_or("no such gripper")?;
         let places = self.places(doc);
+        let belts = self.belts(doc);
         let Some(part) = self
             .parts
             .iter_mut()
@@ -950,6 +1071,14 @@ impl Cell {
         {
             let half = part.size().1 / 2.0;
             part.world = DAffine3::from_translation(*place + DVec3::Z * (half - RAW.1 / 2.0));
+        } else if let Some(top) = belts
+            .iter()
+            .filter_map(|b| b.top_under(here, part.size().1 / 2.0))
+            .next()
+        {
+            // Let go over a belt: it stands on it, upright, to be carried.
+            let half = part.size().1 / 2.0;
+            part.world = DAffine3::from_translation(DVec3::new(here.x, here.y, top + half));
         }
         self.changed = true;
         Ok(())
@@ -983,12 +1112,35 @@ impl Cell {
         let c = self
             .components
             .iter()
-            .find(|c| c.object == machine && c.kind == Kind::Cnc)
+            .find(|c| c.object == machine && c.kind.machine())
             .cloned()
-            .ok_or("CNC 장비가 아닙니다")?;
+            .ok_or("명령을 받는 장비(CNC, 사출기)가 아닙니다")?;
         let in_chuck = self.in_chuck(doc, &c);
         let m = self.machines.entry(machine).or_default();
         let busy = m.machining.is_some();
+        if c.kind == Kind::Molder {
+            // A moulding machine: a guard and its cycle; it makes the part.
+            match command {
+                Command::Clamp | Command::Unclamp => return Err("사출기에는 척이 없습니다".into()),
+                Command::Open if busy => return Err("성형 중에는 가드를 열 수 없습니다".into()),
+                Command::Open => m.opening = true,
+                Command::Close => m.opening = false,
+                Command::Start => {
+                    if busy {
+                        return Err("이미 성형 중입니다".into());
+                    }
+                    if !m.shut() {
+                        return Err("가드를 닫아야 성형을 시작할 수 있습니다".into());
+                    }
+                    if in_chuck.is_some() {
+                        return Err("금형에 성형품이 남아 있습니다. 먼저 꺼내세요".into());
+                    }
+                    m.machining = Some(0.0);
+                }
+            }
+            self.changed = true;
+            return Ok(());
+        }
         match command {
             Command::Open if busy => return Err("가공 중에는 문을 열 수 없습니다".into()),
             Command::Open => m.opening = true,
@@ -1021,13 +1173,20 @@ impl Cell {
     /// Whether CNC machine `machine` says `signal` now, as its output to a
     /// robot would.
     pub fn signal(&self, doc: &Document, machine: u64, signal: Signal) -> bool {
-        let Some(c) = self
-            .components
-            .iter()
-            .find(|c| c.object == machine && c.kind == Kind::Cnc)
-        else {
+        let Some(c) = self.components.iter().find(|c| c.object == machine) else {
             return false;
         };
+        if c.kind == Kind::Conveyor {
+            return signal == Signal::PartAtEnd
+                && self
+                    .belts(doc)
+                    .iter()
+                    .find(|b| b.object == machine)
+                    .is_some_and(|b| b.at_end(&self.parts).is_some());
+        }
+        if !c.kind.machine() {
+            return false;
+        }
         let m = self.machines.get(&machine).cloned().unwrap_or_default();
         match signal {
             Signal::DoorOpen => m.door >= 1.0 && m.opening,
@@ -1035,6 +1194,7 @@ impl Cell {
             Signal::Clamped => m.clamped,
             Signal::Idle => m.machining.is_none(),
             Signal::Done => m.machining.is_none() && self.in_chuck(doc, c) == Some(true),
+            Signal::PartAtEnd => false,
         }
     }
 
@@ -1060,9 +1220,14 @@ impl Cell {
 
     /// Whether anything is moving or running: the loop then keeps time.
     pub fn is_running(&self) -> bool {
-        self.machines.values().any(|m| {
-            m.machining.is_some() || (m.opening && m.door < 1.0) || (!m.opening && m.door > 0.0)
-        })
+        self.conveying
+            || self
+                .components
+                .iter()
+                .any(|c| c.kind == Kind::Conveyor && c.props.feed > 0.0)
+            || self.machines.values().any(|m| {
+                m.machining.is_some() || (m.opening && m.door < 1.0) || (!m.opening && m.door > 0.0)
+            })
     }
 
     /// Moves the machines on by `dt` seconds. Returns whether anything moved
@@ -1072,6 +1237,7 @@ impl Cell {
         let mut moving = false;
         let mut finished = false;
         let mut done: Vec<DVec3> = Vec::new();
+        let mut moulded: Vec<DVec3> = Vec::new();
         for c in &self.components {
             let Some(m) = self.machines.get_mut(&c.object) else {
                 continue;
@@ -1098,7 +1264,11 @@ impl Cell {
                     m.machining = None;
                     finished = true;
                     if let Some(seat) = self.seat(doc, c) {
-                        done.push(seat);
+                        if c.kind == Kind::Molder {
+                            moulded.push(seat);
+                        } else {
+                            done.push(seat);
+                        }
                     }
                 } else {
                     m.machining = Some(t);
@@ -1116,7 +1286,106 @@ impl Cell {
                 }
             }
         }
-        (moving, finished)
+        // A moulding cycle ended: the part it made, in the mould.
+        for seat in moulded {
+            self.add_part(seat + DVec3::Z * (FINISHED.1 - RAW.1) / 2.0, true);
+        }
+        let (carried, arrived) = self.convey(doc, dt);
+        self.conveying = carried;
+        (moving || carried, finished || arrived)
+    }
+
+    /// Every conveyor's belt, where it is in `doc`.
+    fn belts(&self, doc: &Document) -> Vec<Belt> {
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Conveyor)
+            .filter_map(|c| {
+                let world = doc.world_transform(id_of(doc, c.object)?);
+                let along = world.matrix3.x_axis;
+                let across = world.matrix3.y_axis;
+                Some(Belt {
+                    object: c.object,
+                    props: c.props,
+                    centre: world.transform_point3(DVec3::new(0.0, 0.0, 0.5)),
+                    along: along.normalize_or_zero(),
+                    across: across.normalize_or_zero(),
+                    length: along.length(),
+                    width: across.length(),
+                })
+            })
+            .collect()
+    }
+
+    /// Carries the parts on each belt on by `dt` seconds, each up to the
+    /// part ahead of it or the belt's end; takes away those at the end of a
+    /// belt that drains; and puts a raw part on at the start of one that
+    /// feeds, when its time comes and there is room. Returns whether a part
+    /// moved, and whether one came to an end or was put on.
+    fn convey(&mut self, doc: &Document, dt: f64) -> (bool, bool) {
+        let (mut moved, mut arrived) = (false, false);
+        for belt in self.belts(doc) {
+            let gap = 2.0 * RAW.0 + 0.005;
+            let end = belt.length / 2.0 - RAW.0;
+            // Front first: each stops behind the one ahead.
+            let mut on: Vec<(usize, f64)> = self
+                .parts
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.held.is_none())
+                .filter_map(|(i, p)| belt.along_of(p).map(|x| (i, x)))
+                .collect();
+            on.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let mut limit = end;
+            let mut gone = Vec::new();
+            for (i, x) in on {
+                let to = (x + belt.props.speed * dt).min(limit).max(x);
+                if to > x + 1e-9 {
+                    self.parts[i].world.translation += belt.along * (to - x);
+                    moved = true;
+                    if to >= end - 1e-9 {
+                        arrived = true;
+                    }
+                }
+                if belt.props.drain > 0.5 && to >= end - 1e-9 {
+                    gone.push(i);
+                    continue;
+                }
+                limit = to - gap;
+            }
+            if !gone.is_empty() {
+                gone.sort_unstable_by(|a, b| b.cmp(a));
+                for i in gone {
+                    let p = self.parts.remove(i);
+                    self.removed.push(p.uid);
+                    self.drained += 1;
+                }
+                self.changed = true;
+            }
+            if belt.props.feed > 0.0 {
+                let since = self.fed.entry(belt.object).or_insert(belt.props.feed);
+                *since += dt;
+                let start = -belt.length / 2.0 + RAW.0;
+                let room = !self
+                    .parts
+                    .iter()
+                    .filter(|p| p.held.is_none())
+                    .filter_map(|p| belt.along_of(p))
+                    .any(|x| x < start + gap);
+                if *since >= belt.props.feed && room {
+                    *since = 0.0;
+                    let at = belt.centre + belt.along * start + DVec3::Z * RAW.1 / 2.0;
+                    self.add_part(at, false);
+                    arrived = true;
+                }
+            }
+        }
+        (moved, arrived)
+    }
+
+    /// Parts taken away at a belt's end since this was last asked.
+    pub fn take_drained(&mut self) -> usize {
+        std::mem::take(&mut self.drained)
     }
 
     /// What each CNC machine is doing, for the timeline: its identity, its
@@ -1125,7 +1394,7 @@ impl Cell {
     pub fn activities(&self, doc: &Document) -> Vec<(u64, String, &'static str)> {
         self.components
             .iter()
-            .filter(|c| c.kind == Kind::Cnc)
+            .filter(|c| c.kind.machine())
             .map(|c| {
                 let m = self.machines.get(&c.object).cloned().unwrap_or_default();
                 let target = if m.opening { 1.0 } else { 0.0 };
@@ -1174,7 +1443,7 @@ impl Cell {
     fn doors(&self, doc: &Document) -> Vec<(u64, f64, ObjectId)> {
         self.components
             .iter()
-            .filter(|c| c.kind == Kind::Cnc)
+            .filter(|c| c.kind.machine())
             .filter_map(|c| {
                 let machine = id_of(doc, c.object)?;
                 let door = part_named(doc, machine, "door")?;
@@ -1313,7 +1582,7 @@ impl Cell {
                     "slots": self.slots(doc, c).into_iter().map(point).collect::<Vec<_>>(),
                     "seat": self.seat(doc, c).map(point),
                     "holding": self.parts.iter().any(|p| p.held.is_some_and(|h| h.0 == c.object)),
-                    "machine": (c.kind == Kind::Cnc).then(|| {
+                    "machine": c.kind.machine().then(|| {
                         let m = self.machines.get(&c.object).cloned().unwrap_or_default();
                         let part = self.seat(doc, c).and_then(|seat| {
                             self.parts
@@ -1749,5 +2018,88 @@ mod tests {
         ask(&mut cell, &doc, json!({"op": "clear_parts"}));
         let changes = cell.apply(&mut doc.clone());
         assert_eq!(changes.removed.len(), 20);
+    }
+
+    /// One piece of library equipment alone, its roles given.
+    fn equipment(template: &str, props: Value) -> (Document, Cell, u64) {
+        let mut library = crate::library::Library::default();
+        library.handle(
+            &json!({"op": "place", "template": template, "at": [0.0, 0.0, 0.0]}).to_string(),
+        );
+        let mut doc = Document::new();
+        library.apply(&mut doc);
+        let mut cell = Cell::default();
+        let (uid, name, kind) = library.roles().remove(0);
+        cell.ensure(uid, name, kind);
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": uid.to_string(), "kind": kind.tag(), "props": props}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        (doc, cell, uid)
+    }
+
+    /// Runs the cell for `seconds`, a tenth of a second at a time.
+    fn run_for(cell: &mut Cell, doc: &Document, from: f64, seconds: f64) -> f64 {
+        let start = Instant::now();
+        let mut t = from;
+        while t < from + seconds {
+            t += 0.1;
+            cell.tick(doc, t, start + Duration::from_secs_f64(t));
+        }
+        t
+    }
+
+    #[test]
+    fn a_moulding_machine_makes_a_part_each_cycle_and_waits_for_it_to_go() {
+        let (doc, mut cell, m) = equipment("injection_molder", json!({}));
+        assert_eq!(cell.components()[0].props.cycle, 30.0, "a moulding cycle");
+        assert!(cell.command(&doc, m, Command::Clamp).is_err(), "no chuck");
+        cell.command(&doc, m, Command::Start).unwrap();
+        let t = run_for(&mut cell, &doc, 0.0, 31.0);
+        assert!(cell.signal(&doc, m, Signal::Done));
+        let made: Vec<&Part> = cell.parts().iter().filter(|p| p.finished).collect();
+        assert_eq!(made.len(), 1);
+        // The part on the mould, for the robot to take out.
+        let seat = cell.seat(&doc, &cell.components()[0].clone()).unwrap();
+        assert!(made[0].world.translation.distance(seat) < SNAP);
+        // Not again while it is there; again once it has gone.
+        let why = cell.command(&doc, m, Command::Start).unwrap_err();
+        assert!(why.contains("성형품"), "{why}");
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "empty", "object": m.to_string()}),
+        );
+        cell.command(&doc, m, Command::Start).unwrap();
+        run_for(&mut cell, &doc, t, 31.0);
+        assert_eq!(cell.parts().len(), 1);
+    }
+
+    #[test]
+    fn a_conveyor_carries_parts_to_its_end_and_queues_them() {
+        // 2 m at 0.5 m/s, a part every 2 s.
+        let (doc, mut cell, belt) = equipment("conveyor", json!({"speed": 0.5, "feed": 2.0}));
+        assert!(!cell.signal(&doc, belt, Signal::PartAtEnd));
+        let t = run_for(&mut cell, &doc, 0.0, 12.0);
+        assert!(cell.signal(&doc, belt, Signal::PartAtEnd));
+        // Queued nose to tail from the end, none overlapping.
+        let mut xs: Vec<f64> = cell.parts().iter().map(|p| p.world.translation.x).collect();
+        xs.sort_by(f64::total_cmp);
+        assert!(xs.len() >= 5, "{xs:?}");
+        assert!((xs[xs.len() - 1] - (1.0 - RAW.0)).abs() < 1e-6, "{xs:?}");
+        for pair in xs.windows(2) {
+            assert!(pair[1] - pair[0] >= 2.0 * RAW.0, "{xs:?}");
+        }
+        // A part taken off the end makes room: the rest move up.
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": belt.to_string(), "kind": "conveyor",
+                                    "props": {"speed": 0.5, "feed": 2.0, "drain": 1}}),
+        );
+        run_for(&mut cell, &doc, t, 6.0);
+        assert!(cell.take_drained() >= 3);
     }
 }

@@ -197,7 +197,7 @@ export class LibraryPanel {
     // A machine's front (its −Y) turned to face the origin, where the robot
     // usually stands: (sin ψ, −cos ψ) along (−x, −y).
     const t = this.library.templates.find((t) => t.key === key);
-    const yaw = t?.group === '공작기계' ? Math.atan2(-hit.x, hit.y) : 0;
+    const yaw = t?.group === '공작기계' || t?.group === '성형기' ? Math.atan2(-hit.x, hit.y) : 0;
     this.send({ op: 'place', template: key, at: [hit.x, hit.y, hit.z], yaw }, () =>
       this.ctx.toast(`${t?.name ?? key}을(를) 놓았습니다`),
     );

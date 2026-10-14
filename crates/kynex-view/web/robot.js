@@ -31,6 +31,26 @@ const SIGNALS = [
   ['idle', '가공 대기'],
   ['done', '가공 완료'],
 ];
+
+// What each kind of machine takes and says, as the program's rows offer it.
+const COMMANDS_OF = {
+  cnc: COMMANDS,
+  molder: [
+    ['open', '가드 열기'],
+    ['close', '가드 닫기'],
+    ['start', '성형 시작'],
+  ],
+};
+const SIGNALS_OF = {
+  cnc: SIGNALS,
+  molder: [
+    ['door_open', '가드 열림'],
+    ['door_closed', '가드 닫힘'],
+    ['idle', '성형 대기'],
+    ['done', '성형 완료'],
+  ],
+  conveyor: [['part_at_end', '부품 도착']],
+};
 const SPEEDS = [1, 2, 5, 10, 20];
 
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
@@ -502,7 +522,10 @@ export class RobotPanel {
         .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
         .join('')}</select>`;
     const grippers = (r ? this.grippersOf(r) : []).map((g) => [g.object, this.ctx.records.get(g.object)?.name ?? g.name]);
-    const machines = this.cell.components.filter((c) => c.kind === 'cnc').map((c) => [c.object, c.name]);
+    // Machines take commands; a conveyor's sensor is waited on too.
+    const machines = this.machines();
+    const sensed = this.cell.components.filter((c) => c.kind in SIGNALS_OF).map((c) => [c.object, c.name]);
+    const kind = this.cell.components.find((c) => c.object === step.machine)?.kind ?? 'cnc';
     // One that has gone from the cell still shows by its name.
     const keep = (list, uid, name) => (list.some(([v]) => v === uid) ? list : [[uid, `${name} (없음)`], ...list]);
     let icon = '';
@@ -515,11 +538,11 @@ export class RobotPanel {
         break;
       case 'command':
         icon = '명령';
-        body = pick('machine', keep(machines, step.machine, step.machine_name), step.machine) + pick('command', COMMANDS, step.command);
+        body = pick('machine', keep(machines, step.machine, step.machine_name), step.machine) + pick('command', COMMANDS_OF[kind] ?? COMMANDS, step.command);
         break;
       case 'wait':
         icon = '대기';
-        body = pick('machine', keep(machines, step.machine, step.machine_name), step.machine) + pick('signal', SIGNALS, step.signal);
+        body = pick('machine', keep(sensed, step.machine, step.machine_name), step.machine) + pick('signal', SIGNALS_OF[kind] ?? SIGNALS, step.signal);
         break;
       case 'delay':
         icon = '대기';
@@ -545,6 +568,11 @@ export class RobotPanel {
     for (const field of row.querySelectorAll('[data-field]')) {
       step[field.dataset.field] = field.dataset.field === 'seconds' ? Number(field.value) : field.value;
     }
+    // Another machine picked: what it takes and says, if the old does not fit.
+    const kind = this.cell.components.find((c) => c.object === step.machine)?.kind;
+    const fit = (value, list) => (list && !list.some(([v]) => v === value) ? list[0][0] : value);
+    if (step.command) step.command = fit(step.command, COMMANDS_OF[kind]);
+    if (step.signal) step.signal = fit(step.signal, SIGNALS_OF[kind]);
     return step;
   }
 
@@ -584,8 +612,9 @@ export class RobotPanel {
       ${copy}`;
   }
 
+  // The machines a robot tends: CNC and injection moulding machines.
   machines() {
-    return this.cell.components.filter((c) => c.kind === 'cnc').map((c) => [c.object, c.name]);
+    return this.cell.components.filter((c) => c.kind === 'cnc' || c.kind === 'molder').map((c) => [c.object, c.name]);
   }
 
   // The machine a point is at: the one whose chuck is nearest, within reach
@@ -626,7 +655,7 @@ export class RobotPanel {
   // first machine.
   newAction(r, type) {
     const gripper = this.grippersOf(r)[0]?.object;
-    const machine = this.cell.components.find((c) => c.kind === 'cnc')?.object;
+    const machine = this.machines()[0]?.[0];
     const pallet = this.pallets()[0]?.[0];
     switch (type) {
       case 'grip':
@@ -1046,7 +1075,7 @@ export class RobotPanel {
     if (opt === 'newstep' && e.target.value) {
       const step = this.newAction(r, e.target.value);
       e.target.value = '';
-      if (!step) return this.ctx.toast('셀에 그리퍼, CNC 장비나 팔레트가 없습니다. 먼저 셀 역할을 정하세요');
+      if (!step) return this.ctx.toast('셀에 그리퍼, 장비(CNC·사출기)나 팔레트가 없습니다. 먼저 셀 역할을 정하세요');
       this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });
       if (ui.cursor != null) ui.cursor += 1;
     }

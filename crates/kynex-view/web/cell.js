@@ -12,6 +12,8 @@ const KINDS = [
   ['outfeed', '배출 팔레트'],
   ['gripper', '그리퍼'],
   ['fence', '안전 펜스'],
+  ['molder', '사출 성형기'],
+  ['conveyor', '컨베이어'],
 ];
 
 // Each kind's settings, as the inspector shows them: key, label, unit, and
@@ -28,6 +30,15 @@ const FIELDS = {
     ['pitch', '간격', 'mm', 1000],
   ],
   gripper: [['actuate', '개폐 시간', 's', 1]],
+  molder: [
+    ['cycle', '성형 시간', 's', 1],
+    ['door', '가드 개폐', 's', 1],
+  ],
+  conveyor: [
+    ['speed', '속도', 'mm/s', 1000],
+    ['feed', '소재 공급 간격 (0: 없음)', 's', 1],
+    ['drain', '끝에서 치움 (1: 예)', '', 1],
+  ],
 };
 FIELDS.outfeed = FIELDS.infeed;
 
@@ -104,7 +115,7 @@ export class CellPanel {
     }
     const m = c?.machine;
     const state = document.getElementById('cell-state');
-    state.innerHTML = m ? this.machineHtml(m) : '';
+    state.innerHTML = m ? this.machineHtml(m, c.kind) : '';
     let actions = '';
     if (c && (c.kind === 'infeed' || c.kind === 'outfeed')) {
       actions = `<button class="text-btn" data-cell="fill">${c.kind === 'infeed' ? '소재 채우기' : '완성품 채우기'}</button><button class="text-btn quiet" data-cell="empty">비우기</button><span class="muted">${c.slots.length}칸</span>`;
@@ -119,6 +130,16 @@ export class CellPanel {
           `<button class="text-btn" data-machine="start"${busy ? ' disabled' : ''}>가공 시작</button>` +
           `<button class="text-btn quiet" data-cell="empty"${busy || m?.clamped ? ' disabled' : ''}>척 비우기</button>`;
       }
+    } else if (c && c.kind === 'molder') {
+      if (!c.seat) {
+        actions = `<span class="warn-text">${escapeHtml('하위 물체에 mould가 없습니다')}</span>`;
+      } else {
+        const busy = m?.progress != null;
+        actions =
+          `<button class="text-btn" data-machine="${m?.opening ? 'close' : 'open'}"${busy ? ' disabled' : ''}>${m?.opening ? '가드 닫기' : '가드 열기'}</button>` +
+          `<button class="text-btn" data-machine="start"${busy ? ' disabled' : ''}>성형 시작</button>` +
+          `<button class="text-btn quiet" data-cell="empty"${busy ? ' disabled' : ''}>금형 비우기</button>`;
+      }
     } else if (c && c.kind === 'gripper' && !c.robot) {
       actions = '<span class="warn-text">로봇의 링크가 아닙니다</span>';
     }
@@ -129,12 +150,15 @@ export class CellPanel {
   }
 
   // A CNC machine's state, in words and a bar.
-  machineHtml(m) {
+  machineHtml(m, kind) {
     const door = m.door >= 1 ? '열림' : m.door <= 0 ? '닫힘' : m.opening ? '여는 중' : '닫는 중';
-    const part = m.part === 'raw' ? '소재' : m.part === 'finished' ? '완성품' : '없음';
-    let html = `<div class="machine-state"><span>문 <b>${door}</b></span><span>척 <b>${m.clamped ? '물림' : '풀림'}</b></span><span>척 안 <b>${part}</b></span></div>`;
+    const molder = kind === 'molder';
+    const part = m.part === 'raw' ? '소재' : m.part === 'finished' ? (molder ? '성형품' : '완성품') : '없음';
+    let html = molder
+      ? `<div class="machine-state"><span>가드 <b>${door}</b></span><span>금형 <b>${part}</b></span></div>`
+      : `<div class="machine-state"><span>문 <b>${door}</b></span><span>척 <b>${m.clamped ? '물림' : '풀림'}</b></span><span>척 안 <b>${part}</b></span></div>`;
     if (m.progress != null) {
-      html += `<div class="machine-bar"><span style="width:${(m.progress * 100).toFixed(1)}%"></span><em>가공 중 ${Math.round(m.progress * 100)}% · 남은 ${Math.ceil(m.left)} s</em></div>`;
+      html += `<div class="machine-bar"><span style="width:${(m.progress * 100).toFixed(1)}%"></span><em>${molder ? '성형' : '가공'} 중 ${Math.round(m.progress * 100)}% · 남은 ${Math.ceil(m.left)} s</em></div>`;
     }
     return html;
   }

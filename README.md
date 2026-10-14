@@ -302,9 +302,8 @@ thumbnails: each drawn from the piece at its usual size
   with a top plate to carry a load; length, width, height).
 - 안전: 안전 펜스.
 
-The conveyor, the injection moulding machine and the AMR are laid out
-only, for now: they come with no role in the cell, so nothing moves on
-them yet.
+The conveyor and the injection moulding machine come with their roles
+and run (see below). The AMR is laid out only, for now.
 
 Drag an entry onto the scene, or click it and then click the scene. It
 lands on the floor, or on top of whatever is under the pointer (a robot
@@ -333,11 +332,16 @@ not change the session's scene.
   - 투입 팔레트 / 배출 팔레트: pallets.
   - 그리퍼: a grip point on a robot link.
   - 안전 펜스: a safety fence.
+  - 사출 성형기: the object whose children include its guard (`…door…`)
+    and its mould (`…mould…`).
+  - 컨베이어: a belt, a box whose top carries parts along its own X.
 
   Settings start at industry-typical values (docs/roadmap-vs-visual-components.md
   §4): 90 s machining, 3 s door, 1 s chuck, 5 × 4 places 100 mm apart, and
   0.5 s grip. **셀 자동 구성** sets roles from names. A CNC machine is the
-  lowest object with a `…door…` and a `…chuck…` below it. Pallets are
+  lowest object with a `…door…` and a `…chuck…` below it, an injection
+  moulding machine one with a `…door…` and a `…mould…`, and a conveyor a
+  mesh named `belt` or `…conveyor…`. Pallets are
   named `infeed` and `outfeed` (`투입`, `배출`). Grip points are robot links
   named `grip…` with no link below them.
 - **Parts**: **소재 채우기** puts a raw part (Ø60 × 80 mm) on every free place
@@ -357,6 +361,23 @@ not change the session's scene.
 
   The door, the chuck, the part in the chuck and the cycle's progress
   are shown as they change.
+- **Injection moulding machines run** much as CNC machines do, but make
+  their parts themselves. **성형 시작** runs a cycle (30 s; 1.5 s guard)
+  with the guard shut and the mould empty. At its end a moulded part
+  stands on the mould, for the robot to take out: open the guard, wait for
+  it, grip, close, start again. The program's rows offer a moulding
+  machine's own commands and signals (가드 열기/닫기, 성형 시작, 성형 완료).
+- **Conveyors carry**: a part on a belt goes along it at the belt's speed
+  (0.2 m/s), up to its end or the part ahead. A part let go over a belt
+  stands on it. Its settings:
+  - 소재 공급 간격: every so many seconds a raw part is put on at its
+    start, if there is room (0: none).
+  - 끝에서 치움: a part reaching the end is taken away and counted, as at
+    an outfeed (1: yes).
+
+  A program waits for a part with the conveyor's signal 부품 도착, its
+  sensor at the end. A scenario comparison counts the parts taken away at
+  a conveyor's end as delivered.
 - The demo cell (`cargo run -p kynex-link --example cnc_cell`) has a UR10e
   with a double gripper on a pedestal, two CNC machines, an infeed and an
   outfeed pallet, and a fence.

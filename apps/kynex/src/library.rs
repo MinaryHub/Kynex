@@ -236,6 +236,16 @@ impl Library {
         library
     }
 
+    /// Puts the equipment `saved` in place of this: a scenario taken back.
+    /// What was shown goes from the viewers.
+    pub fn restore(&mut self, saved: &[Value]) {
+        let mut gone = std::mem::take(&mut self.removed);
+        gone.extend(self.shown.values().flatten().copied());
+        *self = Self::from_saved(saved);
+        self.removed = gone;
+        self.items_changed = true;
+    }
+
     pub fn to_saved(&self) -> Vec<Value> {
         self.items
             .iter()
@@ -395,6 +405,10 @@ impl Library {
             );
             self.shown.insert(item.id, uids);
         }
+        // Gone and back again, as equipment taken back from a scenario is:
+        // only changed.
+        let kept: Vec<Uid> = changes.changed.iter().map(|(_, u)| *u).collect();
+        changes.removed.retain(|u| !kept.contains(u));
         changes
     }
 

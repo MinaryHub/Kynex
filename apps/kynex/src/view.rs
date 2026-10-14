@@ -17,6 +17,8 @@ use crate::collide::{self, Collider};
 use crate::library::{self, Library};
 use crate::pose::{Posing, Project};
 use crate::run::{Clock, Runner};
+use crate::scenario;
+use crate::timeline::{Now, Timeline};
 
 const PORT: u16 = 8090;
 
@@ -226,7 +228,21 @@ struct Stage {
     /// The program running, and the clock it runs by.
     runner: Option<Runner>,
     clock: Clock,
+    /// What the robot and the machines did since the run started, and when
+    /// the viewers were last told.
+    timeline: Option<Timeline>,
+    timeline_told: Option<Instant>,
+    /// Saved variants of the cell, the last comparison of them, and whether
+    /// they changed since they were last saved.
+    scenarios: Vec<Value>,
+    compared: Vec<Value>,
+    scenarios_changed: bool,
+    /// A comparison running away from the loop: its results, when done.
+    comparing: Option<Receiver<Vec<Value>>>,
 }
+
+/// How often the timeline goes to the viewers while it grows.
+const TIMELINE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl Stage {
     /// From the project file `project`, or the default one.
@@ -257,6 +273,12 @@ impl Stage {
             placed: Changes::default(),
             runner: None,
             clock: Clock::default(),
+            timeline: None,
+            timeline_told: None,
+            scenarios: saved.scenarios,
+            compared: Vec::new(),
+            scenarios_changed: false,
+            comparing: None,
         })
     }
 
@@ -325,7 +347,10 @@ impl Stage {
                 self.runner = None;
                 touched = true;
             }
-            let reply = if matches!(op.as_str(), "play" | "stop" | "speed") {
+            let reply = if op == "scenario" {
+                touched = true;
+                self.scenario_op(doc, &request.body)
+            } else if matches!(op.as_str(), "play" | "stop" | "speed") {
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
                 answer
@@ -365,12 +390,53 @@ impl Stage {
             touched |= runner.tick(time, now, &mut self.posing, &mut self.cell, scene);
         }
         touched |= self.cell.tick(scene, time, now);
+        // A comparison done.
+        if let Some(results) = &self.comparing {
+            match results.try_recv() {
+                Ok(compared) => {
+                    self.compared = compared;
+                    self.comparing = None;
+                    touched = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.comparing = None;
+                    touched = true;
+                }
+            }
+        }
+        // While a run goes on, the timeline grows with it.
+        if let (Some(timeline), Some(runner)) = (self.timeline.as_mut(), self.runner.as_ref()) {
+            // The tick a run stops on is recorded too: an alarm shows.
+            if !timeline.ended() {
+                let mut lanes = vec![Now {
+                    key: runner.root.to_string(),
+                    name: crate::collide::label(scene, runner.root),
+                    group: "robot",
+                    activity: runner.activity(),
+                }];
+                lanes.extend(self.cell.activities(scene).into_iter().map(
+                    |(uid, name, activity)| Now {
+                        key: uid.to_string(),
+                        name,
+                        group: "machine",
+                        activity,
+                    },
+                ));
+                timeline.sample(time, lanes);
+                if runner.stopped() {
+                    timeline.end();
+                }
+            }
+        }
         touched
     }
 
     /// Whether anything runs by the clock: the loop then keeps time.
     fn running(&self) -> bool {
-        self.runner.as_ref().is_some_and(|r| !r.stopped()) || self.cell.is_running()
+        self.runner.as_ref().is_some_and(|r| !r.stopped())
+            || self.cell.is_running()
+            || self.comparing.is_some()
     }
 
     /// Runs a program, stops it, or sets the clock's speed.
@@ -400,6 +466,9 @@ impl Stage {
                     .ok_or("프로그램이 없습니다")?;
                 let scene = self.base.as_ref().unwrap_or(doc);
                 self.runner = Some(Runner::new(root, program, scene, self.clock.time)?);
+                // A new run, a new record.
+                self.timeline = Some(Timeline::new(self.clock.time));
+                self.timeline_told = None;
                 Ok(())
             })(),
         };
@@ -407,6 +476,106 @@ impl Stage {
             Ok(()) => serde_json::json!({ "ok": true }),
             Err(e) => serde_json::json!({ "ok": false, "error": e }),
         }
+        .to_string()
+    }
+
+    /// Saves the cell as it stands as a scenario, takes one back, removes
+    /// one, or runs them all and compares them.
+    fn scenario_op(&mut self, doc: &Document, body: &str) -> String {
+        let req: Value = serde_json::from_str(body).unwrap_or_default();
+        let index = req["index"]
+            .as_u64()
+            .map(|i| i as usize)
+            .filter(|i| *i < self.scenarios.len());
+        let answer: Result<(), String> = match req["action"].as_str().unwrap_or_default() {
+            "save" => {
+                let name = req["name"].as_str().map(str::trim).unwrap_or_default();
+                let name = if name.is_empty() {
+                    format!("시나리오 {}", self.scenarios.len() + 1)
+                } else {
+                    name.to_string()
+                };
+                let scene = self.base.as_ref().unwrap_or(doc);
+                let saved = scenario::snapshot(
+                    &name,
+                    self.posing.saved_programs(scene),
+                    self.cell.to_saved(),
+                    self.library.to_saved(),
+                );
+                // The same name again: saved over.
+                match self
+                    .scenarios
+                    .iter()
+                    .position(|s| s["name"] == name.as_str())
+                {
+                    Some(i) => self.scenarios[i] = saved,
+                    None => self.scenarios.push(saved),
+                }
+                self.scenarios_changed = true;
+                Ok(())
+            }
+            "load" => index.ok_or("no such scenario".to_string()).map(|i| {
+                let s = self.scenarios[i].clone();
+                let list = |key: &str| s[key].as_array().cloned().unwrap_or_default();
+                self.runner = None;
+                self.timeline = None;
+                self.library.restore(&list("library"));
+                self.cell.restore(list("cell"));
+                self.posing.restore(list("programs"));
+                self.replaced(doc);
+            }),
+            "remove" => index.ok_or("no such scenario".to_string()).map(|i| {
+                self.scenarios.remove(i);
+                self.compared.clear();
+                self.scenarios_changed = true;
+            }),
+            "run" if self.comparing.is_some() => Err("비교를 이미 실행하고 있습니다".into()),
+            "run" => {
+                let seconds = req["seconds"]
+                    .as_f64()
+                    .unwrap_or(3600.0)
+                    .clamp(60.0, 86400.0);
+                // Away from the loop: an hour of a few cells takes seconds.
+                let (send, results) = std::sync::mpsc::channel();
+                let (session, scenarios) = (doc.clone(), self.scenarios.clone());
+                std::thread::spawn(move || {
+                    let compared = scenarios
+                        .iter()
+                        .map(|s| scenario::simulate(&session, s, seconds))
+                        .collect();
+                    let _ = send.send(compared);
+                });
+                self.comparing = Some(results);
+                Ok(())
+            }
+            other => Err(format!("unknown action {other:?}")),
+        };
+        match answer {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+        }
+        .to_string()
+    }
+
+    /// The `scenarios` event: those saved, and the last comparison.
+    fn scenarios_json(&self) -> String {
+        let count = |s: &Value, key: &str, kind: &str| {
+            s[key].as_array().map_or(0, |l| {
+                l.iter()
+                    .filter(|v| kind.is_empty() || v["kind"] == kind)
+                    .count()
+            })
+        };
+        serde_json::json!({
+            "list": self.scenarios.iter().map(|s| serde_json::json!({
+                "name": s["name"],
+                "machines": count(s, "cell", "cnc"),
+                "programs": count(s, "programs", ""),
+                "equipment": count(s, "library", ""),
+            })).collect::<Vec<_>>(),
+            "compared": self.compared,
+            "comparing": self.comparing.is_some(),
+        })
         .to_string()
     }
 
@@ -419,8 +588,20 @@ impl Stage {
             .as_ref()
             .map_or(Value::Null, |r| r.to_json(self.clock.time));
         server.state("pose", &self.posing.to_json(running, self.clock.to_json()));
+        // At its pace while the run goes on; at once when it has ended, so
+        // the last of it is shown.
+        let ended = self.timeline.as_ref().is_some_and(|t| t.ended());
+        let due = ended
+            || self
+                .timeline_told
+                .is_none_or(|t| t.elapsed() >= TIMELINE_EVERY);
+        if let Some(timeline) = self.timeline.as_ref().filter(|_| due) {
+            server.state("timeline", &timeline.to_json().to_string());
+            self.timeline_told = Some(Instant::now());
+        }
         server.state("cell", &self.cell.to_json(scene));
         server.state("library", &self.library.to_json());
+        server.state("scenarios", &self.scenarios_json());
         let programs = self.posing.take_programs_changed();
         if programs {
             server.state(
@@ -432,10 +613,12 @@ impl Stage {
         }
         let roles = self.cell.take_roles_changed();
         let items = self.library.take_items_changed();
-        if programs || roles || items || replaced {
+        let scenarios = std::mem::take(&mut self.scenarios_changed);
+        if programs || roles || items || scenarios || replaced {
             let rest = Project {
                 cell: self.cell.to_saved(),
                 library: self.library.to_saved(),
+                scenarios: self.scenarios.clone(),
             };
             if let Err(e) = self.posing.save(scene, rest) {
                 println!("프로젝트를 저장하지 못했습니다: {e}");

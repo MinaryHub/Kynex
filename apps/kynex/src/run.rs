@@ -242,6 +242,23 @@ impl Runner {
         })
     }
 
+    /// What the robot is doing, for the timeline: `move`, `wait` (for a
+    /// machine), `grip` (a gripper opening or closing), `pause`, `alarm`,
+    /// or `idle` once the run has ended.
+    pub fn activity(&self) -> &'static str {
+        match &self.state {
+            State::Begin => "move",
+            State::Moving { .. } => "move",
+            State::Waiting => "wait",
+            State::Until(_) => match self.program.steps.get(self.step) {
+                Some(Step::Do(Action::Delay { .. })) => "pause",
+                _ => "grip",
+            },
+            State::Done => "idle",
+            State::Alarm(_) => "alarm",
+        }
+    }
+
     /// What the `pose` event says of the run.
     pub fn to_json(&self, time: f64) -> Value {
         let (state, detail) = match &self.state {

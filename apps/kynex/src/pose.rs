@@ -42,6 +42,8 @@ pub struct Posing {
 pub struct Project {
     pub cell: Vec<Value>,
     pub library: Vec<Value>,
+    /// Saved variants of the cell, to compare (see `crate::scenario`).
+    pub scenarios: Vec<Value>,
 }
 
 impl Posing {
@@ -60,6 +62,7 @@ impl Posing {
                     Project {
                         cell: list("cell"),
                         library: list("library"),
+                        scenarios: list("scenarios"),
                     },
                 )
             }
@@ -72,6 +75,42 @@ impl Posing {
             ..Self::default()
         };
         Ok((posing, project))
+    }
+
+    /// Programs as saved, kept in no file: waiting for their robots.
+    pub fn from_saved(saved: Vec<Value>) -> Self {
+        Self {
+            pending: saved,
+            ..Self::default()
+        }
+    }
+
+    /// Puts `saved` in place of every program, and lets every robot go:
+    /// a scenario taken back.
+    pub fn restore(&mut self, saved: Vec<Value>) {
+        self.programs.clear();
+        self.held.clear();
+        self.saved.clear();
+        self.pending = saved;
+        self.programs_changed = true;
+    }
+
+    /// Every robot's program.
+    pub fn programs(&self) -> impl Iterator<Item = (u64, &Program)> {
+        self.programs.iter().map(|(root, p)| (*root, p))
+    }
+
+    /// Every program as saved: those of robots in `doc`, and those kept for
+    /// robots that are not.
+    pub fn saved_programs(&mut self, doc: &Document) -> Vec<Value> {
+        for (root, program) in &self.programs {
+            if let Some(kin) = Kinematics::of(doc, *root) {
+                self.saved.insert(*root, program.to_saved(*root, doc, &kin));
+            }
+        }
+        self.saved
+            .retain(|root, _| self.programs.contains_key(root));
+        self.saved.values().chain(&self.pending).cloned().collect()
     }
 
     /// How many programs the file held that are waiting for their robot.
@@ -103,22 +142,17 @@ impl Posing {
     /// file, if there is one: whole, to a file beside it first, so a crash
     /// midway leaves the old one.
     pub fn save(&mut self, doc: &Document, rest: Project) -> Result<(), String> {
-        let Some(file) = &self.file else {
+        if self.file.is_none() {
             return Ok(());
-        };
-        for (root, program) in &self.programs {
-            if let Some(kin) = Kinematics::of(doc, *root) {
-                self.saved.insert(*root, program.to_saved(*root, doc, &kin));
-            }
         }
-        self.saved
-            .retain(|root, _| self.programs.contains_key(root));
-        let programs: Vec<&Value> = self.saved.values().chain(&self.pending).collect();
+        let programs = self.saved_programs(doc);
+        let file = self.file.as_ref().expect("a project file");
         let text = serde_json::to_string_pretty(&json!({
             "version": program::FILE_VERSION,
             "programs": programs,
             "cell": rest.cell,
             "library": rest.library,
+            "scenarios": rest.scenarios,
         }))
         .expect("programs serialise");
         let next = file.with_extension("json.new");

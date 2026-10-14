@@ -4,6 +4,7 @@ use serde_json::json;
 use super::*;
 use crate::collide::Collider;
 use crate::library::Library;
+use crate::timeline::{Now, Timeline};
 
 /// The M1 cell from the library: a tending UR10e on a 0.7 m pedestal, a
 /// CNC lathe ahead of it, an infeed table on its left and an outfeed
@@ -12,9 +13,12 @@ struct Cell1 {
     doc: Document,
     cell: Cell,
     posing: Posing,
+    library: Library,
     robot: u64,
     grip_a: u64,
     machine: u64,
+    /// Every CNC machine, the first being `machine`.
+    machines: Vec<u64>,
     infeed: u64,
     outfeed: u64,
 }
@@ -33,24 +37,36 @@ fn ask_posing(p: &mut Posing, doc: &Document, req: serde_json::Value) -> serde_j
 }
 
 fn cell1() -> Cell1 {
+    cell_with(1, 10.0)
+}
+
+/// The M1 cell with `cncs` machines (one or two), each machining for
+/// `cycle` seconds. The second stands on the robot's right, facing it.
+fn cell_with(cncs: usize, cycle: f64) -> Cell1 {
     let mut library = Library::default();
-    for (template, at) in [
-        ("pedestal", [0.0, 0.0, 0.0]),
-        ("ur10e_tending", [0.0, 0.0, 0.7]),
-        ("cnc_lathe", [0.0, 0.75, 0.0]),
-        ("infeed_station", [-0.8, 0.05, 0.0]),
-        ("outfeed_station", [0.0, -0.8, 0.0]),
-    ] {
-        library.handle(&json!({"op": "place", "template": template, "at": at}).to_string());
+    let mut placed = vec![
+        ("pedestal", [0.0, 0.0, 0.0], 0.0),
+        ("ur10e_tending", [0.0, 0.0, 0.7], 0.0),
+        ("cnc_lathe", [0.0, 0.75, 0.0], 0.0),
+        ("infeed_station", [-0.8, 0.05, 0.0], 0.0),
+        ("outfeed_station", [0.0, -0.8, 0.0], 0.0),
+    ];
+    if cncs > 1 {
+        placed.push(("cnc_lathe", [0.75, 0.0, 0.0], -std::f64::consts::FRAC_PI_2));
+    }
+    for (template, at, yaw) in placed {
+        library.handle(
+            &json!({"op": "place", "template": template, "at": at, "yaw": yaw}).to_string(),
+        );
     }
     let mut doc = Document::new();
     library.apply(&mut doc);
     let mut cell = Cell::default();
-    let mut machine = 0;
+    let mut machines = Vec::new();
     let (mut infeed, mut outfeed, mut grip_a) = (0, 0, 0);
     for (uid, name, kind) in library.roles() {
         match kind {
-            crate::cell::Kind::Cnc => machine = uid,
+            crate::cell::Kind::Cnc => machines.push(uid),
             crate::cell::Kind::Infeed => infeed = uid,
             crate::cell::Kind::Outfeed => outfeed = uid,
             crate::cell::Kind::Gripper if name == "grip_a" => grip_a = uid,
@@ -58,11 +74,13 @@ fn cell1() -> Cell1 {
         }
         cell.ensure(uid, name, kind);
     }
-    ask_cell(
-        &mut cell,
-        &doc,
-        json!({"op": "role", "object": machine.to_string(), "kind": "cnc", "props": {"cycle": 10.0}}),
-    );
+    for m in &machines {
+        ask_cell(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": m.to_string(), "kind": "cnc", "props": {"cycle": cycle}}),
+        );
+    }
     ask_cell(
         &mut cell,
         &doc,
@@ -73,9 +91,11 @@ fn cell1() -> Cell1 {
         doc,
         cell,
         posing: Posing::default(),
+        library,
         robot,
         grip_a,
-        machine,
+        machine: machines[0],
+        machines,
         infeed,
         outfeed,
     }
@@ -126,12 +146,16 @@ impl Cell1 {
     }
 
     fn seat(&self) -> DVec3 {
+        self.seat_of(self.machine)
+    }
+
+    fn seat_of(&self, machine: u64) -> DVec3 {
         let cell: serde_json::Value = serde_json::from_str(&self.cell.to_json(&self.doc)).unwrap();
         let c = cell["components"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|c| uid_of(&c["object"]) == Some(self.machine))
+            .find(|c| uid_of(&c["object"]) == Some(machine))
             .unwrap();
         let p = &c["seat"];
         DVec3::new(
@@ -143,17 +167,42 @@ impl Cell1 {
 
     /// Runs the program until it stops, at most `limit` simulated seconds.
     fn run(&mut self, limit: f64) -> (Runner, f64) {
+        let (runner, t, _) = self.run_timed(limit);
+        (runner, t)
+    }
+
+    /// The same, recording what the robot and the machine did.
+    fn run_timed(&mut self, limit: f64) -> (Runner, f64, Timeline) {
         let program = self.posing.program(self.robot).unwrap().clone();
         let mut runner = Runner::new(self.robot, program, &self.doc, 0.0).unwrap();
         let start = Instant::now();
         let mut t = 0.0;
+        let mut timeline = Timeline::new(0.0);
         while t < limit && !runner.stopped() {
             let now = start + Duration::from_secs_f64(t);
             runner.tick(t, now, &mut self.posing, &mut self.cell, &self.doc);
             self.cell.tick(&self.doc, t, now);
+            let mut lanes = vec![Now {
+                key: "robot".into(),
+                name: "robot".into(),
+                group: "robot",
+                activity: runner.activity(),
+            }];
+            lanes.extend(
+                self.cell
+                    .activities(&self.doc)
+                    .into_iter()
+                    .map(|(uid, name, a)| Now {
+                        key: uid.to_string(),
+                        name,
+                        group: "machine",
+                        activity: a,
+                    }),
+            );
+            timeline.sample(t, lanes);
             t += 0.02;
         }
-        (runner, t)
+        (runner, t, timeline)
     }
 }
 
@@ -297,4 +346,134 @@ fn a_door_the_program_has_opened_is_not_in_its_way() {
         )
     });
     assert!(shut.open_during_moves().iter().all(|o| o.is_empty()));
+}
+
+#[test]
+fn the_timeline_shows_the_machine_cutting_and_the_robot_waiting_for_it() {
+    let mut c = cell1();
+    tending(&mut c);
+    let (_, t, timeline) = c.run_timed(120.0);
+    let j = timeline.to_json();
+    let lanes = j["lanes"].as_array().unwrap();
+    let machine = lanes.iter().find(|l| l["group"] == "machine").unwrap();
+    let robot = lanes.iter().find(|l| l["group"] == "robot").unwrap();
+    // The 10 s cycle, cut once.
+    let cut = machine["totals"]["cut"].as_f64().unwrap();
+    assert!((cut - 10.0).abs() < 0.1, "{cut}");
+    assert_eq!(j["parts"], 1);
+    // The robot waited out the cycle, and the doors.
+    let waited = robot["totals"]["wait"].as_f64().unwrap();
+    assert!(waited > 10.0 && waited < 20.0, "{waited}");
+    // The shares add up to the run.
+    let total: f64 = robot["shares"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| v.as_f64().unwrap())
+        .sum();
+    assert!((total - 1.0).abs() < 1e-6, "{total}");
+    assert!((j["elapsed"].as_f64().unwrap() - (t - 0.02)).abs() < 1e-6);
+}
+
+/// Loads a raw part from the infeed into `machine` and starts it.
+fn load(c: &mut Cell1, machine: u64) {
+    let (m, g) = (machine.to_string(), c.grip_a.to_string());
+    let up = DVec3::Z * 0.15;
+    let raw = c.slot(c.infeed, 0);
+    let seat = c.seat_of(machine);
+    // Back out towards the robot.
+    let back = DVec3::new(-seat.x, -seat.y, 0.0).normalize() * 0.6 + up;
+    c.teach(raw + up, "joint");
+    c.teach(raw, "linear");
+    c.act(json!({"type": "grip", "gripper": g}));
+    c.teach(raw + up, "linear");
+    c.act(json!({"type": "command", "machine": m, "command": "open"}));
+    c.act(json!({"type": "wait", "machine": m, "signal": "door_open"}));
+    c.teach(seat + up, "joint");
+    c.teach(seat, "linear");
+    c.act(json!({"type": "release", "gripper": g}));
+    c.teach(seat + up, "linear");
+    c.teach(seat + back, "linear");
+    c.act(json!({"type": "command", "machine": m, "command": "clamp"}));
+    c.act(json!({"type": "command", "machine": m, "command": "close"}));
+    c.act(json!({"type": "wait", "machine": m, "signal": "door_closed"}));
+    c.act(json!({"type": "command", "machine": m, "command": "start"}));
+}
+
+/// Waits for `machine`, takes its finished part out to the outfeed.
+fn unload(c: &mut Cell1, machine: u64) {
+    let (m, g) = (machine.to_string(), c.grip_a.to_string());
+    let up = DVec3::Z * 0.15;
+    let seat = c.seat_of(machine);
+    let back = DVec3::new(-seat.x, -seat.y, 0.0).normalize() * 0.6 + up;
+    let out = c.slot(c.outfeed, 0);
+    c.act(json!({"type": "wait", "machine": m, "signal": "done"}));
+    c.act(json!({"type": "command", "machine": m, "command": "open"}));
+    c.act(json!({"type": "wait", "machine": m, "signal": "door_open"}));
+    c.act(json!({"type": "command", "machine": m, "command": "unclamp"}));
+    c.teach(seat + up, "joint");
+    c.teach(
+        seat + DVec3::Z * ((crate::cell::FINISHED.1 - crate::cell::RAW.1) / 2.0),
+        "linear",
+    );
+    c.act(json!({"type": "grip", "gripper": g}));
+    c.teach(seat + up, "linear");
+    c.teach(seat + back, "linear");
+    c.teach(out + up, "joint");
+    c.teach(out, "linear");
+    c.act(json!({"type": "release", "gripper": g}));
+    c.teach(out + up, "linear");
+}
+
+/// The cell as a scenario: its equipment, roles and programs.
+fn scenario_of(c: &mut Cell1, name: &str) -> serde_json::Value {
+    crate::scenario::snapshot(
+        name,
+        c.posing.saved_programs(&c.doc),
+        c.cell.to_saved(),
+        c.library.to_saved(),
+    )
+}
+
+#[test]
+fn a_second_machine_nearly_doubles_the_parts_an_hour() {
+    // Machining for a minute: the robot has time to tend a second machine.
+    let mut one = cell_with(1, 60.0);
+    let m = one.machine;
+    load(&mut one, m);
+    unload(&mut one, m);
+    let one = scenario_of(&mut one, "CNC 1대");
+
+    let mut two = cell_with(2, 60.0);
+    let (m1, m2) = (two.machines[0], two.machines[1]);
+    load(&mut two, m1);
+    load(&mut two, m2);
+    unload(&mut two, m1);
+    unload(&mut two, m2);
+    let two = scenario_of(&mut two, "CNC 2대");
+
+    let started = std::time::Instant::now();
+    let session = Document::new();
+    let a = crate::scenario::simulate(&session, &one, 900.0);
+    let b = crate::scenario::simulate(&session, &two, 900.0);
+    let took = started.elapsed();
+    assert!(a["alarm"].is_null(), "{a}");
+    assert!(b["alarm"].is_null(), "{b}");
+    assert_eq!(
+        (a["machines"].as_u64(), b["machines"].as_u64()),
+        (Some(1), Some(2))
+    );
+    let (ra, rb) = (
+        a["per_hour"].as_f64().unwrap(),
+        b["per_hour"].as_f64().unwrap(),
+    );
+    // One machine: a minute's cut and some 25 s of tending each part.
+    assert!(ra > 30.0 && ra < 50.0, "{a}");
+    assert!(rb > ra * 1.5, "{ra} against {rb}: {b}");
+    // The one machine is idle while it is tended; the robot mostly waits.
+    let u = a["machine_lanes"][0]["utilization"].as_f64().unwrap();
+    assert!(u > 0.55 && u < 0.85, "{a}");
+    let wait = |s: &serde_json::Value| s["robot_lanes"][0]["wait"].as_f64().unwrap();
+    assert!(wait(&a) > wait(&b), "{a}\n{b}");
+    println!("{a}\n{b}\n{took:?}");
 }

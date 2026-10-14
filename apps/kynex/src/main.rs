@@ -4,6 +4,7 @@
 //! kynex view [ADDRESS] [--key KEY] [--port 8090] [--lan] [--open]
 //! kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 //! kynex inspect FILE.kreate [--json]
+//! kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--json]
 //! ```
 //!
 //! `link` joins the shared session a Kreate opened (File ▸ Shared Session ▸
@@ -16,6 +17,9 @@
 //! `view` does what `link` does and draws it: it serves the 3D viewer at
 //! `http://localhost:8090`, for any browser on any system. `--lan` lets other
 //! machines on the network open it too.
+//!
+//! `compare` runs the scenarios saved in the project file for some hours on
+//! the simulation's clock and prints how each did (see `scenario`).
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -33,12 +37,15 @@ mod library;
 mod pose;
 mod program;
 mod run;
+mod scenario;
+mod timeline;
 mod view;
 
 const USAGE: &str = "\
 kynex view [ADDRESS] [--key KEY] [--name NAME] [--port 8090] [--lan] [--open] [--project FILE]
 kynex view --file FILE.kreate [--port 8090] [--lan] [--open] [--project FILE]
 kynex view --empty [--port 8090] [--lan] [--open] [--project FILE]
+kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--json]
 kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 kynex inspect FILE.kreate [--json]
 kynex bench [--tier cell|line|factory|factory-xl|all] [--browser] [--port 8091]";
@@ -48,6 +55,7 @@ fn main() {
     let result = match args.next().as_deref() {
         Some("view") => view::run(args.collect()),
         Some("bench") => bench::run(args.collect()),
+        Some("compare") => scenario::run(args.collect()),
         Some("link") => link(args.collect()),
         Some("inspect") => inspect(args.collect()),
         Some("-h" | "--help") | None => {

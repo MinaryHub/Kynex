@@ -356,23 +356,26 @@ pub fn guess(doc: &Document) -> Vec<(u64, Kind)> {
     out
 }
 
+/// Whether `id` hangs below `parent`, at any depth.
+fn is_below(doc: &Document, id: ObjectId, parent: ObjectId) -> bool {
+    let mut at = doc.object(id).and_then(|o| o.parent);
+    for _ in 0..64 {
+        match at {
+            Some(p) if p == parent => return true,
+            Some(p) => at = doc.object(p).and_then(|o| o.parent),
+            None => return false,
+        }
+    }
+    false
+}
+
 /// Whether any robot link hangs below `parent`, at any depth: between two
 /// links there is always a joint.
 fn links_below(doc: &Document, parent: ObjectId) -> bool {
     use kreate_scene::robot::RobotPart;
     doc.objects()
         .filter(|(_, o)| matches!(o.robot, Some(RobotPart::Link { .. })))
-        .any(|(id, _)| {
-            let mut at = doc.object(id).and_then(|o| o.parent);
-            for _ in 0..64 {
-                match at {
-                    Some(p) if p == parent => return true,
-                    Some(p) => at = doc.object(p).and_then(|o| o.parent),
-                    None => return false,
-                }
-            }
-            false
-        })
+        .any(|(id, _)| is_below(doc, id, parent))
 }
 
 /// A child of `parent`, at any depth, whose name holds `word`.
@@ -380,17 +383,7 @@ fn part_named(doc: &Document, parent: ObjectId, word: &str) -> Option<ObjectId> 
     doc.objects()
         .filter(|(_, o)| o.name.to_lowercase().contains(word))
         .map(|(id, _)| id)
-        .find(|id| {
-            let mut at = doc.object(*id).and_then(|o| o.parent);
-            for _ in 0..64 {
-                match at {
-                    Some(p) if p == parent => return true,
-                    Some(p) => at = doc.object(p).and_then(|o| o.parent),
-                    None => return false,
-                }
-            }
-            false
-        })
+        .find(|id| is_below(doc, *id, parent))
 }
 
 impl Cell {
@@ -436,11 +429,32 @@ impl Cell {
                     });
                     self.changed = true;
                 }
-                (Some(_), Some(_)) => {}
+                // A role equipment came with: the settings saved win over
+                // its defaults.
+                (Some(object), Some(kind)) => {
+                    if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {
+                        c.kind = kind;
+                        c.props.update(&saved["props"]);
+                        self.changed = true;
+                    }
+                }
                 _ => waiting.push(saved),
             }
         }
         self.pending = waiting;
+        // One machine is one CNC role: a role on a part of a machine that
+        // has one already (saved before auto roles knew better) is dropped.
+        let machines: Vec<ObjectId> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Cnc)
+            .filter_map(|c| id_of(doc, c.object))
+            .collect();
+        self.components.retain(|c| {
+            c.kind != Kind::Cnc
+                || !id_of(doc, c.object)
+                    .is_some_and(|id| machines.iter().any(|m| is_below(doc, id, *m)))
+        });
     }
 
     /// The roles, as saved to the project file: with those still waiting
@@ -474,6 +488,63 @@ impl Cell {
         });
         self.roles_changed = true;
         self.changed = true;
+    }
+
+    /// Puts the roles `saved` in place of these, with no parts and every
+    /// machine at rest: a scenario taken back.
+    pub fn restore(&mut self, saved: Vec<Value>) {
+        let mut removed = std::mem::take(&mut self.removed);
+        removed.extend(self.parts.iter().map(|p| p.uid));
+        let next = self.next;
+        *self = Self::from_saved(saved);
+        self.removed = removed;
+        // Parts made from here on are new to the viewers.
+        self.next = next;
+        self.roles_changed = true;
+        self.changed = true;
+    }
+
+    /// Keeps the cell supplied, as an operator would over a long run: every
+    /// free place on an infeed pallet gets a raw part, and the finished
+    /// parts set down on an outfeed pallet are taken away. Returns how many
+    /// were taken away.
+    pub fn supply(&mut self, doc: &Document) -> usize {
+        let pallets: Vec<Component> = self
+            .components
+            .iter()
+            .filter(|c| c.kind.pallet())
+            .cloned()
+            .collect();
+        let mut taken = 0;
+        for c in pallets {
+            let slots = self.slots(doc, &c);
+            let on = |p: &Part| {
+                p.held.is_none()
+                    && slots
+                        .iter()
+                        .any(|at| p.world.translation.distance(*at) < SNAP)
+            };
+            if c.kind == Kind::Outfeed {
+                let (gone, kept): (Vec<Part>, Vec<Part>) = std::mem::take(&mut self.parts)
+                    .into_iter()
+                    .partition(|p| p.finished && on(p));
+                self.parts = kept;
+                taken += gone.len();
+                self.removed.extend(gone.iter().map(|p| p.uid));
+                self.changed |= !gone.is_empty();
+            } else {
+                for at in slots {
+                    let free = !self
+                        .parts
+                        .iter()
+                        .any(|p| p.held.is_none() && p.world.translation.distance(at) < SNAP);
+                    if free {
+                        self.add_part(at, false);
+                    }
+                }
+            }
+        }
+        taken
     }
 
     /// Takes away the roles of objects that are gone from the scene.
@@ -964,6 +1035,30 @@ impl Cell {
         (moving, finished)
     }
 
+    /// What each CNC machine is doing, for the timeline: its identity, its
+    /// name, and `cut` (machining), `door` (its door moving), `blocked`
+    /// (a finished part waiting to be taken out), or `idle`.
+    pub fn activities(&self, doc: &Document) -> Vec<(u64, String, &'static str)> {
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Cnc)
+            .map(|c| {
+                let m = self.machines.get(&c.object).cloned().unwrap_or_default();
+                let target = if m.opening { 1.0 } else { 0.0 };
+                let activity = if m.machining.is_some() {
+                    "cut"
+                } else if m.door != target {
+                    "door"
+                } else if self.in_chuck(doc, c) == Some(true) {
+                    "blocked"
+                } else {
+                    "idle"
+                };
+                (c.object, c.name.clone(), activity)
+            })
+            .collect()
+    }
+
     /// Whether the scene shown needs the cell in it: parts to add, or a
     /// door to move.
     pub fn needs_scene(&self) -> bool {
@@ -1367,6 +1462,15 @@ mod tests {
         let a = ask(&mut cell, &doc, json!({"op": "auto"}));
         assert_eq!(a["added"], 0, "{a}");
         assert_eq!(cell.components().len(), 1);
+
+        // A project saved with a role on both is read back with one.
+        let inner_uid = doc.object_uid(inner).unwrap().raw();
+        let saved = [(inner_uid, "machine"), (item_uid, "CNC 선반 1")]
+            .map(|(uid, name)| json!({"object": uid.to_string(), "name": name, "kind": "cnc"}));
+        let mut again = Cell::from_saved(saved.to_vec());
+        again.adopt(&doc);
+        assert_eq!(again.components().len(), 1);
+        assert_eq!(again.components()[0].object, item_uid);
     }
 
     #[test]

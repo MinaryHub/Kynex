@@ -1,0 +1,491 @@
+# Made by KYNEX from program "UR10e + ?? ??? 1".
+# Poses in the base frame, metres and rotation vectors.
+def UR10e__________1():
+  set_tcp(p[0.000000, 0.070000, 0.170000, 0.000000, 0.000000, 0.000000])
+  # The places of pallet
+  kynex_places_0 = [p[1.000000, 0.100000, 0.110000, 0, 0, 0], p[0.900000, 0.100000, 0.110000, 0, 0, 0], p[0.800000, 0.100000, 0.110000, 0, 0, 0], p[0.700000, 0.100000, 0.110000, 0, 0, 0], p[0.600000, 0.100000, 0.110000, 0, 0, 0], p[1.000000, -0.000000, 0.110000, 0, 0, 0], p[0.900000, -0.000000, 0.110000, 0, 0, 0], p[0.800000, -0.000000, 0.110000, 0, 0, 0], p[0.700000, -0.000000, 0.110000, 0, 0, 0], p[0.600000, -0.000000, 0.110000, 0, 0, 0], p[1.000000, -0.100000, 0.110000, 0, 0, 0], p[0.900000, -0.100000, 0.110000, 0, 0, 0], p[0.800000, -0.100000, 0.110000, 0, 0, 0], p[0.700000, -0.100000, 0.110000, 0, 0, 0], p[0.600000, -0.100000, 0.110000, 0, 0, 0], p[1.000000, -0.200000, 0.110000, 0, 0, 0], p[0.900000, -0.200000, 0.110000, 0, 0, 0], p[0.800000, -0.200000, 0.110000, 0, 0, 0], p[0.700000, -0.200000, 0.110000, 0, 0, 0], p[0.600000, -0.200000, 0.110000, 0, 0, 0]]
+  kynex_place_0 = 0
+  # The places of pallet
+  kynex_places_1 = [p[0.200000, 0.950000, 0.110000, 0, 0, 0], p[0.100000, 0.950000, 0.110000, 0, 0, 0], p[0.000000, 0.950000, 0.110000, 0, 0, 0], p[-0.100000, 0.950000, 0.110000, 0, 0, 0], p[-0.200000, 0.950000, 0.110000, 0, 0, 0], p[0.200000, 0.850000, 0.110000, 0, 0, 0], p[0.100000, 0.850000, 0.110000, 0, 0, 0], p[0.000000, 0.850000, 0.110000, 0, 0, 0], p[-0.100000, 0.850000, 0.110000, 0, 0, 0], p[-0.200000, 0.850000, 0.110000, 0, 0, 0], p[0.200000, 0.750000, 0.110000, 0, 0, 0], p[0.100000, 0.750000, 0.110000, 0, 0, 0], p[0.000000, 0.750000, 0.110000, 0, 0, 0], p[-0.100000, 0.750000, 0.110000, 0, 0, 0], p[-0.200000, 0.750000, 0.110000, 0, 0, 0], p[0.200000, 0.650000, 0.110000, 0, 0, 0], p[0.100000, 0.650000, 0.110000, 0, 0, 0], p[0.000000, 0.650000, 0.110000, 0, 0, 0], p[-0.100000, 0.650000, 0.110000, 0, 0, 0], p[-0.200000, 0.650000, 0.110000, 0, 0, 0]]
+  kynex_place_1 = 0
+  # To the start
+  write_output_integer_register(0, 1)
+  # P1
+  movej(get_inverse_kin(pose_add(p[1.000000, 0.100000, 0.260000, 0.000000, 3.141591, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), qnear=[2.996620, -1.028332, 1.310043, -1.852509, -1.570796, 1.425824]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 1)
+  write_output_integer_register(0, 2)
+  # P2
+  movel(pose_add(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 2)
+  set_standard_digital_out(0, True)
+  sleep(0.50)
+  write_output_integer_register(0, 3)
+  # P3
+  movel(pose_add(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 3)
+  kynex_place_0 = (kynex_place_0 + 1) % 20
+  set_standard_digital_out(2, True)
+  sleep(0.2)
+  set_standard_digital_out(2, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+  write_output_integer_register(0, 4)
+  # P4
+  movej([1.080741, -2.200017, 2.076370, -1.447150, -1.570797, -0.490055], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 4)
+  write_output_integer_register(0, 5)
+  # P5
+  movel(p[-0.000000, -1.099995, 0.459997, -0.000000, -3.141592, 0.000027], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 5)
+  write_output_integer_register(0, 6)
+  # P6
+  movel(p[-0.000000, -1.100000, 0.310000, -0.000000, -3.141593, 0.000003], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 6)
+  set_standard_digital_out(0, False)
+  sleep(0.50)
+  write_output_integer_register(0, 7)
+  # P7
+  movel(p[-0.000000, -1.099993, 0.459996, -0.000000, -3.141592, 0.000041], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 7)
+  write_output_integer_register(0, 8)
+  # P8
+  movel(p[0.000000, -0.300000, 0.460000, -0.000001, -3.141591, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 8)
+  set_standard_digital_out(4, True)
+  sleep(0.2)
+  set_standard_digital_out(4, False)
+  set_standard_digital_out(3, True)
+  sleep(0.2)
+  set_standard_digital_out(3, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_closed
+  set_standard_digital_out(6, True)
+  sleep(0.2)
+  set_standard_digital_out(6, False)
+  write_output_integer_register(0, 9)
+  # P9
+  movej(get_inverse_kin(pose_add(p[0.999991, 0.100000, 0.259996, 0.000004, 3.141552, 0.000003], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), qnear=[2.996617, -1.028362, 1.310104, -1.852579, -1.570789, 1.425823]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 9)
+  write_output_integer_register(0, 10)
+  # P10
+  movel(pose_add(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 10)
+  set_standard_digital_out(0, True)
+  sleep(0.50)
+  write_output_integer_register(0, 11)
+  # P11
+  movel(pose_add(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 11)
+  kynex_place_0 = (kynex_place_0 + 1) % 20
+  set_configurable_digital_out(0, True)
+  sleep(0.2)
+  set_configurable_digital_out(0, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_open
+  write_output_integer_register(0, 12)
+  # P12
+  movej([5.911607, -2.334659, 2.117083, -1.353221, -1.570799, 4.340812], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 12)
+  write_output_integer_register(0, 13)
+  # P13
+  movel(p[-1.099999, 0.000000, 0.460000, 0.000001, -3.141590, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 13)
+  write_output_integer_register(0, 14)
+  # P14
+  movel(p[-1.099996, 0.000000, 0.309998, 0.000005, -3.141574, -0.000001], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 14)
+  set_standard_digital_out(0, False)
+  sleep(0.50)
+  write_output_integer_register(0, 15)
+  # P15
+  movel(p[-1.099999, 0.000000, 0.459999, 0.000001, -3.141588, -0.000001], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 15)
+  write_output_integer_register(0, 16)
+  # P16
+  movel(p[-0.300000, -0.000009, 0.459998, 0.000038, 3.141586, 0.000073], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 16)
+  set_configurable_digital_out(2, True)
+  sleep(0.2)
+  set_configurable_digital_out(2, False)
+  set_configurable_digital_out(1, True)
+  sleep(0.2)
+  set_configurable_digital_out(1, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_closed
+  set_configurable_digital_out(4, True)
+  sleep(0.2)
+  set_configurable_digital_out(4, False)
+  write_output_integer_register(0, 17)
+  # P17
+  movej(get_inverse_kin(pose_add(p[1.000000, 0.100000, 0.260000, 0.000001, 3.141590, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), qnear=[2.996620, -1.028333, 1.310045, -1.852511, -1.570796, 1.425824]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 17)
+  write_output_integer_register(0, 18)
+  # P18
+  movel(pose_add(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 18)
+  set_standard_digital_out(0, True)
+  sleep(0.50)
+  write_output_integer_register(0, 19)
+  # P19
+  movel(pose_add(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 19)
+  kynex_place_0 = (kynex_place_0 + 1) % 20
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say done
+  set_standard_digital_out(2, True)
+  sleep(0.2)
+  set_standard_digital_out(2, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+  set_standard_digital_out(5, True)
+  sleep(0.2)
+  set_standard_digital_out(5, False)
+  write_output_integer_register(0, 20)
+  # P1
+  movej([0.711882, -2.307788, 1.621554, -0.884563, -1.570812, -0.858908], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 20)
+  write_output_integer_register(0, 21)
+  # P2
+  movel(p[-0.000000, -0.160000, 0.460000, -0.000001, 3.141592, -0.000002], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 21)
+  write_output_integer_register(0, 22)
+  # P3
+  movel(p[-0.000000, -0.960000, 0.459999, -0.000000, -3.141593, 0.000004], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 22)
+  write_output_integer_register(0, 23)
+  # P4
+  movel(p[-0.000000, -0.959996, 0.307495, 0.000000, -3.141591, 0.000032], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 23)
+  set_standard_digital_out(1, True)
+  sleep(0.50)
+  write_output_integer_register(0, 24)
+  # P5
+  movel(p[0.000000, -0.959994, 0.459992, 0.000000, -3.141591, 0.000051], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 24)
+  write_output_integer_register(0, 25)
+  # P6
+  movel(p[-0.000000, -1.099994, 0.459997, -0.000000, -3.141592, 0.000032], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 25)
+  write_output_integer_register(0, 26)
+  # P7
+  movel(p[-0.000000, -1.100000, 0.310000, -0.000000, -3.141593, 0.000003], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 26)
+  set_standard_digital_out(0, False)
+  sleep(0.50)
+  write_output_integer_register(0, 27)
+  # P8
+  movel(p[-0.000000, -1.099993, 0.459996, -0.000000, -3.141592, 0.000041], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 27)
+  write_output_integer_register(0, 28)
+  # P9
+  movel(p[0.000000, -0.300000, 0.460000, -0.000001, -3.141591, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 28)
+  set_standard_digital_out(4, True)
+  sleep(0.2)
+  set_standard_digital_out(4, False)
+  set_standard_digital_out(3, True)
+  sleep(0.2)
+  set_standard_digital_out(3, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_closed
+  set_standard_digital_out(6, True)
+  sleep(0.2)
+  set_standard_digital_out(6, False)
+  write_output_integer_register(0, 29)
+  # P10
+  movej(get_inverse_kin(pose_add(p[0.200000, 1.090000, 0.260000, 0.000000, 3.141592, 0.000001], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), qnear=[4.350428, -0.962774, 1.204905, -1.812928, -1.570796, 2.779632]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 29)
+  write_output_integer_register(0, 30)
+  # P11
+  movel(pose_add(p[0.200000, 1.089999, 0.110001, -0.000000, 3.141591, 0.000011], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 30)
+  set_standard_digital_out(1, False)
+  sleep(0.50)
+  write_output_integer_register(0, 31)
+  # P12
+  movel(pose_add(p[0.200000, 1.089998, 0.260000, -0.000000, 3.141590, 0.000014], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 31)
+  kynex_place_1 = (kynex_place_1 + 1) % 20
+  write_output_integer_register(0, 32)
+  # P13
+  movej(get_inverse_kin(pose_add(p[0.999999, 0.100000, 0.260000, 0.000001, 3.141589, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), qnear=[2.996620, -1.028335, 1.310047, -1.852513, -1.570796, 1.425824]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 32)
+  write_output_integer_register(0, 33)
+  # P14
+  movel(pose_add(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 33)
+  set_standard_digital_out(0, True)
+  sleep(0.50)
+  write_output_integer_register(0, 34)
+  # P15
+  movel(pose_add(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 34)
+  kynex_place_0 = (kynex_place_0 + 1) % 20
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say done
+  set_configurable_digital_out(0, True)
+  sleep(0.2)
+  set_configurable_digital_out(0, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_open
+  set_configurable_digital_out(3, True)
+  sleep(0.2)
+  set_configurable_digital_out(3, False)
+  write_output_integer_register(0, 35)
+  # P16
+  movej([5.023279, -1.685280, 1.424870, -1.310387, -1.570796, 3.452483], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 35)
+  write_output_integer_register(0, 36)
+  # P17
+  movej([5.453167, -2.170597, 1.597130, -0.997336, -1.570822, 3.882382], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 36)
+  write_output_integer_register(0, 37)
+  # P18
+  movel(p[-0.300000, 0.140000, 0.460000, 0.000000, -3.141592, 0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 37)
+  write_output_integer_register(0, 38)
+  # P19
+  movel(p[-1.099998, 0.140000, 0.459999, -0.000002, -3.141584, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 38)
+  write_output_integer_register(0, 39)
+  # P20
+  movel(p[-1.099995, 0.140000, 0.307498, -0.000005, -3.141573, -0.000002], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 39)
+  set_standard_digital_out(1, True)
+  sleep(0.50)
+  write_output_integer_register(0, 40)
+  # P21
+  movel(p[-1.099999, 0.140000, 0.459999, -0.000001, -3.141588, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 40)
+  write_output_integer_register(0, 41)
+  # P22
+  movel(p[-1.099993, 0.000000, 0.459996, 0.000009, -3.141559, -0.000004], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 41)
+  write_output_integer_register(0, 42)
+  # P23
+  movel(p[-1.099996, 0.000000, 0.309998, 0.000005, -3.141574, -0.000001], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 42)
+  set_standard_digital_out(0, False)
+  sleep(0.50)
+  write_output_integer_register(0, 43)
+  # P24
+  movel(p[-1.099999, 0.000000, 0.459999, 0.000001, -3.141588, -0.000001], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 43)
+  write_output_integer_register(0, 44)
+  # P25
+  movel(p[-0.300000, -0.000009, 0.459998, 0.000038, 3.141586, 0.000073], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 44)
+  set_configurable_digital_out(2, True)
+  sleep(0.2)
+  set_configurable_digital_out(2, False)
+  set_configurable_digital_out(1, True)
+  sleep(0.2)
+  set_configurable_digital_out(1, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_closed
+  set_configurable_digital_out(4, True)
+  sleep(0.2)
+  set_configurable_digital_out(4, False)
+  write_output_integer_register(0, 45)
+  # P26
+  movej(get_inverse_kin(pose_add(p[0.199999, 1.089997, 0.260001, 0.000002, 3.141587, 0.000026], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), qnear=[4.350427, -0.962787, 1.204930, -1.812957, -1.570796, 2.779633]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 45)
+  write_output_integer_register(0, 46)
+  # P27
+  movel(pose_add(p[0.200000, 1.089999, 0.110001, -0.000000, 3.141591, 0.000011], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 46)
+  set_standard_digital_out(1, False)
+  sleep(0.50)
+  write_output_integer_register(0, 47)
+  # P28
+  movel(pose_add(p[0.200000, 1.089998, 0.260000, -0.000000, 3.141590, 0.000014], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 47)
+  kynex_place_1 = (kynex_place_1 + 1) % 20
+  write_output_integer_register(0, 48)
+  # P29
+  movej(get_inverse_kin(pose_add(p[0.999999, 0.100000, 0.260000, 0.000001, 3.141589, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), qnear=[2.996620, -1.028335, 1.310047, -1.852513, -1.570796, 1.425824]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 48)
+  write_output_integer_register(0, 49)
+  # P30
+  movel(pose_add(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 49)
+  set_standard_digital_out(0, True)
+  sleep(0.50)
+  write_output_integer_register(0, 50)
+  # P31
+  movel(pose_add(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 50)
+  kynex_place_0 = (kynex_place_0 + 1) % 20
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say done
+  set_standard_digital_out(2, True)
+  sleep(0.2)
+  set_standard_digital_out(2, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+  set_standard_digital_out(5, True)
+  sleep(0.2)
+  set_standard_digital_out(5, False)
+  write_output_integer_register(0, 51)
+  # P1
+  movej([0.711882, -2.307788, 1.621554, -0.884563, -1.570812, -0.858908], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 51)
+  write_output_integer_register(0, 52)
+  # P2
+  movel(p[-0.000000, -0.160000, 0.460000, -0.000001, 3.141592, -0.000002], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 52)
+  write_output_integer_register(0, 53)
+  # P3
+  movel(p[-0.000000, -0.960000, 0.459999, -0.000000, -3.141593, 0.000004], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 53)
+  write_output_integer_register(0, 54)
+  # P4
+  movel(p[-0.000000, -0.959996, 0.307495, 0.000000, -3.141591, 0.000032], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 54)
+  set_standard_digital_out(1, True)
+  sleep(0.50)
+  write_output_integer_register(0, 55)
+  # P5
+  movel(p[0.000000, -0.959994, 0.459992, 0.000000, -3.141591, 0.000051], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 55)
+  write_output_integer_register(0, 56)
+  # P6
+  movel(p[-0.000000, -1.099994, 0.459997, -0.000000, -3.141592, 0.000032], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 56)
+  write_output_integer_register(0, 57)
+  # P7
+  movel(p[-0.000000, -1.100000, 0.310000, -0.000000, -3.141593, 0.000003], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 57)
+  set_standard_digital_out(0, False)
+  sleep(0.50)
+  write_output_integer_register(0, 58)
+  # P8
+  movel(p[-0.000000, -1.099993, 0.459996, -0.000000, -3.141592, 0.000041], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 58)
+  write_output_integer_register(0, 59)
+  # P9
+  movel(p[0.000000, -0.300000, 0.460000, -0.000001, -3.141591, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 59)
+  set_standard_digital_out(4, True)
+  sleep(0.2)
+  set_standard_digital_out(4, False)
+  set_standard_digital_out(3, True)
+  sleep(0.2)
+  set_standard_digital_out(3, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_closed
+  set_standard_digital_out(6, True)
+  sleep(0.2)
+  set_standard_digital_out(6, False)
+  write_output_integer_register(0, 60)
+  # P10
+  movej(get_inverse_kin(pose_add(p[0.200000, 1.090000, 0.260000, 0.000000, 3.141592, 0.000001], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), qnear=[4.350428, -0.962774, 1.204905, -1.812928, -1.570796, 2.779632]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 60)
+  write_output_integer_register(0, 61)
+  # P11
+  movel(pose_add(p[0.200000, 1.089999, 0.110001, -0.000000, 3.141591, 0.000011], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 61)
+  set_standard_digital_out(1, False)
+  sleep(0.50)
+  write_output_integer_register(0, 62)
+  # P12
+  movel(pose_add(p[0.200000, 1.089998, 0.260000, -0.000000, 3.141590, 0.000014], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 62)
+  kynex_place_1 = (kynex_place_1 + 1) % 20
+  write_output_integer_register(0, 63)
+  # P13
+  movej(get_inverse_kin(pose_add(p[0.999999, 0.100000, 0.260000, 0.000001, 3.141589, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), qnear=[2.996620, -1.028335, 1.310047, -1.852513, -1.570796, 1.425824]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 63)
+  write_output_integer_register(0, 64)
+  # P14
+  movel(pose_add(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 64)
+  set_standard_digital_out(0, True)
+  sleep(0.50)
+  write_output_integer_register(0, 65)
+  # P15
+  movel(pose_add(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 65)
+  kynex_place_0 = (kynex_place_0 + 1) % 20
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say done
+  set_configurable_digital_out(0, True)
+  sleep(0.2)
+  set_configurable_digital_out(0, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_open
+  set_configurable_digital_out(3, True)
+  sleep(0.2)
+  set_configurable_digital_out(3, False)
+  write_output_integer_register(0, 66)
+  # P16
+  movej([5.023279, -1.685280, 1.424870, -1.310387, -1.570796, 3.452483], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 66)
+  write_output_integer_register(0, 67)
+  # P17
+  movej([5.453167, -2.170597, 1.597130, -0.997336, -1.570822, 3.882382], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 67)
+  write_output_integer_register(0, 68)
+  # P18
+  movel(p[-0.300000, 0.140000, 0.460000, 0.000000, -3.141592, 0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 68)
+  write_output_integer_register(0, 69)
+  # P19
+  movel(p[-1.099998, 0.140000, 0.459999, -0.000002, -3.141584, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 69)
+  write_output_integer_register(0, 70)
+  # P20
+  movel(p[-1.099995, 0.140000, 0.307498, -0.000005, -3.141573, -0.000002], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 70)
+  set_standard_digital_out(1, True)
+  sleep(0.50)
+  write_output_integer_register(0, 71)
+  # P21
+  movel(p[-1.099999, 0.140000, 0.459999, -0.000001, -3.141588, -0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 71)
+  write_output_integer_register(0, 72)
+  # P22
+  movel(p[-1.099993, 0.000000, 0.459996, 0.000009, -3.141559, -0.000004], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 72)
+  write_output_integer_register(0, 73)
+  # P23
+  movel(p[-1.099996, 0.000000, 0.309998, 0.000005, -3.141574, -0.000001], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 73)
+  set_standard_digital_out(0, False)
+  sleep(0.50)
+  write_output_integer_register(0, 74)
+  # P24
+  movel(p[-1.099999, 0.000000, 0.459999, 0.000001, -3.141588, -0.000001], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 74)
+  write_output_integer_register(0, 75)
+  # P25
+  movel(p[-0.300000, -0.000009, 0.459998, 0.000038, 3.141586, 0.000073], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 75)
+  set_configurable_digital_out(2, True)
+  sleep(0.2)
+  set_configurable_digital_out(2, False)
+  set_configurable_digital_out(1, True)
+  sleep(0.2)
+  set_configurable_digital_out(1, False)
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 2 to say door_closed
+  set_configurable_digital_out(4, True)
+  sleep(0.2)
+  set_configurable_digital_out(4, False)
+  write_output_integer_register(0, 76)
+  # P26
+  movej(get_inverse_kin(pose_add(p[0.199999, 1.089997, 0.260001, 0.000002, 3.141587, 0.000026], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), qnear=[4.350427, -0.962787, 1.204930, -1.812957, -1.570796, 2.779633]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 76)
+  write_output_integer_register(0, 77)
+  # P27
+  movel(pose_add(p[0.200000, 1.089999, 0.110001, -0.000000, 3.141591, 0.000011], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 77)
+  set_standard_digital_out(1, False)
+  sleep(0.50)
+  write_output_integer_register(0, 78)
+  # P28
+  movel(pose_add(p[0.200000, 1.089998, 0.260000, -0.000000, 3.141590, 0.000014], pose_sub(kynex_places_1[kynex_place_1], kynex_places_1[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 78)
+  kynex_place_1 = (kynex_place_1 + 1) % 20
+  write_output_integer_register(0, 79)
+  # P29
+  movej(get_inverse_kin(pose_add(p[0.999999, 0.100000, 0.260000, 0.000001, 3.141589, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), qnear=[2.996620, -1.028335, 1.310047, -1.852513, -1.570796, 1.425824]), a=6.2832, v=1.0472)
+  write_output_integer_register(1, 79)
+  write_output_integer_register(0, 80)
+  # P30
+  movel(pose_add(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 80)
+  set_standard_digital_out(0, True)
+  sleep(0.50)
+  write_output_integer_register(0, 81)
+  # P31
+  movel(pose_add(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], pose_sub(kynex_places_0[kynex_place_0], kynex_places_0[0])), a=1.2000, v=0.2500)
+  write_output_integer_register(1, 81)
+  kynex_place_0 = (kynex_place_0 + 1) % 20
+  write_output_integer_register(0, 82)
+end
+UR10e__________1()

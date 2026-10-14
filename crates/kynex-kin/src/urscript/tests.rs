@@ -1,6 +1,8 @@
 use kreate_math::{DAffine3, DVec3};
 
 use super::*;
+use crate::path::Waypoint;
+use crate::post::identifier;
 use crate::tests::{find, load, TRACK, UR5E};
 
 /// The numbers in the first `call(...[...]` of `line`.
@@ -52,14 +54,14 @@ fn a_ur_program_reads_as_movej_and_movel_in_the_base_frame() {
                 Move {
                     name: "P1",
                     waypoint: &a,
-                    notes: Vec::new(),
-                    offset: None,
+                    before: Vec::new(),
+                    place: None,
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
-                    notes: Vec::new(),
-                    offset: None,
+                    before: Vec::new(),
+                    place: None,
                 },
             ],
             close: false,
@@ -67,7 +69,7 @@ fn a_ur_program_reads_as_movej_and_movel_in_the_base_frame() {
             flange,
             trailing: Vec::new(),
             markers: false,
-            globals: Vec::new(),
+            pallets: Vec::new(),
         },
     )
     .unwrap();
@@ -119,14 +121,14 @@ fn a_closed_program_loops_back_to_its_first_point() {
                 Move {
                     name: "P1",
                     waypoint: &a,
-                    notes: Vec::new(),
-                    offset: None,
+                    before: Vec::new(),
+                    place: None,
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
-                    notes: Vec::new(),
-                    offset: None,
+                    before: Vec::new(),
+                    place: None,
                 },
             ],
             close: true,
@@ -134,7 +136,7 @@ fn a_closed_program_loops_back_to_its_first_point() {
             flange,
             trailing: Vec::new(),
             markers: false,
-            globals: Vec::new(),
+            pallets: Vec::new(),
         },
     )
     .unwrap();
@@ -175,15 +177,15 @@ fn only_a_six_joint_arm_has_urscript() {
             moves: vec![Move {
                 name: "P1",
                 waypoint: &w,
-                notes: Vec::new(),
-                offset: None,
+                before: Vec::new(),
+                place: None,
             }],
             close: false,
             base: root,
             flange: tip,
             trailing: Vec::new(),
             markers: false,
-            globals: Vec::new(),
+            pallets: Vec::new(),
         },
     )
     .unwrap_err();
@@ -192,10 +194,10 @@ fn only_a_six_joint_arm_has_urscript() {
 
 #[test]
 fn names_become_identifiers_and_comments_stay_ascii() {
-    assert_eq!(function_name("pick place-1"), "pick_place_1");
-    assert_eq!(function_name("1st"), "kynex_1st");
-    assert_eq!(function_name("로봇"), "kynex___");
-    assert_eq!(ascii("P1 집기"), "P1 ??");
+    assert_eq!(identifier("pick place-1"), "pick_place_1");
+    assert_eq!(identifier("1st"), "kynex_1st");
+    assert_eq!(identifier("로봇"), "kynex___");
+    assert_eq!(comment("P1 집기"), "P1 ??");
 }
 
 #[test]
@@ -217,14 +219,14 @@ fn what_cannot_be_said_yet_is_left_as_comments_in_its_place() {
                 Move {
                     name: "P1",
                     waypoint: &a,
-                    notes: Vec::new(),
-                    offset: None,
+                    before: Vec::new(),
+                    place: None,
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
-                    notes: vec!["close gripper grip_a".into()],
-                    offset: None,
+                    before: vec!["close gripper grip_a".into()],
+                    place: None,
                 },
             ],
             close: false,
@@ -232,7 +234,7 @@ fn what_cannot_be_said_yet_is_left_as_comments_in_its_place() {
             flange,
             trailing: vec!["wait for machine".into()],
             markers: false,
-            globals: Vec::new(),
+            pallets: Vec::new(),
         },
     )
     .unwrap();
@@ -253,4 +255,57 @@ fn what_cannot_be_said_yet_is_left_as_comments_in_its_place() {
             .count()
             == 2
     );
+}
+
+#[test]
+fn what_the_program_does_between_moves_reads_as_urscript() {
+    let doc = load(UR5E);
+    let (_, root) = find(&doc, "base_link");
+    let (_, base) = find(&doc, "base");
+    let (_, flange) = find(&doc, "tool0");
+    let kin = Kinematics::of(&doc, root).unwrap();
+    let tool = kin.tool(flange, DAffine3::IDENTITY).unwrap();
+    let a = wp(MoveKind::Joint, [0.3, -1.2, 1.4, -1.6, -1.5, 0.2], 0.5);
+    let script = urscript(
+        &kin,
+        &tool,
+        &Export {
+            name: "ops",
+            moves: vec![Move {
+                name: "P1",
+                waypoint: &a,
+                before: Vec::new(),
+                place: None,
+            }],
+            close: false,
+            base,
+            flange,
+            trailing: vec![
+                Op::Set { port: 9, on: true },
+                Op::Pulse {
+                    port: 16,
+                    seconds: 0.2,
+                },
+                Op::Wait { port: 3, on: false },
+                Op::Sleep(1.0),
+                Op::Note("hand\nover".into()),
+            ],
+            pallets: Vec::new(),
+            markers: false,
+        },
+    )
+    .unwrap();
+    let body: Vec<&str> = script.lines().map(str::trim).collect();
+    for line in [
+        "set_configurable_digital_out(1, True)",
+        "set_tool_digital_out(0, True)",
+        "sleep(0.2)",
+        "set_tool_digital_out(0, False)",
+        "while (get_standard_digital_in(3)):",
+        "sync()",
+        "sleep(1.00)",
+        "# hand?over",
+    ] {
+        assert!(body.contains(&line), "{line} in\n{script}");
+    }
 }

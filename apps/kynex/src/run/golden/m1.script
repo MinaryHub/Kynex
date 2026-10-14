@@ -1,0 +1,74 @@
+# Made by KYNEX from program "UR10e + ?? ??? 1".
+# Poses in the base frame, metres and rotation vectors.
+def UR10e__________1():
+  set_tcp(p[0.000000, 0.070000, 0.170000, 0.000000, 0.000000, 0.000000])
+  # To the start
+  write_output_integer_register(0, 1)
+  # P1
+  movej([2.996620, -1.028332, 1.310043, -1.852509, -1.570796, 1.425824], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 1)
+  write_output_integer_register(0, 2)
+  # P2
+  movel(p[0.999999, 0.100000, 0.110000, 0.000002, 3.141586, 0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 2)
+  # KYNEX, not exported until its I/O is mapped: close gripper grip_a
+  write_output_integer_register(0, 3)
+  # P3
+  movel(p[0.999999, 0.100000, 0.259999, 0.000002, 3.141584, 0.000000], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 3)
+  # KYNEX, not exported until its I/O is mapped: tell CNC ?? 1 to open
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+  write_output_integer_register(0, 4)
+  # P4
+  movej([1.421393, -0.566189, 0.138269, -1.142901, -1.570794, -0.149403], a=6.2832, v=1.0472)
+  write_output_integer_register(1, 4)
+  write_output_integer_register(0, 5)
+  # P5
+  movel(p[-0.000000, -1.100000, 0.310000, -0.000000, -3.141593, 0.000003], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 5)
+  # KYNEX, not exported until its I/O is mapped: open gripper grip_a
+  write_output_integer_register(0, 6)
+  # P6
+  movel(p[-0.000000, -1.099993, 0.459996, -0.000000, -3.141592, 0.000041], a=1.2000, v=0.2500, r=0.0500)
+  write_output_integer_register(1, 6)
+  write_output_integer_register(0, 7)
+  # P7
+  movel(p[0.000000, -0.499998, 0.459999, -0.000001, -3.141591, 0.000008], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 7)
+  # KYNEX, not exported until its I/O is mapped: tell CNC ?? 1 to clamp
+  # KYNEX, not exported until its I/O is mapped: tell CNC ?? 1 to close
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_closed
+  # KYNEX, not exported until its I/O is mapped: tell CNC ?? 1 to start
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say done
+  # KYNEX, not exported until its I/O is mapped: tell CNC ?? 1 to open
+  # KYNEX, not exported until its I/O is mapped: wait for CNC ?? 1 to say door_open
+  # KYNEX, not exported until its I/O is mapped: tell CNC ?? 1 to unclamp
+  write_output_integer_register(0, 8)
+  # P8
+  movel(p[-0.000000, -1.099992, 0.459995, -0.000000, -3.141592, 0.000048], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 8)
+  write_output_integer_register(0, 9)
+  # P9
+  movel(p[-0.000000, -1.100000, 0.307500, -0.000000, -3.141593, 0.000003], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 9)
+  # KYNEX, not exported until its I/O is mapped: close gripper grip_a
+  write_output_integer_register(0, 10)
+  # P10
+  movel(p[-0.000000, -1.099993, 0.459996, -0.000000, -3.141592, 0.000042], a=1.2000, v=0.2500, r=0.0500)
+  write_output_integer_register(1, 10)
+  write_output_integer_register(0, 11)
+  # P11
+  movej([4.294713, -1.184500, 1.545182, -1.931501, -1.570786, 2.723906], a=6.2832, v=1.0472, r=0.0500)
+  write_output_integer_register(1, 11)
+  write_output_integer_register(0, 12)
+  # P12
+  movel(p[0.200000, 0.949999, 0.110000, 0.000000, 3.141591, 0.000009], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 12)
+  # KYNEX, not exported until its I/O is mapped: open gripper grip_a
+  write_output_integer_register(0, 13)
+  # P13
+  movel(p[0.200000, 0.949999, 0.259999, 0.000000, 3.141591, 0.000011], a=1.2000, v=0.2500)
+  write_output_integer_register(1, 13)
+  write_output_integer_register(0, 14)
+end
+UR10e__________1()

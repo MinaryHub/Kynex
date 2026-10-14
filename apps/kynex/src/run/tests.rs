@@ -1461,3 +1461,38 @@ fn ursim_stage_one() {
     )
     .unwrap();
 }
+
+/// The programs exported as they were when the export was taken apart
+/// into a vendor's writer over a program any vendor reads
+/// (`kynex_kin::post`): the M1 program timed, the M1 program wired, and
+/// stage 1's cell. Kept in `golden/`; an export that writes them otherwise
+/// fails here. When a change to them is meant, write them again with the
+/// ignored `ursim_*` tests and copy them from `target/ursim`.
+#[test]
+fn the_exports_are_as_they_were() {
+    ursim_program();
+    ursim_wired_program();
+    ursim_stage_one();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ursim");
+    for (name, golden) in [
+        ("m1", include_str!("golden/m1.script")),
+        ("m1_io", include_str!("golden/m1_io.script")),
+        ("stage1", include_str!("golden/stage1.script")),
+    ] {
+        let made = std::fs::read_to_string(dir.join(format!("{name}.script"))).unwrap();
+        let (made, golden) = (made.replace("\r\n", "\n"), golden.replace("\r\n", "\n"));
+        if made != golden {
+            let at = made
+                .lines()
+                .zip(golden.lines())
+                .position(|(a, b)| a != b)
+                .unwrap_or(made.lines().count().min(golden.lines().count()));
+            panic!(
+                "{name}: line {} differs\n  made:   {:?}\n  golden: {:?}",
+                at + 1,
+                made.lines().nth(at),
+                golden.lines().nth(at)
+            );
+        }
+    }
+}

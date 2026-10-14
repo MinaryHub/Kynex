@@ -1,4 +1,5 @@
-//! A program as URScript, for a Universal Robots controller.
+//! A program as URScript, for a Universal Robots controller: the writer
+//! for Universal Robots (see [`crate::post`]).
 //!
 //! Joint moves go as `movej` with the taught joint positions, exactly;
 //! linear moves as `movel` to the taught tool pose, which the controller
@@ -12,60 +13,85 @@
 //! [`path::JOINT_ACCELERATION`]; a linear move's speed is its own, at
 //! [`path::LINEAR_ACCELERATION`]. The controller times its moves in its own
 //! way, so a cycle on the robot is close to the planned one, not equal.
+//!
+//! I/O: KYNEX's 0–7 are the standard digital I/O, 8–15 the configurable,
+//! 16 and 17 the tool's. Pallet places are listed at the top, each
+//! pallet's count beside them; a point on a pallet is moved by
+//! `pose_add`.
 
 use std::fmt::Write;
 
 use kreate_math::{DAffine3, DQuat};
 use kreate_scene::robot::JointKind;
 
-use crate::path::{self, MoveKind, Waypoint};
+use crate::path::{self, MoveKind};
+pub use crate::post::{comment, Export, Move, Op, Place, Places};
+use crate::post::{identifier, Writer};
 use crate::{Kinematics, Tool};
 
-/// A line the program has between its moves: script, or a comment for
-/// what the script cannot say yet.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Line {
-    Note(String),
-    /// URScript, its own lines indented within it as they go.
-    Code(String),
-}
+/// Universal Robots: URScript.
+pub struct Ur;
 
-impl From<&str> for Line {
-    fn from(note: &str) -> Self {
-        Line::Note(note.to_string())
+impl Writer for Ur {
+    fn vendor(&self) -> &'static str {
+        "Universal Robots"
+    }
+
+    fn extension(&self) -> &'static str {
+        "script"
+    }
+
+    fn write(&self, kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, String> {
+        urscript(kin, tool, export)
     }
 }
 
-/// One move of the program: the point it reaches, by its name, and what
-/// the program does before it.
-pub struct Move<'a> {
-    pub name: &'a str,
-    pub waypoint: &'a Waypoint,
-    pub notes: Vec<Line>,
-    /// A pose the move's target is moved by, as a URScript expression —
-    /// a pallet's place, counted in the script — or none.
-    pub offset: Option<String>,
+/// URScript setting digital output `n`.
+fn set_out(n: u32, on: bool) -> String {
+    let on = if on { "True" } else { "False" };
+    match n {
+        0..=7 => format!("set_standard_digital_out({n}, {on})"),
+        8..=15 => format!("set_configurable_digital_out({}, {on})", n - 8),
+        _ => format!("set_tool_digital_out({}, {on})", n - 16),
+    }
 }
 
-pub struct Export<'a> {
-    /// The script's function: letters, digits and `_` are kept.
-    pub name: &'a str,
-    pub moves: Vec<Move<'a>>,
-    /// Round again forever, back to the first point after the last.
-    pub close: bool,
-    /// The controller's base frame, by identity: the `base` link.
-    pub base: u64,
-    /// The flange the tool point is set from (`tool0`).
-    pub flange: u64,
-    /// What the program does after its last move.
-    pub trailing: Vec<Line>,
-    /// Lines at the top of the function: what the moves and lines use.
-    pub globals: Vec<String>,
-    /// Number the moves on output integer register 0 as they start — 1,
-    /// 2, … and one past the last at the end — and on register 1 as each
-    /// is done, for timing them on a controller or URSim (see
-    /// `tools/ursim`).
-    pub markers: bool,
+/// URScript reading digital input `n`.
+fn get_in(n: u32) -> String {
+    match n {
+        0..=7 => format!("get_standard_digital_in({n})"),
+        8..=15 => format!("get_configurable_digital_in({})", n - 8),
+        _ => format!("get_tool_digital_in({})", n - 16),
+    }
+}
+
+/// `op` as URScript lines.
+fn op_lines(op: &Op, pallets: &[Places]) -> Vec<String> {
+    match op {
+        Op::Note(n) => vec![format!("# {}", comment(n))],
+        Op::Set { port, on } => vec![set_out(*port, *on)],
+        Op::Pulse { port, seconds } => vec![
+            set_out(*port, true),
+            format!("sleep({seconds})"),
+            set_out(*port, false),
+        ],
+        Op::Wait { port, on } => vec![
+            if *on {
+                format!("while (not {}):", get_in(*port))
+            } else {
+                format!("while ({}):", get_in(*port))
+            },
+            "  sync()".to_string(),
+            "end".to_string(),
+        ],
+        Op::Sleep(seconds) => vec![format!("sleep({seconds:.2})")],
+        Op::Next { pallet } => {
+            let n = pallets.get(*pallet).map_or(1, |p| p.at.len().max(1));
+            vec![format!(
+                "kynex_place_{pallet} = (kynex_place_{pallet} + 1) % {n}"
+            )]
+        }
+    }
 }
 
 /// The program as a URScript file, or why it cannot be one.
@@ -92,12 +118,12 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
         .map(|v| v.velocity)
         .fold(f64::INFINITY, f64::min);
 
-    let name = function_name(export.name);
+    let name = identifier(export.name);
     let mut out = String::new();
     let _ = writeln!(
         out,
         "# Made by KYNEX from program \"{}\".",
-        ascii(export.name)
+        comment(export.name)
     );
     let _ = writeln!(
         out,
@@ -105,24 +131,21 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     );
     let _ = writeln!(out, "def {name}():");
     let _ = writeln!(out, "  set_tcp({})", pose(&tcp));
-    for g in &export.globals {
-        // One line each: nothing smuggled in on another.
-        if g.contains(['\n', '\r']) {
-            return Err("URScript: a global spans lines".into());
-        }
-        let _ = writeln!(out, "  {g}");
+    // The pallets' places, and each one's count.
+    for (k, pallet) in export.pallets.iter().enumerate() {
+        let places: Vec<String> = pallet
+            .at
+            .iter()
+            .map(|p| format!("p[{:.6}, {:.6}, {:.6}, 0, 0, 0]", p.x, p.y, p.z))
+            .collect();
+        let _ = writeln!(out, "  # The places of {}", comment(&pallet.name));
+        let _ = writeln!(out, "  kynex_places_{k} = [{}]", places.join(", "));
+        let _ = writeln!(out, "  kynex_place_{k} = 0");
     }
-    let notes = |out: &mut String, indent: &str, notes: &[Line]| {
-        for n in notes {
-            match n {
-                Line::Note(n) => {
-                    let _ = writeln!(out, "{indent}# {}", ascii(n));
-                }
-                Line::Code(code) => {
-                    for line in code.lines() {
-                        let _ = writeln!(out, "{indent}{line}");
-                    }
-                }
+    let notes = |out: &mut String, indent: &str, ops: &[Op]| {
+        for op in ops {
+            for line in op_lines(op, &export.pallets) {
+                let _ = writeln!(out, "{indent}{line}");
             }
         }
     };
@@ -152,18 +175,20 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     };
     let step = |out: &mut String, indent: &str, m: &Move, kind: MoveKind| {
         let w = m.waypoint;
-        let _ = writeln!(out, "{indent}# {}", ascii(m.name));
+        let _ = writeln!(out, "{indent}# {}", comment(m.name));
         // Passed without stopping, within the blend radius.
         let r = if w.blend > 0.0 {
             format!(", r={:.4}", w.blend)
         } else {
             String::new()
         };
-        // A pose, moved by the move's offset if it has one.
+        // A pose, moved to the pallet place counted to if it is on one.
         let target = |q: &[f64]| {
             let p = pose(&(base.inverse() * kin.pose(q, tool)));
-            match &m.offset {
-                Some(o) => format!("pose_add({p}, {o})"),
+            match m.place {
+                Some(Place { pallet: k, from }) => format!(
+                    "pose_add({p}, pose_sub(kynex_places_{k}[kynex_place_{k}], kynex_places_{k}[{from}]))"
+                ),
                 None => p,
             }
         };
@@ -175,7 +200,7 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
                 // taught, as KYNEX solves it: left to itself, the
                 // controller takes the solution nearest wherever the arm
                 // happens to be, which may be another posture altogether.
-                let to = if m.offset.is_some() {
+                let to = if m.place.is_some() {
                     format!(
                         "get_inverse_kin({}, qnear={})",
                         target(&w.positions),
@@ -229,7 +254,7 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     // Wherever the robot stands, it goes to the first point by its joints:
     // a line from an unknown pose could go anywhere.
     let first = &export.moves[0];
-    notes(&mut out, "  ", &first.notes);
+    notes(&mut out, "  ", &first.before);
     let _ = writeln!(out, "  # To the start");
     marker(&mut out, "  ");
     step(&mut out, "  ", first, MoveKind::Joint);
@@ -238,21 +263,21 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     if export.close {
         let _ = writeln!(out, "  while (True):");
         for m in rest {
-            notes(&mut out, "    ", &m.notes);
+            notes(&mut out, "    ", &m.before);
             marker(&mut out, "    ");
             step(&mut out, "    ", m, m.waypoint.kind);
             ended(&mut out, "    ");
         }
         notes(&mut out, "    ", &export.trailing);
         // Round again: what came before the first move comes again too.
-        notes(&mut out, "    ", &first.notes);
+        notes(&mut out, "    ", &first.before);
         marker(&mut out, "    ");
         step(&mut out, "    ", first, first.waypoint.kind);
         ended(&mut out, "    ");
         let _ = writeln!(out, "  end");
     } else {
         for m in rest {
-            notes(&mut out, "  ", &m.notes);
+            notes(&mut out, "  ", &m.before);
             marker(&mut out, "  ");
             step(&mut out, "  ", m, m.waypoint.kind);
             ended(&mut out, "  ");
@@ -288,38 +313,6 @@ fn rotation_vector(r: DQuat) -> kreate_math::DVec3 {
 fn joints(q: &[f64]) -> String {
     let list: Vec<String> = q.iter().map(|x| format!("{x:.6}")).collect();
     format!("[{}]", list.join(", "))
-}
-
-/// A URScript identifier: letters, digits and `_`, starting with a letter.
-fn function_name(name: &str) -> String {
-    let mut out: String = name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    if !out.starts_with(|c: char| c.is_ascii_alphabetic()) {
-        out.insert_str(0, "kynex_");
-    }
-    out
-}
-
-/// Text for a comment: the controller reads ASCII.
-/// `text` safe in a comment: ASCII, and no control character — a name with
-/// a line break in it would otherwise end the comment and put its own
-/// script into the program.
-pub fn comment(text: &str) -> String {
-    ascii(text)
-}
-
-fn ascii(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c.is_ascii() && !c.is_ascii_control() {
-                c
-            } else {
-                '?'
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -271,7 +271,13 @@ identity and by name. When Kreate builds the scene again and numbers the
 objects anew, the program finds them again by name.
 
 **URScript** downloads the program as a `.script` file for a Universal
-Robots controller (`kynex_kin::urscript`). The program must be for a robot
+Robots controller. The program is first made into one any vendor's
+controller can be given (`kynex_kin::post`: its moves, and between them
+outputs set or pulsed, inputs waited for, pauses, a pallet's count moved
+on), then written by the vendor's writer (`kynex_kin::urscript` for
+Universal Robots). The exports of three programs are kept as they are
+(`apps/kynex/src/run/golden`): a writer that writes them otherwise fails
+the tests. The program must be for a robot
 with six revolute joints. Actions go as script once the cell is wired to
 the controller: under **I/O 연결** in the inspector of a gripper, a
 machine or a conveyor, give each of its outputs and inputs a number (0–7

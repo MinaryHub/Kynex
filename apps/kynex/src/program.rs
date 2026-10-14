@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use kreate_math::{DAffine3, DVec3};
 use kreate_scene::Document;
 use kynex_kin::path::{self, MoveKind, Plan, Problem, Waypoint};
-use kynex_kin::urscript::{self, Export, Line, Move};
+use kynex_kin::post::{Export, Move, Op, Place, Places, Writer};
 use kynex_kin::{Goal, Kinematics, Options, Tool};
 use serde_json::{json, Value};
 
@@ -614,15 +614,8 @@ impl Program {
         Some((root, program))
     }
 
-    /// The program as URScript for a UR controller, and a file name for it.
-    /// With `markers`, the moves are numbered on an output register, to be
-    /// timed (see [`urscript::Export::markers`]).
-    ///
-    /// `cell` says how the cell is wired: an action whose gripper or
-    /// machine is wired goes as script — an output set, an input waited
-    /// for — and one that is not, as a comment where it falls, for whoever
-    /// finishes the program on the controller. Points on a pallet go to the
-    /// place the script counts to, as the run does.
+    /// The program as URScript for a UR controller, and a file name for it
+    /// (see [`Program::export`]).
     pub fn urscript(
         &self,
         root: u64,
@@ -631,9 +624,30 @@ impl Program {
         markers: bool,
         cell: &CellIo,
     ) -> Result<(String, String), String> {
+        self.export(root, doc, kin, markers, cell, &kynex_kin::urscript::Ur)
+    }
+
+    /// The program for a controller, in the language `writer` writes, and
+    /// a file name for it. With `markers`, the moves are numbered on
+    /// output registers, to be timed (see [`kynex_kin::post::Export::markers`]).
+    ///
+    /// `cell` says how the cell is wired: an action whose gripper or
+    /// machine is wired goes as the controller's — an output set, an input
+    /// waited for — and one that is not, as a comment where it falls, for
+    /// whoever finishes the program on the controller. Points on a pallet
+    /// go to the place the program counts to, as the run does.
+    pub fn export(
+        &self,
+        root: u64,
+        doc: &Document,
+        kin: &Kinematics,
+        markers: bool,
+        cell: &CellIo,
+        writer: &dyn Writer,
+    ) -> Result<(String, String), String> {
         let tool = self.tool(kin).ok_or("툴이 정해지지 않았습니다")?;
         let names = names(doc);
-        // The controller's frames, as ur_description names them.
+        // The controller's frames, as the robots' descriptions name them.
         let named = |want: &[&str]| {
             want.iter().find_map(|w| {
                 names
@@ -655,8 +669,8 @@ impl Program {
             .unwrap_or_default();
         let base_at = kin.world_of(&any, base).ok_or("no base frame")?;
 
-        // The pallets the program counts through: each its places, in the
-        // base frame, and a count from 0.
+        // The pallets the program counts through, their places in the base
+        // frame.
         let mut pallets: Vec<u64> = Vec::new();
         for step in &self.steps {
             let pallet = match step {
@@ -670,25 +684,19 @@ impl Program {
                 }
             }
         }
-        let mut globals = Vec::new();
-        for (k, pallet) in pallets.iter().enumerate() {
-            let places: Vec<String> = cell.pallets[pallet]
-                .iter()
-                .map(|at| {
-                    let p = base_at.inverse().transform_point3(*at);
-                    format!("p[{:.6}, {:.6}, {:.6}, 0, 0, 0]", p.x, p.y, p.z)
-                })
-                .collect();
-            globals.push(format!(
-                "# The places of {}",
-                urscript::comment(&name(*pallet))
-            ));
-            globals.push(format!("kynex_places_{k} = [{}]", places.join(", ")));
-            globals.push(format!("kynex_place_{k} = 0"));
-        }
-        // How far the place a point's pallet has counted to is from the
-        // place it was taught over (see `crate::run`).
-        let offset = |p: &Point| -> Option<String> {
+        let places: Vec<Places> = pallets
+            .iter()
+            .map(|pallet| Places {
+                name: name(*pallet),
+                at: cell.pallets[pallet]
+                    .iter()
+                    .map(|at| base_at.inverse().transform_point3(*at))
+                    .collect(),
+            })
+            .collect();
+        // The place a point was taught over: the nearest, seen from above,
+        // the tool point or a grip point (see `crate::run`).
+        let place = |p: &Point| -> Option<Place> {
             let pallet = p.pallet?;
             let k = pallets.iter().position(|q| *q == pallet)?;
             let slots = &cell.pallets[&pallet];
@@ -709,26 +717,24 @@ impl Program {
                     .fold(f64::INFINITY, f64::min)
             };
             let from = (0..slots.len()).min_by(|a, b| gap(*a).total_cmp(&gap(*b)))?;
-            Some(format!(
-                "pose_sub(kynex_places_{k}[kynex_place_{k}], kynex_places_{k}[{from}])"
-            ))
+            Some(Place { pallet: k, from })
         };
 
         let mut moves = Vec::new();
-        let mut lines = Vec::new();
+        let mut ops = Vec::new();
         let mut next = waypoints.iter();
         for step in &self.steps {
             match step {
                 Step::Move(p) => moves.push(Move {
                     name: &p.name,
                     waypoint: next.next().expect("a waypoint per move"),
-                    notes: std::mem::take(&mut lines),
-                    offset: offset(p),
+                    before: std::mem::take(&mut ops),
+                    place: place(p),
                 }),
-                Step::Do(a) => lines.push(action_line(a, cell, &pallets, &name)),
+                Step::Do(a) => ops.extend(action_ops(a, cell, &pallets, &name)),
             }
         }
-        let script = urscript::urscript(
+        let script = writer.write(
             kin,
             &tool,
             &Export {
@@ -737,8 +743,8 @@ impl Program {
                 close: self.close,
                 base,
                 flange,
-                trailing: lines,
-                globals,
+                trailing: ops,
+                pallets: places,
                 markers,
             },
         )?;
@@ -752,7 +758,7 @@ impl Program {
                 }
             })
             .collect();
-        Ok((script, format!("{file}.script")))
+        Ok((script, format!("{file}.{}", writer.extension())))
     }
 
     pub fn tool(&self, kin: &Kinematics) -> Option<Tool> {
@@ -960,37 +966,13 @@ impl CellIo {
 /// machine sees.
 const PULSE: f64 = 0.2;
 
-/// URScript setting digital output `n` (0–7 standard, 8–15 configurable,
-/// 16–17 the tool's).
-fn set_out(n: u32, on: bool) -> String {
-    let on = if on { "True" } else { "False" };
-    match n {
-        0..=7 => format!("set_standard_digital_out({n}, {on})"),
-        8..=15 => format!("set_configurable_digital_out({}, {on})", n - 8),
-        _ => format!("set_tool_digital_out({}, {on})", n - 16),
-    }
-}
-
-/// URScript reading digital input `n`, numbered as [`set_out`] numbers.
-fn get_in(n: u32) -> String {
-    match n {
-        0..=7 => format!("get_standard_digital_in({n})"),
-        8..=15 => format!("get_configurable_digital_in({})", n - 8),
-        _ => format!("get_tool_digital_in({})", n - 16),
-    }
-}
-
-/// URScript waiting until `condition` holds.
-fn wait_until(condition: &str) -> String {
-    format!("while (not {condition}):\n  sync()\nend")
-}
-
-/// Action `a` as script where the cell is wired for it, or as a comment.
-fn action_line(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) -> String) -> Line {
+/// Action `a` as the controller does it where the cell is wired for it,
+/// or as a comment.
+fn action_ops(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) -> String) -> Vec<Op> {
     let note = |what: String| {
-        Line::Note(format!(
+        vec![Op::Note(format!(
             "KYNEX, not exported until its I/O is mapped: {what}"
-        ))
+        ))]
     };
     match a {
         Action::Grip { gripper } | Action::Release { gripper } => {
@@ -1001,37 +983,35 @@ fn action_line(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) ->
             };
             // Closed: its sensor says so, or else its time is let pass.
             let settle = match cell.port(*gripper, "closed") {
-                Some(n) if close => wait_until(&get_in(n)),
-                Some(n) => wait_until(&format!("not {}", get_in(n))),
-                None => format!(
-                    "sleep({:.2})",
-                    cell.actuate.get(gripper).copied().unwrap_or(0.5)
-                ),
+                Some(n) => Op::Wait { port: n, on: close },
+                None => Op::Sleep(cell.actuate.get(gripper).copied().unwrap_or(0.5)),
             };
-            Line::Code(format!("{}\n{settle}", set_out(out, close)))
+            vec![
+                Op::Set {
+                    port: out,
+                    on: close,
+                },
+                settle,
+            ]
         }
         Action::Command { machine, command } => match cell.port(*machine, command.tag()) {
-            Some(n) => Line::Code(format!(
-                "{}\nsleep({PULSE})\n{}",
-                set_out(n, true),
-                set_out(n, false)
-            )),
+            Some(port) => vec![Op::Pulse {
+                port,
+                seconds: PULSE,
+            }],
             None => note(format!("tell {} to {}", name(*machine), command.tag())),
         },
         Action::Wait { machine, signal } => match cell.port(*machine, signal.tag()) {
-            Some(n) => Line::Code(wait_until(&get_in(n))),
+            Some(port) => vec![Op::Wait { port, on: true }],
             None => note(format!(
                 "wait for {} to say {}",
                 name(*machine),
                 signal.tag()
             )),
         },
-        Action::Delay { seconds } => Line::Code(format!("sleep({seconds})")),
+        Action::Delay { seconds } => vec![Op::Sleep(*seconds)],
         Action::Next { pallet } => match pallets.iter().position(|p| p == pallet) {
-            Some(k) => Line::Code(format!(
-                "kynex_place_{k} = (kynex_place_{k} + 1) % {}",
-                cell.pallets[pallet].len()
-            )),
+            Some(k) => vec![Op::Next { pallet: k }],
             None => note(format!(
                 "move pallet {} on to its next place",
                 name(*pallet)

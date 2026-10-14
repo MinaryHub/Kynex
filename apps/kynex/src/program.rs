@@ -229,6 +229,24 @@ impl Program {
         Ok(added)
     }
 
+    /// Moves steps `from` to `to` one place earlier (`up`) or later, past
+    /// the step beside them. Returns whether they moved: not past either
+    /// end.
+    pub fn shift(&mut self, from: usize, to: usize, up: bool) -> bool {
+        if from > to || to >= self.steps.len() {
+            return false;
+        }
+        if up && from > 0 {
+            self.steps[from - 1..=to].rotate_left(1);
+            true
+        } else if !up && to + 1 < self.steps.len() {
+            self.steps[from..=to + 1].rotate_right(1);
+            true
+        } else {
+            false
+        }
+    }
+
     /// The pallets it goes through place by place: those it moves on.
     pub fn counted_pallets(&self) -> Vec<u64> {
         let mut out: Vec<u64> = self
@@ -645,6 +663,7 @@ pub fn is_op(op: &str) -> bool {
             | "goto"
             | "urscript"
             | "copy"
+            | "shift"
     )
 }
 

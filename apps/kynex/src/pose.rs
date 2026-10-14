@@ -487,6 +487,18 @@ impl Posing {
                 mark_joints(kin.joints(), touched);
                 return Ok(json!({ "ok": true }));
             }
+            "shift" => {
+                let at = |key: &str| {
+                    req[key]
+                        .as_u64()
+                        .map(|i| i as usize)
+                        .ok_or(format!("no {key}"))
+                };
+                let up = req["up"].as_bool().ok_or("up is true or false")?;
+                if !program.shift(at("from")?, at("to")?, up) {
+                    return Err("더 옮길 수 없습니다".into());
+                }
+            }
             "copy" => {
                 let at = |key: &str| {
                     req[key]

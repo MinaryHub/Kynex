@@ -441,8 +441,13 @@ export class RobotPanel {
       }
       const firstMove = points.findIndex((p) => p.type === 'move');
       // A span picked with Shift: copied as one for another machine.
-      const span = ui.anchor != null && ui.cursor != null ? [Math.min(ui.anchor, ui.cursor), Math.max(ui.anchor, ui.cursor)] : null;
-      const inRange = (i) => !!span && i >= span[0] && i <= span[1];
+      const span =
+        ui.cursor == null
+          ? null
+          : ui.anchor != null
+            ? [Math.min(ui.anchor, ui.cursor), Math.max(ui.anchor, ui.cursor)]
+            : [ui.cursor, ui.cursor];
+      const inRange = (i) => !!span && span[1] > span[0] && i >= span[0] && i <= span[1];
       this.renderCopyBar(section, span);
       const rows = points.map((p, i) => {
         if (p.type !== 'move') return this.actionRow(r, p, i, i === ui.cursor, inRange(i));
@@ -555,18 +560,24 @@ export class RobotPanel {
       .join('')}</select></div>`;
   }
 
-  // Under the add buttons, while a span is picked: copy it for another
-  // machine.
+  // Under the add buttons, while a step or a span is picked: move it up or
+  // down, or copy the span for another machine.
   renderCopyBar(section, span) {
     const { escapeHtml } = this.ctx;
     const bar = section.querySelector('.copy-bar');
+    bar.hidden = !span;
+    if (!span) return;
     const machines = this.machines();
-    bar.hidden = !span || span[1] <= span[0] || machines.length < 2;
-    if (bar.hidden) return;
-    bar.innerHTML = `<span>${span[0] + 1}–${span[1] + 1}단계를</span>
-      <select data-opt="copyto" aria-label="복제할 CNC"><option value="">CNC 골라 복제…</option>${machines
-        .map(([u, n]) => `<option value="${escapeHtml(u)}">${escapeHtml(n)}용으로 복제</option>`)
-        .join('')}</select>`;
+    const copy =
+      span[1] > span[0] && machines.length > 1
+        ? `<select data-opt="copyto" aria-label="복제할 CNC"><option value="">CNC 골라 복제…</option>${machines
+            .map(([u, n]) => `<option value="${escapeHtml(u)}">${escapeHtml(n)}용으로 복제</option>`)
+            .join('')}</select>`
+        : '<span class="muted">Shift+클릭으로 구간 선택</span>';
+    bar.innerHTML = `<span>${span[0] === span[1] ? `${span[0] + 1}단계` : `${span[0] + 1}–${span[1] + 1}단계`}</span>
+      <button class="icon-mini" data-act="shift-up" title="한 칸 위로">↑</button>
+      <button class="icon-mini" data-act="shift-down" title="한 칸 아래로">↓</button>
+      ${copy}`;
   }
 
   machines() {
@@ -960,6 +971,16 @@ export class RobotPanel {
       });
     } else if (act === 'clear') {
       if (confirm('이 로봇의 프로그램 지점을 모두 지울까요?')) this.programOp(r, { op: 'clear' });
+    } else if (act === 'shift-up' || act === 'shift-down') {
+      const up = act === 'shift-up';
+      const from = Math.min(ui.anchor ?? ui.cursor, ui.cursor);
+      const to = Math.max(ui.anchor ?? ui.cursor, ui.cursor);
+      this.programOp(r, { op: 'shift', from, to, up }, () => {
+        const by = up ? -1 : 1;
+        ui.cursor += by;
+        if (ui.anchor != null) ui.anchor += by;
+        this.renderPrograms();
+      });
     } else if (act === 'frame' && index != null) {
       const point = this.programs[r.root]?.steps[index];
       if (point?.frame) this.programOp(r, { op: 'edit', index, frame: null });

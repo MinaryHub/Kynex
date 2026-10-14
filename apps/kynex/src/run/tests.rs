@@ -677,3 +677,28 @@ fn work_taught_at_one_machine_is_copied_for_another() {
     let parts = cell["parts"].as_array().unwrap();
     assert_eq!(parts.iter().filter(|p| p["finished"] == true).count(), 2);
 }
+
+#[test]
+fn steps_move_up_and_down_past_their_neighbours() {
+    let delay = |s: f64| Step::Do(Action::Delay { seconds: s });
+    let mut p = crate::program::Program::default();
+    p.steps = (0..5).map(|i| delay(i as f64)).collect();
+    let order = |p: &crate::program::Program| -> Vec<f64> {
+        p.steps
+            .iter()
+            .map(|s| match s {
+                Step::Do(Action::Delay { seconds }) => *seconds,
+                _ => -1.0,
+            })
+            .collect()
+    };
+    // Steps 1 and 2 up, past step 0; then down twice.
+    assert!(p.shift(1, 2, true));
+    assert_eq!(order(&p), [1.0, 2.0, 0.0, 3.0, 4.0]);
+    assert!(p.shift(0, 1, false));
+    assert!(p.shift(1, 2, false));
+    assert_eq!(order(&p), [0.0, 3.0, 1.0, 2.0, 4.0]);
+    // Not past either end.
+    assert!(!p.shift(0, 0, true));
+    assert!(!p.shift(4, 4, false));
+}

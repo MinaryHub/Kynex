@@ -154,6 +154,10 @@ KYNEX times the moves (`kynex_kin::path`):
   - The place a point was taught over is the one nearest the tool point
     or a grip point, so a double gripper's offset grip points count too.
   - A place the arm cannot reach stops the run with an alarm.
+- **Order**: a picked step, or a span picked with Shift-click, moves up
+  or down past its neighbour with ↑ and ↓ under the add buttons. Tending
+  two machines in turn is laid out this way: load one, load the other,
+  then unload each as it is done.
 - **The same work at another machine**: click a step, then Shift-click
   another to pick the steps between. **CNC 골라 복제…** copies them after
   the span for another machine. Commands and waits for the first machine

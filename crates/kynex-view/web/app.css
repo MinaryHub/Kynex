@@ -537,6 +537,98 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .prog-foot .text-btn + .text-btn { margin-left: 0; }
 .text-btn[hidden] { display: none; }
 
+/* ---- the cell: roles in the inspector, grippers on the robot ----------- */
+.insp-cell { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.insp-props { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.insp-props:empty { display: none; }
+.insp-field { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.insp-field.wide select { flex: 1; }
+.insp-field input, .insp-field select {
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px var(--sans);
+  padding: 0 4px;
+}
+.insp-field input { width: 56px; text-align: right; font-family: var(--mono); }
+.insp-field span { color: var(--faint); font-size: 11px; }
+.insp-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.insp-actions:empty { display: none; }
+.insp-actions .text-btn { margin-left: 0; }
+.warn-text { color: var(--warn); font-size: 11.5px; }
+.insp-state:empty { display: none; }
+.machine-state { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); }
+.machine-state b { color: var(--text); font-weight: 600; }
+.machine-bar { position: relative; height: 18px; margin-top: 6px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.machine-bar span { position: absolute; inset: 0 auto 0 0; background: rgba(63, 207, 142, 0.35); }
+.machine-bar em { position: relative; display: block; text-align: center; font: normal 11px/18px var(--mono); color: var(--text); }
+.text-btn:disabled { opacity: 0.4; cursor: default; }
+.head-btn { margin-left: auto; }
+
+.grippers { display: flex; flex-direction: column; gap: 4px; }
+.grip-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px; font-size: 12px; }
+.grip-name { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grip-state { color: var(--faint); font-size: 11px; }
+.grip-row.holding .grip-state { color: var(--ok); }
+.grip-row .chip-btn { margin-left: 0; height: 22px; padding: 0 9px; }
+.tcp-pick {
+  min-width: 0;
+  max-width: 140px;
+  height: 22px;
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: 11.5px var(--mono);
+}
+
+/* ---- the library: tabs, the list, placed equipment --------------------- */
+.panel-head.tabs { gap: 4px; padding: 8px 10px 6px; }
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.tab.on { background: var(--panel-2); color: var(--text); }
+.tab-page { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tab-page[hidden] { display: none; }
+.lib-hint { font-size: 11.5px; }
+.library { list-style: none; margin: 0; padding: 0 8px 12px; overflow: auto; }
+.lib-group { margin: 10px 4px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; color: var(--faint); }
+.lib-template, .lib-item {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  margin: 2px 0;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--panel-2);
+  cursor: grab;
+  user-select: none;
+}
+.lib-template:hover { border-color: var(--faint); }
+.lib-template.armed { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.lib-item { cursor: pointer; background: transparent; border-style: dashed; color: var(--muted); }
+.lib-item:hover { color: var(--text); }
+#canvas.placing { cursor: crosshair; }
+.insp-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.insp-item[hidden] { display: none; }
+.insp-item-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+
 /* ---- toast ------------------------------------------------------------ */
 .toast {
   position: fixed;

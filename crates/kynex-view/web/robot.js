@@ -71,6 +71,8 @@ export class RobotPanel {
     this.lanes = new Map();
     // Program requests go one after another, none dropped.
     this.queue = Promise.resolve();
+    // The cell, as the `cell` event has it: the grippers on each robot.
+    this.cell = { components: [], parts: [] };
     // By robot root, as the `programs` event has them.
     this.programs = {};
     this.playing = null;
@@ -191,6 +193,23 @@ export class RobotPanel {
     }
   }
 
+  // The `cell` event: which grip points each robot has.
+  setCell(cell) {
+    this.cell = cell;
+    this.render();
+  }
+
+  grippersOf(r) {
+    return this.cell.components.filter((c) => c.kind === 'gripper' && c.robot === r.root);
+  }
+
+  // The link the tool point is on: the robot's tool, or one of its grip
+  // points if chosen.
+  toolOf(r) {
+    const ui = this.uiOf(r);
+    return ui.tool && this.grippersOf(r).some((g) => g.object === ui.tool) ? ui.tool : r.tool;
+  }
+
   // The `programs` event: every robot's program, timed.
   setPrograms(programs) {
     this.programs = programs;
@@ -216,7 +235,9 @@ export class RobotPanel {
     }
     // Same robots and joints as drawn: update the numbers in place, so a pose
     // streaming in does not rebuild the panel under the pointer.
-    const shape = this.robots.map((r) => r.root + ':' + r.tool + ':' + r.joints.map((j) => j.uid + j.kind).join(',')).join('|');
+    const shape = this.robots
+      .map((r) => [r.root, r.tool, this.toolOf(r), ...this.grippersOf(r).map((g) => g.object), ...r.joints.map((j) => j.uid + j.kind)].join(','))
+      .join('|');
     if (host.dataset.shape !== shape) {
       host.dataset.shape = shape;
       host.innerHTML = this.robots.map((r) => this.markup(r, escapeHtml)).join('');
@@ -230,6 +251,25 @@ export class RobotPanel {
   markup(r, escapeHtml) {
     const ui = this.uiOf(r);
     const tool = r.tool ? this.ctx.records.get(r.tool) : null;
+    const grippers = this.grippersOf(r);
+    const current = this.toolOf(r);
+    const nameOf = (uid) => escapeHtml(this.ctx.records.get(uid)?.name ?? uid);
+    const toolPick = grippers.length
+      ? `<select class="tcp-pick" data-opt="tool" title="TCP로 쓸 링크">${[r.tool, ...grippers.map((g) => g.object)]
+          .map((uid) => `<option value="${escapeHtml(uid)}"${uid === current ? ' selected' : ''}>${nameOf(uid)}</option>`)
+          .join('')}</select>`
+      : `<span class="tcp-tool" title="툴 링크">${escapeHtml(tool?.name ?? '')}</span>`;
+    const gripRows = grippers
+      .map(
+        (g) => `
+          <div class="grip-row" data-gripper="${escapeHtml(g.object)}">
+            <span class="grip-name">${nameOf(g.object)}</span>
+            <span class="grip-state"></span>
+            <button class="chip-btn" data-act="grip">잡기</button>
+            <button class="chip-btn" data-act="release">놓기</button>
+          </div>`,
+      )
+      .join('');
     const jog = (axis, label) => `
       <div class="jog-axis">
         <button class="jog-btn" data-jog="${axis}" data-dir="-1" aria-label="${label} −">−</button>
@@ -267,9 +307,10 @@ export class RobotPanel {
         <div class="tcp">
           <div class="tcp-head">
             <span class="tcp-title">TCP</span>
-            <span class="tcp-tool" title="툴 링크">${escapeHtml(tool?.name ?? '')}</span>
+            ${toolPick}
             <button class="chip-btn" data-act="handle" aria-pressed="false" title="장면에서 끌어서 TCP 이동">핸들</button>
           </div>
+          ${gripRows ? `<div class="grippers">${gripRows}</div>` : ''}
           <dl class="tcp-pose num">
             <dt>X</dt><dd data-v="x"></dd><dt>Y</dt><dd data-v="y"></dd><dt>Z</dt><dd data-v="z"></dd>
             <dt>Rx</dt><dd data-v="rx"></dd><dt>Ry</dt><dd data-v="ry"></dd><dt>Rz</dt><dd data-v="rz"></dd>
@@ -414,7 +455,7 @@ export class RobotPanel {
   // with. In order, and none dropped: each changes the program.
   programOp(r, request, then) {
     const ui = this.uiOf(r);
-    const body = { robot: r.root, tool: r.tool, offset: [0, 0, ui.offset / 1000], ...request };
+    const body = { robot: r.root, tool: this.toolOf(r), offset: [0, 0, ui.offset / 1000], ...request };
     this.queue = this.queue.then(async () => {
       try {
         const answer = await post(body);
@@ -460,6 +501,11 @@ export class RobotPanel {
       const e = new THREE.Euler().setFromQuaternion(tcp.quaternion, 'ZYX');
       const v = { x: mm(tcp.position.x), y: mm(tcp.position.y), z: mm(tcp.position.z), rx: deg(e.x), ry: deg(e.y), rz: deg(e.z) };
       for (const [k, text] of Object.entries(v)) box.querySelector(`[data-v="${k}"]`).textContent = text;
+      for (const row of box.querySelectorAll('.grip-row')) {
+        const g = this.cell.components.find((c) => c.object === row.dataset.gripper);
+        row.querySelector('.grip-state').textContent = g?.holding ? '부품 잡음' : '비어 있음';
+        row.classList.toggle('holding', !!g?.holding);
+      }
       const ui = this.uiOf(r);
       const status = box.querySelector('.tcp-status');
       status.textContent = ui.status;
@@ -475,7 +521,8 @@ export class RobotPanel {
   // The tool point's world pose: the tool link's matrix, then the offset
   // along its Z, as KYNEX works it out.
   tcpOf(r) {
-    const rec = r.tool && this.ctx.records.get(r.tool);
+    const tool = this.toolOf(r);
+    const rec = tool && this.ctx.records.get(tool);
     if (!rec) return null;
     const ui = this.uiOf(r);
     const m = new THREE.Matrix4().fromArray(rec.matrix);
@@ -536,7 +583,7 @@ export class RobotPanel {
     this.send(r, {
       op: 'ik',
       robot: r.root,
-      tool: r.tool,
+      tool: this.toolOf(r),
       offset: [0, 0, ui.offset / 1000],
       position: position.toArray(),
       rotation: quaternion ? quaternion.toArray() : null,
@@ -670,6 +717,9 @@ export class RobotPanel {
       this.send(r, { op: 'release', robot: r.root });
     } else if (act === 'handle') {
       this.showHandle(this.handleRoot === r.root ? null : r.root);
+    } else if (act === 'grip' || act === 'release') {
+      const gripper = e.target.closest('[data-gripper]').dataset.gripper;
+      this.programOp(r, { op: act, gripper });
     } else if (act === 'teach') {
       this.programOp(r, { op: 'teach', kind: e.target.closest('[data-kind]').dataset.kind });
     } else if (act === 'play') {
@@ -720,6 +770,12 @@ export class RobotPanel {
       if (this.programs[r.root]) this.programOp(r, { op: 'program' });
     }
     if (opt === 'close') this.programOp(r, { op: 'close', close: e.target.checked });
+    if (opt === 'tool') {
+      ui.tool = e.target.value;
+      this.render();
+      // The program's lines are drawn with the tool point: again for this one.
+      if (this.programs[r.root]) this.programOp(r, { op: 'program' });
+    }
     if (opt === 'speed') {
       const index = Number(e.target.closest('.point').dataset.index);
       const point = this.programs[r.root]?.points[index];

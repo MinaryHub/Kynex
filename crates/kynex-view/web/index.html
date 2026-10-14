@@ -35,15 +35,21 @@
 
 <main class="layout">
   <aside class="panel left" id="tree-panel">
-    <div class="panel-head">
-      <h2>장면</h2>
-      <span class="count" id="object-count">0</span>
+    <div class="panel-head tabs" role="tablist">
+      <button class="tab on" data-tab="scene" role="tab">장면 <span class="count" id="object-count">0</span></button>
+      <button class="tab" data-tab="library" role="tab">라이브러리</button>
     </div>
-    <div class="search">
-      <input id="search" type="search" placeholder="이름으로 찾기" autocomplete="off" spellcheck="false">
+    <div class="tab-page" data-page="scene">
+      <div class="search">
+        <input id="search" type="search" placeholder="이름으로 찾기" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="tree" id="tree" role="tree">
+        <div class="tree-spacer" id="tree-spacer"><ul class="tree-window" id="tree-window"></ul></div>
+      </div>
     </div>
-    <div class="tree" id="tree" role="tree">
-      <div class="tree-spacer" id="tree-spacer"><ul class="tree-window" id="tree-window"></ul></div>
+    <div class="tab-page" data-page="library" hidden>
+      <p class="muted pad lib-hint">장면으로 끌어 놓거나, 눌러서 고른 뒤 장면을 누르세요.</p>
+      <ul class="library" id="library-list"></ul>
     </div>
   </aside>
 
@@ -81,6 +87,13 @@
         <dt>회전 (°)</dt><dd id="insp-rot" class="num"></dd>
         <dt>부모</dt><dd id="insp-parent"></dd>
       </dl>
+      <div class="insp-item" id="insp-item" hidden></div>
+      <div class="insp-cell" id="insp-cell">
+        <label class="insp-field wide">셀 역할 <select id="cell-kind"></select></label>
+        <div class="insp-props" id="cell-props"></div>
+        <div class="insp-state" id="cell-state"></div>
+        <div class="insp-actions" id="cell-actions"></div>
+      </div>
     </div>
 
     <div class="stale" id="stale" role="status" hidden>
@@ -95,6 +108,7 @@
     <div class="panel-head">
       <h2>로봇</h2>
       <span class="count" id="robot-count">0</span>
+      <button class="chip-btn head-btn" id="cell-auto" title="이름으로 CNC, 팔레트, 그리퍼 역할을 정합니다">셀 자동 구성</button>
     </div>
     <div class="robots" id="robots">
       <p class="muted pad">장면에 로봇이 없습니다. Kreate에서 URDF를 불러오면 관절이 여기에 나타납니다.</p>

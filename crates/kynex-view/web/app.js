@@ -8,6 +8,8 @@ import { OrbitControls } from '/vendor/OrbitControls.js';
 import { Batch } from '/batch.js';
 import { Outline } from '/outline.js';
 import { RobotPanel } from '/robot.js';
+import { CellPanel } from '/cell.js';
+import { LibraryPanel } from '/library.js';
 
 // ---- state ------------------------------------------------------------------
 
@@ -463,6 +465,12 @@ function connect() {
   source.addEventListener('pose', (e) => robotPanel.setPose(JSON.parse(e.data)));
   source.addEventListener('programs', (e) => robotPanel.setPrograms(JSON.parse(e.data)));
   source.addEventListener('contacts', (e) => setContacts(JSON.parse(e.data)));
+  source.addEventListener('library', (e) => libraryPanel.setLibrary(JSON.parse(e.data)));
+  source.addEventListener('cell', (e) => {
+    const cell = JSON.parse(e.data);
+    cellPanel.setCell(cell);
+    robotPanel.setCell(cell);
+  });
   // A page served by one KYNEX that reconnects to a newer one would read
   // its stream wrongly: it reloads instead.
   source.addEventListener('hello', (e) => {
@@ -631,6 +639,40 @@ const robotPanel = new RobotPanel({
   toast,
   escapeHtml,
 });
+const cellPanel = new CellPanel({ scene, selected: () => selected, toast, escapeHtml });
+
+// Where a point on the screen lands in the scene: on the part under it, or
+// on the floor.
+const _floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+function pick(x, y) {
+  const r = canvas.getBoundingClientRect();
+  const at = new THREE.Raycaster();
+  at.setFromCamera(new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1), camera);
+  const hit = batch.mesh && at.intersectObject(batch.mesh, false)[0];
+  if (hit) return hit.point;
+  return at.ray.intersectPlane(_floor, new THREE.Vector3());
+}
+
+const libraryPanel = new LibraryPanel({
+  records,
+  scene,
+  camera,
+  canvas,
+  controls,
+  selected: () => selected,
+  select,
+  pick,
+  toast,
+  escapeHtml,
+});
+
+// The left panel's two pages: the scene's tree, and the library.
+document.querySelector('.panel-head.tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-tab]');
+  if (!tab) return;
+  for (const t of document.querySelectorAll('[data-tab]')) t.classList.toggle('on', t === tab);
+  for (const p of document.querySelectorAll('[data-page]')) p.hidden = p.dataset.page !== tab.dataset.tab;
+});
 
 document.getElementById('robots').addEventListener('click', (e) => {
   const row = e.target.closest('.joint');
@@ -699,6 +741,8 @@ function showInspector(uid) {
   document.getElementById('insp-pos').textContent = `${(p.x * 1000).toFixed(1)}, ${(p.y * 1000).toFixed(1)}, ${(p.z * 1000).toFixed(1)}`;
   document.getElementById('insp-rot').textContent = `${deg(e.x)}, ${deg(e.y)}, ${deg(e.z)}`;
   document.getElementById('insp-parent').textContent = rec.parent != null ? records.get(rec.parent)?.name ?? '—' : '—';
+  cellPanel.showFor(uid);
+  libraryPanel.showFor(uid);
   document.getElementById('inspector').hidden = false;
 }
 document.getElementById('insp-close').addEventListener('click', () => select(null));
@@ -709,7 +753,8 @@ let down = null;
 canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
 canvas.addEventListener('pointerup', (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4 || e.button !== 0) return;
-  if (robotPanel.ownsPointer()) return;
+  if (robotPanel.ownsPointer() || libraryPanel.ownsPointer()) return;
+  if (libraryPanel.clicked(e.clientX, e.clientY)) return;
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   const targets = [...gizmos.values()].filter((g) => g.visible);
@@ -807,7 +852,11 @@ window.addEventListener('keydown', (e) => {
   else if (k === '7') frame(selected, 'top');
   else if (k === '1') frame(selected, 'front');
   else if (k === '3') frame(selected, 'right');
-  else if (k === 'escape') select(null);
+  else if (libraryPanel.key(k)) return e.preventDefault();
+  else if (k === 'escape') {
+    libraryPanel.arm(null);
+    select(null);
+  }
   else return;
   e.preventDefault();
 });

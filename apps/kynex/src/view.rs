@@ -206,7 +206,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             server.state("contacts", &collide::contacts_json(shown, &contacts));
             checks.done(started.elapsed());
         }
-        if replaced || changes.is_some() || any_asked {
+        if replaced || changes.is_some() || any_asked || stage.ticking() {
             stage.tell(&server, link.document(), replaced);
         }
     }
@@ -227,6 +227,8 @@ struct Stage {
     placed: Changes,
     /// The program running, and the clock it runs by.
     runner: Option<Runner>,
+    /// When the viewers were last told, while a run goes on.
+    ticked: Option<Instant>,
     clock: Clock,
     /// What the robot and the machines did since the run started, and when
     /// the viewers were last told.
@@ -272,6 +274,7 @@ impl Stage {
             base: None,
             placed: Changes::default(),
             runner: None,
+            ticked: None,
             clock: Clock::default(),
             timeline: None,
             timeline_told: None,
@@ -454,6 +457,21 @@ impl Stage {
         touched
     }
 
+    /// While a program runs, every so often whether or not anything moved:
+    /// a pause counting down, a wait going on, shown as they go.
+    fn ticking(&mut self) -> bool {
+        if !self.runner.as_ref().is_some_and(|r| !r.stopped()) {
+            return false;
+        }
+        let due = self
+            .ticked
+            .is_none_or(|t| t.elapsed() >= Duration::from_millis(250));
+        if due {
+            self.ticked = Some(Instant::now());
+        }
+        due
+    }
+
     /// Whether anything runs by the clock: the loop then keeps time.
     fn running(&self) -> bool {
         self.runner.as_ref().is_some_and(|r| !r.stopped())
@@ -481,13 +499,12 @@ impl Stage {
                     .as_str()
                     .and_then(|s| s.parse::<u64>().ok())
                     .ok_or("no robot")?;
-                let program = self
-                    .posing
-                    .program(root)
-                    .cloned()
-                    .ok_or("프로그램이 없습니다")?;
+                // Its calls replaced by what they call.
+                let (program, origin) = self.posing.runnable(root)?;
                 let scene = self.base.as_ref().unwrap_or(doc);
-                self.runner = Some(Runner::new(root, program, scene, self.clock.time)?);
+                let mut runner = Runner::new(root, program, scene, self.clock.time)?;
+                runner.origin = origin;
+                self.runner = Some(runner);
                 // Parts to take: the infeed stocked as the run starts.
                 self.cell.stock(scene);
                 // A new run, a new record.
@@ -725,7 +742,7 @@ fn offline(
             let contacts = stage.collider.contacts(shown, &stage.cell.held());
             server.state("contacts", &collide::contacts_json(shown, &contacts));
         }
-        if any_asked || touched {
+        if any_asked || touched || stage.ticking() {
             stage.tell(server, &doc, false);
         }
     }

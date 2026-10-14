@@ -79,6 +79,15 @@ pub const LINEAR_SPEED: f64 = 0.25;
 /// The largest blend radius, metres.
 pub const MAX_BLEND: f64 = 0.5;
 
+/// A robot's first program's name: the one a run of the cell goes round.
+pub const MAIN: &str = "메인";
+
+/// How deep calls go: deeper, a program calls itself round.
+const MAX_CALL_DEPTH: usize = 8;
+
+/// The most times a call repeats.
+pub const MAX_TIMES: u32 = 1000;
+
 /// The spacing of a drawn path, seconds.
 const TRACE_STEP: f64 = 0.02;
 
@@ -132,6 +141,8 @@ pub enum Action {
     /// Send AMR `amr` to stop `stop`; a wait for it to say it has arrived
     /// holds the robot until it has.
     Drive { amr: u64, stop: u64 },
+    /// Run the robot's program `routine`, `times` over, and come back.
+    Call { routine: String, times: u32 },
 }
 
 /// One line of a program: a move to a point, or an action.
@@ -146,6 +157,8 @@ pub enum Step {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Program {
+    /// Its name among the robot's programs: how another calls it.
+    pub name: String,
     pub steps: Vec<Step>,
     /// Ends with a move back to the first point: a cycle.
     pub close: bool,
@@ -157,6 +170,16 @@ pub struct Program {
 }
 
 impl Program {
+    /// An empty program `name`, its lines drawn with `tool`.
+    pub fn named(name: &str, tool: Option<u64>, offset: DVec3) -> Self {
+        Self {
+            name: name.to_string(),
+            tool,
+            offset,
+            ..Self::default()
+        }
+    }
+
     /// A point at `positions`, after step `after` or at the end.
     /// A circular move takes `via`, the point its arc passes through.
     pub fn teach(
@@ -334,10 +357,60 @@ impl Program {
     /// No points, the same tool.
     pub fn clear(&mut self) {
         *self = Self {
+            name: std::mem::take(&mut self.name),
             tool: self.tool,
             offset: self.offset,
             ..Self::default()
         };
+    }
+
+    /// The program with every call in it replaced by the steps of the
+    /// program it calls, as many times as it says, from among `all` (the
+    /// robot's programs): what a run goes through, and what is exported.
+    /// Also returns where each step comes from: the program's name and
+    /// the step's own index in it.
+    pub fn flatten(&self, all: &[Program]) -> Result<(Program, Vec<(String, usize)>), String> {
+        fn into(
+            program: &Program,
+            all: &[Program],
+            depth: usize,
+            steps: &mut Vec<Step>,
+            origin: &mut Vec<(String, usize)>,
+        ) -> Result<(), String> {
+            if depth > MAX_CALL_DEPTH {
+                return Err(format!(
+                    "서브루틴 호출이 {MAX_CALL_DEPTH}단계보다 깊습니다: 스스로를 부르는지 보세요"
+                ));
+            }
+            for (i, step) in program.steps.iter().enumerate() {
+                match step {
+                    Step::Do(Action::Call { routine, times }) => {
+                        let called = all
+                            .iter()
+                            .find(|p| p.name == *routine)
+                            .ok_or_else(|| format!("서브루틴 {routine}이(가) 없습니다"))?;
+                        for _ in 0..*times {
+                            into(called, all, depth + 1, steps, origin)?;
+                        }
+                    }
+                    other => {
+                        steps.push(other.clone());
+                        origin.push((program.name.clone(), i));
+                    }
+                }
+            }
+            Ok(())
+        }
+        let mut steps = Vec::new();
+        let mut origin = Vec::new();
+        into(self, all, 0, &mut steps, &mut origin)?;
+        Ok((
+            Program {
+                steps,
+                ..self.clone()
+            },
+            origin,
+        ))
     }
 
     /// As saved to the programs file: identities and names both.
@@ -354,6 +427,7 @@ impl Program {
             "offset": [self.offset.x, self.offset.y, self.offset.z],
             "close": self.close,
             "taught": self.taught,
+            "routine": self.name,
             "steps": self.steps.iter().map(|s| match s {
                 Step::Move(p) => json!({
                     "type": "move",
@@ -493,6 +567,10 @@ impl Program {
                     amr: object(s, "amr")?,
                     stop: object(s, "stop")?,
                 }),
+                "call" => Step::Do(Action::Call {
+                    routine: text(&s["routine"])?,
+                    times: s["times"].as_u64().unwrap_or(1).clamp(1, MAX_TIMES as u64) as u32,
+                }),
                 _ => continue,
             };
             steps.push(step);
@@ -506,6 +584,7 @@ impl Program {
             _ => DVec3::ZERO,
         };
         let program = Program {
+            name: text(&saved["routine"]).unwrap_or_else(|| MAIN.to_string()),
             tool: pick(uid(&saved["tool"]), text(&saved["tool_name"]), &parts),
             offset,
             close: saved["close"].as_bool().unwrap_or(false),
@@ -939,6 +1018,8 @@ fn action_line(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) ->
             )),
         },
         Action::Drive { amr, stop } => note(format!("send AMR {} to {}", name(*amr), name(*stop))),
+        // Calls are gone by the time a program is exported (see `flatten`).
+        Action::Call { routine, times } => note(format!("call {routine} {times} times")),
     }
 }
 
@@ -958,6 +1039,10 @@ pub fn is_op(op: &str) -> bool {
             | "urscript"
             | "copy"
             | "shift"
+            | "routine_new"
+            | "routine_select"
+            | "routine_rename"
+            | "routine_delete"
     )
 }
 
@@ -987,6 +1072,11 @@ fn action_json(a: &Action, name: &dyn Fn(u64) -> String) -> Value {
             "type": "next",
             "pallet": pallet.to_string(),
             "pallet_name": name(*pallet),
+        }),
+        Action::Call { routine, times } => json!({
+            "type": "call",
+            "routine": routine,
+            "times": times,
         }),
         Action::Drive { amr, stop } => json!({
             "type": "drive",
@@ -1036,6 +1126,15 @@ pub fn action_of(v: &Value) -> Result<Action, String> {
         "drive" => Action::Drive {
             amr: uid("amr")?,
             stop: uid("stop")?,
+        },
+        "call" => Action::Call {
+            routine: v["routine"]
+                .as_str()
+                .filter(|r| !r.trim().is_empty())
+                .ok_or("no routine")?
+                .trim()
+                .to_string(),
+            times: v["times"].as_u64().unwrap_or(1).clamp(1, MAX_TIMES as u64) as u32,
         },
         other => return Err(format!("unknown step {other:?}")),
     })

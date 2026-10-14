@@ -96,6 +96,9 @@ pub struct Runner {
     last_frame: Option<Instant>,
     /// Each pallet's count: the place its points go to, from 0.
     places: BTreeMap<u64, usize>,
+    /// Where each step comes from, its calls replaced: the program's name
+    /// and the step's own index in it.
+    pub origin: Vec<(String, usize)>,
 }
 
 impl Runner {
@@ -118,6 +121,7 @@ impl Runner {
             last_cycle: None,
             last_frame: None,
             places: BTreeMap::new(),
+            origin: Vec::new(),
         })
     }
 
@@ -291,6 +295,11 @@ impl Runner {
                 self.step += 1;
                 State::Begin
             }
+            // A run is of a program whose calls are replaced by what they
+            // call (`Program::flatten`).
+            Step::Do(Action::Call { routine, .. }) => {
+                return Err(format!("{routine} 호출이 펼쳐지지 않았습니다"))
+            }
             Step::Do(Action::Next { pallet }) => {
                 let count = cell.pallet_slots(scene, pallet).len();
                 if count == 0 {
@@ -450,6 +459,8 @@ impl Runner {
             "cycles": self.cycles,
             "last_cycle": self.last_cycle,
             "places": self.places.iter().map(|(p, i)| (p.to_string(), json!(i + 1))).collect::<serde_json::Map<_, _>>(),
+            "routine": self.origin.get(self.step).map(|o| &o.0),
+            "local": self.origin.get(self.step).map(|o| o.1),
             "cycle_time": time - self.cycle_from,
         })
     }

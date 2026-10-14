@@ -47,14 +47,16 @@ pub fn simulate(session: &Document, saved: &Value, seconds: f64) -> Value {
     let mut posing = Posing::from_saved(list("programs"));
     posing.adopt(&doc);
     // Every program round and round.
-    let programs: Vec<(u64, crate::program::Program)> = posing
-        .programs()
-        .map(|(root, p)| {
-            let mut p = p.clone();
-            p.close = true;
-            (root, p)
-        })
-        .collect();
+    let mut programs: Vec<(u64, crate::program::Program)> = Vec::new();
+    for (root, main) in posing.mains() {
+        match main {
+            Ok(mut p) => {
+                p.close = true;
+                programs.push((root, p));
+            }
+            Err(e) => return failed(name, &e),
+        }
+    }
     let mut runners = Vec::new();
     for (root, program) in programs {
         match Runner::new(root, program, &doc, 0.0) {

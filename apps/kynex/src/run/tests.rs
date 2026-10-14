@@ -1040,3 +1040,81 @@ fn a_name_cannot_put_script_into_an_export() {
     );
     assert!(script.contains("# The places of pallet?movej"), "{script}");
 }
+
+#[test]
+fn a_routine_is_called_times_over_renamed_and_saved() {
+    let mut c = cell1();
+    let r = c.robot.to_string();
+    let ask = |c: &mut Cell1, req: serde_json::Value| {
+        let mut req = req;
+        req["robot"] = json!(r);
+        ask_posing(&mut c.posing, &c.doc, req)
+    };
+    // The main program: a point, then a call; the routine: a pause and a
+    // point of its own.
+    let seat = c.seat();
+    c.teach(seat + DVec3::new(0.0, -0.6, 0.15), "joint");
+    let a = ask(&mut c, json!({"op": "routine_new", "name": "쉬기"}));
+    assert_eq!(a["active"], 1, "{a}");
+    c.act(json!({"type": "delay", "seconds": 1.0}));
+    c.teach(seat + DVec3::new(0.2, -0.6, 0.15), "joint");
+    assert_eq!(
+        ask(&mut c, json!({"op": "routine_new", "name": "쉬기"}))["ok"],
+        false,
+        "names are its own"
+    );
+    ask(&mut c, json!({"op": "routine_select", "index": 0}));
+    c.act(json!({"type": "call", "routine": "쉬기", "times": 2}));
+
+    // Run: the routine twice over, in a program of its own steps.
+    let (flat, origin) = c.posing.runnable(c.robot).unwrap();
+    assert_eq!(flat.steps.len(), 1 + 2 * 2);
+    assert_eq!(origin[3], ("쉬기".to_string(), 0));
+    let mut runner = Runner::new(c.robot, flat, &c.doc, 0.0).unwrap();
+    runner.origin = origin;
+    let start = Instant::now();
+    let mut t = 0.0;
+    let mut seen = false;
+    while t < 30.0 && !runner.stopped() {
+        runner.tick(
+            t,
+            start + Duration::from_secs_f64(t),
+            &mut c.posing,
+            &mut c.cell,
+            &c.doc,
+        );
+        seen |= runner.to_json(t)["routine"] == "쉬기";
+        t += 0.02;
+    }
+    assert_eq!(runner.to_json(t)["state"], "done");
+    assert!(seen, "the run says when it is in the routine");
+    // Two pauses of a second: two seconds and more.
+    assert!(t > 2.0, "{t}");
+
+    // Renamed, its call follows; the main one stays.
+    ask(&mut c, json!({"op": "routine_select", "index": 1}));
+    assert_eq!(
+        ask(&mut c, json!({"op": "routine_rename", "name": "대기"}))["ok"],
+        true
+    );
+    ask(&mut c, json!({"op": "routine_select", "index": 0}));
+    assert_eq!(ask(&mut c, json!({"op": "routine_delete"}))["ok"], false);
+    let main = c.posing.program(c.robot).unwrap();
+    assert!(
+        matches!(&main.steps[1], Step::Do(Action::Call { routine, times: 2 }) if routine == "대기")
+    );
+
+    // Saved and read back: both, in order, by name.
+    let saved = c.posing.saved_programs(&c.doc);
+    assert_eq!(saved.len(), 2);
+    let mut again = Posing::from_saved(saved);
+    again.adopt(&c.doc);
+    let (flat, _) = again.runnable(c.robot).unwrap();
+    assert_eq!(flat.steps.len(), 5);
+
+    // A routine that calls itself goes nowhere.
+    ask(&mut c, json!({"op": "routine_select", "index": 1}));
+    c.act(json!({"type": "call", "routine": "대기", "times": 1}));
+    let why = c.posing.runnable(c.robot).unwrap_err();
+    assert!(why.contains("스스로"), "{why}");
+}

@@ -203,12 +203,19 @@ export class RobotPanel {
         alarm: `알람: ${run.detail}`,
       }[run.state];
       const cycles = run.cycles ? ` · 사이클 ${run.cycles}회, 직전 ${run.last_cycle.toFixed(1)} s` : '';
-      text = run.state === 'done' ? `${what}${cycles}` : `${run.step + 1}단계 · ${what}${cycles}`;
+      // In a routine it calls, by its name and its own step.
+      const program = this.programs[section.dataset.root];
+      const here = program?.routines?.[program.active];
+      const local = run.local ?? run.step;
+      const where = run.routine && run.routine !== here ? `${run.routine} · ${local + 1}단계` : `${local + 1}단계`;
+      text = run.state === 'done' ? `${what}${cycles}` : `${where} · ${what}${cycles}`;
     }
     state.textContent = text;
     state.classList.toggle('alarm', run?.state === 'alarm');
+    const program = this.programs[section.dataset.root];
+    const shown = !run?.routine || run.routine === program?.routines?.[program.active];
     for (const row of section.querySelectorAll('.point[data-index]')) {
-      row.classList.toggle('running', !!going && Number(row.dataset.index) === run.step);
+      row.classList.toggle('running', !!going && shown && Number(row.dataset.index) === (run.local ?? run.step));
     }
   }
 
@@ -400,6 +407,10 @@ export class RobotPanel {
         <div class="program">
           <div class="prog-head">
             <span class="section-title">프로그램</span>
+            <select class="routine-pick" data-opt="routine" aria-label="프로그램 고르기" title="이 로봇의 프로그램: 메인과 서브루틴"></select>
+            <button class="icon-mini" data-act="routine-new" title="새 서브루틴">+</button>
+            <button class="icon-mini" data-act="routine-rename" title="이름 바꾸기">✎</button>
+            <button class="icon-mini" data-act="routine-delete" title="이 서브루틴 지우기">✕</button>
             <span class="prog-cycle num"></span>
           </div>
           <div class="prog-actions">
@@ -415,6 +426,7 @@ export class RobotPanel {
               <option value="delay">시간 대기</option>
               <option value="next">팔레트 다음 칸</option>
               <option value="drive">AMR 주행</option>
+              <option value="call">서브루틴 호출</option>
             </select>
           </div>
           <div class="copy-bar" hidden></div>
@@ -455,6 +467,16 @@ export class RobotPanel {
       section.querySelector('.prog-cycle').textContent =
         program?.cycle != null && moves.length > 1 ? `이동 ${seconds(program.cycle)}` : '';
       section.querySelector('[data-opt="close"]').checked = !!program?.close;
+      // Its programs: the main one, then its routines.
+      const routines = program?.routines ?? ['메인'];
+      const pick = section.querySelector('[data-opt="routine"]');
+      if (document.activeElement !== pick) {
+        pick.innerHTML = routines
+          .map((n, i) => `<option value="${i}">${escapeHtml(n)}${i === 0 && n !== '메인' ? ' (메인)' : ''}</option>`)
+          .join('');
+        pick.value = String(program?.active ?? 0);
+      }
+      section.querySelector('[data-act="routine-delete"]').hidden = !program?.active;
       section.querySelector('[data-act="clear"]').hidden = !points.length;
       section.querySelector('[data-act="urscript"]').hidden = !points.length;
       if (!points.length) {
@@ -554,6 +576,15 @@ export class RobotPanel {
         icon = '칸';
         body = pick('pallet', keep(this.pallets(), step.pallet, step.pallet_name), step.pallet) + '<span class="unit">다음 칸</span>';
         break;
+      case 'call': {
+        icon = '호출';
+        const program = this.programs[r?.root];
+        const others = (program?.routines ?? []).filter((n, i) => i !== program.active).map((n) => [n, n]);
+        body =
+          pick('routine', keep(others, step.routine, step.routine), step.routine) +
+          `<input class="pspeed num" type="number" data-field="times" value="${step.times}" min="1" max="1000" step="1" aria-label="반복 횟수"><span class="unit">회</span>`;
+        break;
+      }
       case 'drive':
         icon = '주행';
         body =
@@ -575,7 +606,7 @@ export class RobotPanel {
   actionOf(row) {
     const step = { type: row.dataset.type };
     for (const field of row.querySelectorAll('[data-field]')) {
-      step[field.dataset.field] = field.dataset.field === 'seconds' ? Number(field.value) : field.value;
+      step[field.dataset.field] = ['seconds', 'times'].includes(field.dataset.field) ? Number(field.value) : field.value;
     }
     // Another machine picked: what it takes and says, if the old does not fit.
     const kind = this.cell.components.find((c) => c.object === step.machine)?.kind;
@@ -683,6 +714,12 @@ export class RobotPanel {
         return { type, seconds: 1 };
       case 'next':
         return pallet ? { type, pallet } : null;
+      case 'call': {
+        // Another of the robot's programs: one that does not call itself.
+        const program = this.programs[r.root];
+        const routine = (program?.routines ?? []).find((n, i) => i !== program.active);
+        return routine ? { type, routine, times: 1 } : null;
+      }
       case 'drive': {
         const amr = this.ofKind('amr')[0]?.[0];
         const stop = this.ofKind('amr_stop')[0]?.[0];
@@ -1026,6 +1063,24 @@ export class RobotPanel {
       });
     } else if (act === 'clear') {
       if (confirm('이 로봇의 프로그램 지점을 모두 지울까요?')) this.programOp(r, { op: 'clear' });
+    } else if (act === 'routine-new') {
+      const name = prompt('새 서브루틴 이름', '');
+      if (name === null) return;
+      ui.cursor = null;
+      ui.anchor = null;
+      this.programOp(r, { op: 'routine_new', name });
+    } else if (act === 'routine-rename') {
+      const program = this.programs[r.root];
+      const name = prompt('프로그램 이름', program?.routines?.[program.active] ?? '');
+      if (name) this.programOp(r, { op: 'routine_rename', name });
+    } else if (act === 'routine-delete') {
+      const program = this.programs[r.root];
+      const name = program?.routines?.[program.active];
+      if (name && confirm(`서브루틴 ${name}을(를) 지울까요? 이것을 부르는 단계는 실행할 때 알람이 됩니다.`)) {
+        ui.cursor = null;
+        ui.anchor = null;
+        this.programOp(r, { op: 'routine_delete' });
+      }
     } else if (act === 'shift-up' || act === 'shift-down') {
       const up = act === 'shift-up';
       const from = Math.min(ui.anchor ?? ui.cursor, ui.cursor);
@@ -1092,15 +1147,27 @@ export class RobotPanel {
     }
     if (opt === 'clock') this.programOp(r, { op: 'speed', speed: Number(e.target.value) });
     if (opt === 'newstep' && e.target.value) {
-      const step = this.newAction(r, e.target.value);
+      const type = e.target.value;
+      const step = this.newAction(r, type);
       e.target.value = '';
-      if (!step) return this.ctx.toast('이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요');
+      if (!step) {
+        return this.ctx.toast(
+          type === 'call'
+            ? '부를 서브루틴이 없습니다. 프로그램 옆 + 로 서브루틴을 만드세요'
+            : '이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요',
+        );
+      }
       this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });
       if (ui.cursor != null) ui.cursor += 1;
     }
     if (e.target.dataset.field) {
       const row = e.target.closest('.point.action');
       this.programOp(r, { op: 'edit', index: Number(row.dataset.index), step: this.actionOf(row) });
+    }
+    if (opt === 'routine') {
+      ui.cursor = null;
+      ui.anchor = null;
+      this.programOp(r, { op: 'routine_select', index: Number(e.target.value) });
     }
     if (opt === 'blend') {
       const index = Number(e.target.closest('.point').dataset.index);

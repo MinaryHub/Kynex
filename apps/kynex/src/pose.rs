@@ -23,8 +23,8 @@ use crate::program::{self, Program, Step};
 pub struct Posing {
     /// By robot root: joint positions, by joint.
     held: BTreeMap<u64, BTreeMap<u64, f64>>,
-    /// By robot root.
-    programs: BTreeMap<u64, Program>,
+    /// By robot root: its programs, the first its main one.
+    programs: BTreeMap<u64, Programs>,
     /// The programs changed since the viewers were last told.
     programs_changed: bool,
     /// Where the programs are kept between runs, if anywhere.
@@ -32,15 +32,45 @@ pub struct Posing {
     /// Programs read from the file whose robot is not in the scene (yet):
     /// kept, and written back, as they were.
     pending: Vec<Value>,
-    /// Each program as last saved, for a robot that has since left the
-    /// scene: still written back.
-    saved: BTreeMap<u64, Value>,
+    /// Each robot's programs as last saved, for a robot that has since left
+    /// the scene: still written back.
+    saved: BTreeMap<u64, Vec<Value>>,
     /// By robot root: the via point of a circular move being taught, until
     /// its end is.
     via: BTreeMap<u64, BTreeMap<u64, f64>>,
     /// How the cell is wired, for a program's export: set before it is
     /// asked for (see `crate::view`).
     pub cell_io: program::CellIo,
+}
+
+/// A robot's programs: its main one first, then the routines it calls, and
+/// which of them the page is working on.
+#[derive(Clone, Debug, Default)]
+struct Programs {
+    list: Vec<Program>,
+    active: usize,
+}
+
+impl Programs {
+    fn active(&self) -> Option<&Program> {
+        self.list.get(self.active)
+    }
+
+    /// The program worked on: the main one, made, if there is none yet.
+    fn active_mut(&mut self) -> &mut Program {
+        if self.list.is_empty() {
+            self.list
+                .push(Program::named(program::MAIN, None, DVec3::ZERO));
+        }
+        self.active = self.active.min(self.list.len() - 1);
+        &mut self.list[self.active]
+    }
+
+    /// `program` with its calls replaced by what they call, and where each
+    /// step comes from (see [`Program::flatten`]).
+    fn run(&self, program: &Program) -> Result<(Program, Vec<(String, usize)>), String> {
+        program.flatten(&self.list)
+    }
 }
 
 /// What the project file holds besides programs, as saved.
@@ -114,22 +144,46 @@ impl Posing {
         self.programs_changed = true;
     }
 
-    /// Every robot's program.
-    pub fn programs(&self) -> impl Iterator<Item = (u64, &Program)> {
-        self.programs.iter().map(|(root, p)| (*root, p))
+    /// Every robot's main program, as a run takes it: its calls replaced
+    /// by what they call.
+    pub fn mains(&self) -> Vec<(u64, Result<Program, String>)> {
+        self.programs
+            .iter()
+            .filter_map(|(root, p)| {
+                let main = p.list.first()?;
+                Some((*root, p.run(main).map(|(flat, _)| flat)))
+            })
+            .collect()
+    }
+
+    /// Robot `root`'s program worked on, as a run takes it: its calls
+    /// replaced by what they call, and where each step comes from.
+    pub fn runnable(&self, root: u64) -> Result<(Program, Vec<(String, usize)>), String> {
+        let p = self.programs.get(&root).ok_or("프로그램이 없습니다")?;
+        p.run(p.active().ok_or("프로그램이 없습니다")?)
     }
 
     /// Every program as saved: those of robots in `doc`, and those kept for
     /// robots that are not.
     pub fn saved_programs(&mut self, doc: &Document) -> Vec<Value> {
-        for (root, program) in &self.programs {
+        for (root, programs) in &self.programs {
             if let Some(kin) = Kinematics::of(doc, *root) {
-                self.saved.insert(*root, program.to_saved(*root, doc, &kin));
+                let all = programs
+                    .list
+                    .iter()
+                    .map(|p| p.to_saved(*root, doc, &kin))
+                    .collect();
+                self.saved.insert(*root, all);
             }
         }
         self.saved
             .retain(|root, _| self.programs.contains_key(root));
-        self.saved.values().chain(&self.pending).cloned().collect()
+        self.saved
+            .values()
+            .flatten()
+            .chain(&self.pending)
+            .cloned()
+            .collect()
     }
 
     /// How many programs the file held that are waiting for their robot.
@@ -140,14 +194,14 @@ impl Posing {
     /// Takes on the programs from the file whose robots are in `doc` now.
     pub fn adopt(&mut self, doc: &Document) {
         let mut waiting = Vec::new();
+        // Programs made in this run win over the file's.
+        let made: HashSet<u64> = self.programs.keys().copied().collect();
         for saved in std::mem::take(&mut self.pending) {
             match Program::from_saved(&saved, doc) {
                 Some((root, program)) => {
-                    // A program made in this run wins over the file's.
-                    if let std::collections::btree_map::Entry::Vacant(slot) =
-                        self.programs.entry(root)
-                    {
-                        slot.insert(program);
+                    if !made.contains(&root) {
+                        // In the file's order: the main one first.
+                        self.programs.entry(root).or_default().list.push(program);
                         self.programs_changed = true;
                     }
                 }
@@ -210,9 +264,10 @@ impl Posing {
         .to_string()
     }
 
-    /// Robot `root`'s program, if it has one.
+    /// Robot `root`'s program worked on, if it has one.
+    #[cfg(test)]
     pub fn program(&self, root: u64) -> Option<&Program> {
-        self.programs.get(&root)
+        self.programs.get(&root)?.active()
     }
 
     /// Where robot `root` stands as shown: held, or as the scene has it.
@@ -250,7 +305,10 @@ impl Posing {
     pub fn programs_json(&self, doc: &Document, collider: &mut Collider, cell: &Cell) -> String {
         let names = program::names(doc);
         let mut out = serde_json::Map::new();
-        for (root, program) in &self.programs {
+        for (root, programs) in &self.programs {
+            let Some(program) = programs.active() else {
+                continue;
+            };
             let Some(kin) = Kinematics::of(doc, *root) else {
                 continue;
             };
@@ -294,10 +352,10 @@ impl Posing {
                 }
                 None => Vec::new(),
             };
-            out.insert(
-                root.to_string(),
-                program.to_json(&kin, plan.as_ref(), &hits, &names),
-            );
+            let mut json = program.to_json(&kin, plan.as_ref(), &hits, &names);
+            json["routines"] = json!(programs.list.iter().map(|p| &p.name).collect::<Vec<_>>());
+            json["active"] = json!(programs.active);
+            out.insert(root.to_string(), json);
         }
         Value::Object(out).to_string()
     }
@@ -399,7 +457,76 @@ impl Posing {
             .map(|v| v.uid)
             .zip(now.iter().copied())
             .collect();
-        let program = self.programs.entry(root).or_default();
+        let programs = self.programs.entry(root).or_default();
+        programs.active_mut();
+        // The robot's programs: a new one, another worked on, renamed,
+        // removed.
+        let given = req["name"]
+            .as_str()
+            .map(str::trim)
+            .filter(|n| !n.is_empty());
+        match op {
+            "routine_new" => {
+                let n = programs.list.len();
+                let name = given
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("서브루틴 {n}"));
+                if programs.list.iter().any(|p| p.name == name) {
+                    return Err(format!("{name}: 이미 있는 이름입니다"));
+                }
+                let like = programs.list[programs.active].clone();
+                let name: String = name.chars().take(32).collect();
+                programs
+                    .list
+                    .push(Program::named(&name, like.tool, like.offset));
+                programs.active = programs.list.len() - 1;
+                self.programs_changed = true;
+                return Ok(json!({ "ok": true, "active": programs.active }));
+            }
+            "routine_select" => {
+                let i = req["index"].as_u64().ok_or("no index")? as usize;
+                if i >= programs.list.len() {
+                    return Err(format!("no program {i}"));
+                }
+                programs.active = i;
+                self.programs_changed = true;
+                return Ok(json!({ "ok": true }));
+            }
+            "routine_rename" => {
+                let name: String = given.ok_or("no name")?.chars().take(32).collect();
+                let old = programs.list[programs.active].name.clone();
+                if name == old {
+                    return Ok(json!({ "ok": true }));
+                }
+                if programs.list.iter().any(|p| p.name == name) {
+                    return Err(format!("{name}: 이미 있는 이름입니다"));
+                }
+                // Its calls follow it.
+                for p in &mut programs.list {
+                    for step in &mut p.steps {
+                        if let Step::Do(program::Action::Call { routine, .. }) = step {
+                            if *routine == old {
+                                routine.clone_from(&name);
+                            }
+                        }
+                    }
+                }
+                programs.list[programs.active].name = name;
+                self.programs_changed = true;
+                return Ok(json!({ "ok": true }));
+            }
+            "routine_delete" => {
+                if programs.active == 0 {
+                    return Err("메인 프로그램은 지울 수 없습니다".into());
+                }
+                programs.list.remove(programs.active);
+                programs.active = 0;
+                self.programs_changed = true;
+                return Ok(json!({ "ok": true }));
+            }
+            _ => {}
+        }
+        let program = programs.active_mut();
         // The tool its lines are drawn with, as the page has it now.
         if let Some(tool) = uid(&req["tool"]) {
             if !kin.contains(tool) {
@@ -412,6 +539,14 @@ impl Posing {
                 self.programs_changed = true;
             }
         }
+        // Exported as it runs: its calls replaced by what they call.
+        if op == "urscript" {
+            let program = programs.active().expect("a program worked on");
+            let (flat, _) = programs.run(program)?;
+            let (script, file) = flat.urscript(root, doc, kin, false, &self.cell_io)?;
+            return Ok(json!({ "ok": true, "script": script, "file": file }));
+        }
+        let program = programs.active_mut();
         let count = program.steps.len();
         let index = || -> Result<usize, String> {
             let i = req["index"].as_u64().ok_or("no index")? as usize;
@@ -571,10 +706,6 @@ impl Posing {
                 let added = program.copy_for(at("from")?, at("to")?, machine, doc, kin)?;
                 self.programs_changed = true;
                 return Ok(json!({ "ok": true, "added": added }));
-            }
-            "urscript" => {
-                let (script, file) = program.urscript(root, doc, kin, false, &self.cell_io)?;
-                return Ok(json!({ "ok": true, "script": script, "file": file }));
             }
             _ => unreachable!("program::is_op lists {op}"),
         }

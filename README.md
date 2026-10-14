@@ -165,6 +165,18 @@ KYNEX times the moves (`kynex_kin::path`):
   move: before an action the robot stops, as it must to grip or wait.
   The moves' time and a run both count the time saved. URScript writes
   it as the move's `r=`, and a circular move as `movec`.
+- **Programs and routines**: a robot has its main program (메인) and the
+  routines it calls, picked beside **프로그램**: **+** makes a routine,
+  **✎** renames the one shown, **✕** removes it (not the main one).
+  **서브루틴 호출** in **+ 동작** runs another of the robot's programs a
+  number of times and comes back. Renaming a routine renames its calls.
+  - A run, and URScript, take the program with its calls replaced by what
+    they call, so blends, pallet places and frames work across them; the
+    run shows the routine and its own step (`쉬기 · 2단계`).
+  - A routine calling itself, or calls deeper than eight, stop the run
+    with an alarm saying so.
+  - ▶ 실행 runs the program shown; a scenario comparison runs each
+    robot's main program.
 - **Order**: a picked step, or a span picked with Shift-click, moves up
   or down past its neighbour with ↑ and ↓ under the add buttons. Tending
   two machines in turn is laid out this way: load one, load the other,

@@ -380,6 +380,9 @@ impl Stage {
                 reply
             } else {
                 let scene = self.base.as_ref().unwrap_or(doc);
+                if op == "urscript" {
+                    self.posing.cell_io = self.cell.export(scene);
+                }
                 let (reply, changed) = self.posing.handle(scene, &request.body);
                 touched |= !changed.changed.is_empty();
                 // The robots posed anew, for the viewers to draw.

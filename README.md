@@ -260,11 +260,22 @@ objects anew, the program finds them again by name.
 
 **URScript** downloads the program as a `.script` file for a Universal
 Robots controller (`kynex_kin::urscript`). The program must be for a robot
-with six revolute joints. Actions are not exported yet, because they need
-the cell's I/O mapped to the controller's inputs and outputs. Each action
-is written as a comment where it falls between the moves
-(`# KYNEX, not exported until its I/O is mapped: …`), to be completed on
-the controller.
+with six revolute joints. Actions go as script once the cell is wired to
+the controller: under **I/O 연결** in the inspector of a gripper, a
+machine or a conveyor, give each of its outputs and inputs a number (0–7
+the standard digital I/O, 8–15 the configurable, 16–17 the tool's).
+
+- A grip sets the gripper's output (release clears it), then waits for
+  its "closed" input, or its open/close time if it has none.
+- A command to a machine pulses its output for 0.2 s.
+- A wait holds until its input is on (`while (not get_…_digital_in(n)):
+  sync()`).
+- A pause is `sleep`. Points on a pallet go to the place the script
+  counts to: the pallet's places are a list at the top, **팔레트 다음 칸**
+  counts on, and the point's pose is moved by `pose_add`.
+- An action not wired, and an AMR's drive, is written as a comment where
+  it falls (`# KYNEX, not exported until its I/O is mapped: …`), to be
+  completed on the controller.
 
 - On URSim (free, in Docker) the program runs as exported, and its moves
   take what KYNEX plans to within a few percent (`tools/ursim`):
@@ -276,7 +287,11 @@ the controller.
   ```
 
   The e-Series image takes `UR10`, not `UR10E`; given a name it does not
-  know, it runs a UR5e. Before its first program the robot is powered on
+  know, it runs a UR5e. `cargo test -p kynex ursim_wired_program --
+  --ignored` and `check.py --io` run the program wired (its gripper on DO
+  0, the machine's commands on DO 2–6) twice round: the tool ends every
+  move where KYNEX says, the second time at the pallets' next places, and
+  the gripper's output goes on and off. Before its first program the robot is powered on
   and its brakes released over the dashboard server.
 - MoveJ becomes `movej` with the taught joint positions.
 - MoveL becomes `movel` to the taught tool pose, in the controller's base

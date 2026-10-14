@@ -542,6 +542,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .icon-mini.on { color: var(--info); }
 .act-next { color: var(--info); background: rgba(90, 169, 255, 0.14); }
 .act-drive { color: #b9a3ff; background: rgba(155, 123, 255, 0.16); }
+.insp-io { margin-top: 8px; font-size: 12px; }
+.insp-io summary { cursor: pointer; color: var(--muted); }
+.insp-io summary .muted { font-size: 10.5px; margin-left: 4px; }
+.insp-io[hidden] { display: none; }
+.insp-io .insp-field span { min-width: 64px; color: var(--faint); font-size: 10.5px; }
 .prog-actions .step-pick {
   height: 24px;
   border: 1px solid var(--line-2);

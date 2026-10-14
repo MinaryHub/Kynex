@@ -18,6 +18,35 @@ const KINDS = [
   ['amr_stop', 'AMR 정지 위치'],
 ];
 
+// What each I/O point is, in words: the robot's outputs and its inputs.
+const IO_LABELS = {
+  'gripper:close': '그리퍼 닫기',
+  'molder:open': '가드 열기',
+  'molder:close': '가드 닫기',
+  'molder:door_open': '가드 열림',
+  'molder:door_closed': '가드 닫힘',
+  close: '문 닫기',
+  closed: '닫힘 확인',
+  open: '문 열기',
+  clamp: '척 물림',
+  unclamp: '척 풀기',
+  start: '시작',
+  door_open: '문 열림',
+  door_closed: '문 닫힘',
+  clamped: '척 물림됨',
+  idle: '대기 중',
+  done: '완료',
+  part_at_end: '부품 도착',
+};
+
+// An I/O number as the controller names it.
+const ioName = (n, output) => {
+  const kind = output ? 'DO' : 'DI';
+  if (n <= 7) return `${kind} ${n}`;
+  if (n <= 15) return `설정 ${kind} ${n - 8}`;
+  return `툴 ${kind} ${n - 16}`;
+};
+
 // Each kind's settings, as the inspector shows them: key, label, unit, and
 // how the shown number maps to KYNEX's.
 const FIELDS = {
@@ -77,9 +106,19 @@ export class CellPanel {
       const stop = e.target.closest('[data-drive]')?.dataset.drive;
       if (stop) this.send({ op: 'drive', object: this.ctx.selected(), stop });
     });
+    document.getElementById('cell-io').addEventListener('change', (e) => {
+      const key = e.target.dataset.io;
+      if (!key) return;
+      const v = e.target.value.trim();
+      const port = v === '' ? null : Number(v);
+      if (port != null && !(Number.isInteger(port) && port >= 0 && port <= 17)) {
+        return this.ctx.toast('I/O 번호는 0–17입니다 (0–7 표준, 8–15 설정 가능, 16–17 툴)');
+      }
+      this.send({ op: 'io', object: this.ctx.selected(), key, port });
+    });
     // What the inspector last drew, so that a running machine's progress
     // does not redraw the fields under the pointer.
-    this.drawn = { props: '', actions: '' };
+    this.drawn = { props: '', actions: '', io: '' };
     document.getElementById('cell-auto').addEventListener('click', () =>
       this.send({ op: 'auto' }, (a) => this.ctx.toast(a.added ? `셀 역할 ${a.added}개를 이름으로 정했습니다` : '이름으로 정할 역할이 없습니다')),
     );
@@ -158,6 +197,20 @@ export class CellPanel {
     if (actions !== this.drawn.actions) {
       this.drawn.actions = actions;
       document.getElementById('cell-actions').innerHTML = actions;
+    }
+    // Its wiring, for the program's export.
+    const io = c?.io_points;
+    const ioBox = document.getElementById('cell-io-box');
+    ioBox.hidden = !io || !(io.outputs.length + io.inputs.length);
+    const ioKey = `${uid}|${JSON.stringify(c?.io)}`;
+    if (!ioBox.hidden && ioKey !== this.drawn.io && !ioBox.contains(document.activeElement)) {
+      this.drawn.io = ioKey;
+      const row = (key, output) => {
+        const n = c.io[key];
+        return `<label class="insp-field">${output ? '→' : '←'} ${escapeHtml(IO_LABELS[`${c.kind}:${key}`] ?? IO_LABELS[key] ?? key)}<input type="number" class="num" data-io="${escapeHtml(key)}" value="${n ?? ''}" min="0" max="17" placeholder="없음"><span>${n != null ? ioName(n, output) : ''}</span></label>`;
+      };
+      document.getElementById('cell-io').innerHTML =
+        io.outputs.map((k) => row(k, true)).join('') + io.inputs.map((k) => row(k, false)).join('');
     }
   }
 

@@ -59,13 +59,90 @@ def ready(host):
     raise RuntimeError(f'URSim is not running: {mode}')
 
 
+def send(host, path):
+    """Sends a script file to the controller, to run now."""
+    script = open(path, encoding='utf-8').read()
+    # Sent to the controller, a function runs as it is defined; the call
+    # after it, for a file, would not parse.
+    script = script[: script.rindex('end\n') + 4]
+    sender = socket.create_connection((host, 30002), 5)
+    sender.sendall(script.encode())
+    sender.close()
+
+
+def check_io(args):
+    """The wired program (`m1_io`): it runs through without a fault, its
+    gripper output goes on and off, and the tool ends each move where KYNEX
+    says — on the pallets' next places the second time round. Exits
+    non-zero otherwise."""
+    expected = json.load(open(os.path.join(args.dir, 'm1_io.json'), encoding='utf-8'))
+    ends = expected['ends']
+    bit = 1 << expected['gripper_output']
+
+    ready(args.host)
+    dashboard(args.host, ['close safety popup', 'unlock protective stop'])
+    rtde = Rtde(args.host)
+    rtde.setup(['timestamp', 'output_int_register_0', 'runtime_state',
+                'actual_TCP_pose', 'actual_digital_output_bits'])
+    rtde.start()
+    start = rtde.sample()
+    send(args.host, os.path.join(args.dir, 'm1_io.script'))
+
+    # Where the tool is as each number first shows: the end of the move
+    # before it.
+    at = {}
+    last = len(ends) + 1
+    closes = opens = 0
+    gripping = bool(start['actual_digital_output_bits'] & bit)
+    deadline = time.time() + args.timeout
+    seen_running = False
+    while time.time() < deadline:
+        s = rtde.sample()
+        reg = s['output_int_register_0']
+        if reg not in at and (at or reg != start['output_int_register_0']):
+            at[reg] = s['actual_TCP_pose'][:3]
+        on = bool(s['actual_digital_output_bits'] & bit)
+        if on != gripping:
+            closes += on
+            opens += not on
+            gripping = on
+        seen_running |= s['runtime_state'] == 2
+        if last in at:
+            break
+        if seen_running and s['runtime_state'] in (0, 1):
+            break
+    rtde.close()
+    if last not in at:
+        print(f'the program stopped at mark {max(at or [0])}: '
+              f'{dashboard(args.host, ["safetystatus", "robotmode"])}')
+        return 2
+
+    worst = 0.0
+    print(f'{"move":<5} {"KYNEX (mm)":>28} {"URSim (mm)":>28} {"off":>7}')
+    # Mark i + 2 is written once move i is done.
+    for i, want in enumerate(ends):
+        got = at[i + 2]
+        off = sum((a - b) ** 2 for a, b in zip(want, got)) ** 0.5
+        worst = max(worst, off)
+        fmt = lambda p: ', '.join(f'{v * 1000:8.1f}' for v in p)
+        print(f'{i + 1:<5} {fmt(want):>28} {fmt(got):>28} {off * 1000:6.2f}')
+    ok = worst <= 0.002 and closes >= 1 and opens >= 1
+    print(f'gripper output: on {closes}, off {opens}')
+    print(f'worst {worst * 1000:.2f} mm: {"within" if ok else "outside"} 2 mm')
+    return 0 if ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--dir', default=os.path.join(ROOT, 'target', 'ursim'))
     ap.add_argument('--tolerance', type=float, default=0.10)
     ap.add_argument('--timeout', type=float, default=120.0)
+    ap.add_argument('--io', action='store_true',
+                    help='the wired program: I/O and pallet places (m1_io)')
     args = ap.parse_args()
+    if args.io:
+        return check_io(args)
 
     script = open(os.path.join(args.dir, 'm1.script'), encoding='utf-8').read()
     # Sent to the controller, a function runs as it is defined; the call

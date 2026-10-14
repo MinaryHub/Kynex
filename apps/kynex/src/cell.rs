@@ -287,6 +287,47 @@ pub struct Component {
     pub name: String,
     pub kind: Kind,
     pub props: Props,
+    /// The controller's digital I/O it is wired to, by what it does (see
+    /// [`io_points`]): 0–7 the standard ones, 8–15 the configurable, 16
+    /// and 17 the tool's.
+    pub io: BTreeMap<String, u32>,
+}
+
+/// What a component of kind `kind` can be wired to: the robot's outputs
+/// to it, and its outputs to the robot (the robot's inputs).
+pub fn io_points(kind: Kind) -> (&'static [&'static str], &'static [&'static str]) {
+    match kind {
+        Kind::Gripper => (&["close"], &["closed"]),
+        Kind::Cnc => (
+            &["open", "close", "clamp", "unclamp", "start"],
+            &["door_open", "door_closed", "clamped", "idle", "done"],
+        ),
+        Kind::Molder => (
+            &["open", "close", "start"],
+            &["door_open", "door_closed", "idle", "done"],
+        ),
+        Kind::Conveyor => (&[], &["part_at_end"]),
+        _ => (&[], &[]),
+    }
+}
+
+/// The highest I/O number: the tool's second output or input.
+pub const LAST_IO: u32 = 17;
+
+/// An I/O map as saved: `{"close": 0, …}`.
+fn io_of(v: &Value) -> BTreeMap<String, u32> {
+    v.as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| {
+                    Some((
+                        k.clone(),
+                        v.as_u64().filter(|n| *n <= LAST_IO as u64)? as u32,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A part going round the cell.
@@ -640,6 +681,7 @@ impl Cell {
                         name: name.to_string(),
                         kind,
                         props,
+                        io: io_of(&saved["io"]),
                     });
                     self.changed = true;
                 }
@@ -647,6 +689,7 @@ impl Cell {
                 // its defaults.
                 (Some(object), Some(kind)) => {
                     if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {
+                        c.io = io_of(&saved["io"]);
                         c.kind = kind;
                         c.props.update(&saved["props"]);
                         self.changed = true;
@@ -684,6 +727,7 @@ impl Cell {
                     "name": c.name,
                     "kind": c.kind.tag(),
                     "props": c.props.to_json(),
+                    "io": c.io,
                 })
             })
             .chain(self.pending.iter().cloned())
@@ -701,6 +745,7 @@ impl Cell {
             name,
             kind,
             props: Props::for_kind(kind),
+            io: BTreeMap::new(),
         });
         self.roles_changed = true;
         self.changed = true;
@@ -963,6 +1008,25 @@ impl Cell {
         out
     }
 
+    /// What a program's export needs of the cell: each component's wiring,
+    /// the pallets' places, the grip points and how long each takes.
+    pub fn export(&self, doc: &Document) -> crate::program::CellIo {
+        let mut out = crate::program::CellIo::default();
+        for c in &self.components {
+            for (key, n) in &c.io {
+                out.io.insert((c.object, key.clone()), *n);
+            }
+            if c.kind.pallet() {
+                out.pallets.insert(c.object, self.slots(doc, c));
+            }
+            if c.kind == Kind::Gripper {
+                out.grippers.push(c.object);
+                out.actuate.insert(c.object, c.props.actuate);
+            }
+        }
+        out
+    }
+
     /// Every grip point, by identity.
     pub fn grippers(&self) -> Vec<u64> {
         self.components
@@ -1056,6 +1120,8 @@ impl Cell {
             "role" => {
                 let object = uid("object")?;
                 let id = id_of(doc, object).ok_or("no such object")?;
+                // Its wiring stays while its kind does.
+                let was = self.components.iter().find(|c| c.object == object).cloned();
                 self.components.retain(|c| c.object != object);
                 if let Some(tag) = req["kind"].as_str() {
                     let kind = Kind::of(tag).ok_or("unknown role")?;
@@ -1066,6 +1132,10 @@ impl Cell {
                         name: doc.object(id).map(|o| o.name.clone()).unwrap_or_default(),
                         kind,
                         props,
+                        io: was
+                            .filter(|c| c.kind == kind)
+                            .map(|c| c.io)
+                            .unwrap_or_default(),
                     });
                 }
                 self.roles_changed = true;
@@ -1151,6 +1221,7 @@ impl Cell {
                         name,
                         kind,
                         props: Props::for_kind(kind),
+                        io: BTreeMap::new(),
                     });
                     added += 1;
                 }
@@ -1164,6 +1235,30 @@ impl Cell {
                 self.changed = true;
             }
             "drive" => self.drive(doc, uid("object")?, uid("stop")?)?,
+            "io" => {
+                let object = uid("object")?;
+                let key = req["key"].as_str().ok_or("no key")?;
+                let c = self
+                    .components
+                    .iter_mut()
+                    .find(|c| c.object == object)
+                    .ok_or("셀 역할이 없습니다")?;
+                let (outs, ins) = io_points(c.kind);
+                if !outs.contains(&key) && !ins.contains(&key) {
+                    return Err(format!("{key}: 이 역할에 없는 I/O입니다"));
+                }
+                match req["port"].as_u64() {
+                    Some(n) if n <= LAST_IO as u64 => {
+                        c.io.insert(key.to_string(), n as u32);
+                    }
+                    Some(_) => return Err(format!("I/O 번호는 0–{LAST_IO}입니다")),
+                    None => {
+                        c.io.remove(key);
+                    }
+                }
+                self.roles_changed = true;
+                self.changed = true;
+            }
             "grip" => self.grip(doc, uid("gripper")?)?,
             "release" => self.release(doc, uid("gripper")?)?,
             "machine" => {
@@ -1951,6 +2046,11 @@ impl Cell {
                     "name": c.name,
                     "kind": c.kind.tag(),
                     "props": c.props.to_json(),
+                    "io": c.io,
+                    "io_points": {
+                        "outputs": io_points(c.kind).0,
+                        "inputs": io_points(c.kind).1,
+                    },
                     "robot": robot,
                     "slots": self.slots(doc, c).into_iter().map(point).collect::<Vec<_>>(),
                     "seat": self.seat(doc, c).map(point),
@@ -2016,6 +2116,7 @@ pub fn is_op(op: &str) -> bool {
             | "release"
             | "machine"
             | "drive"
+            | "io"
     )
 }
 
@@ -2593,5 +2694,45 @@ mod tests {
             "{p}"
         );
         assert!(cell.decks(&doc)[0].carries(&cell.parts[0]));
+    }
+
+    #[test]
+    fn a_machine_is_wired_to_the_controllers_io_and_keeps_it() {
+        let (doc, mut cell, m) = equipment("cnc_lathe", json!({}));
+        let set = |cell: &mut Cell, key: &str, port: Value| {
+            ask(
+                cell,
+                &doc,
+                json!({"op": "io", "object": m.to_string(), "key": key, "port": port}),
+            )
+        };
+        assert_eq!(set(&mut cell, "start", json!(4))["ok"], true);
+        assert_eq!(set(&mut cell, "done", json!(9))["ok"], true);
+        assert_eq!(
+            set(&mut cell, "part_at_end", json!(1))["ok"],
+            false,
+            "not a CNC's"
+        );
+        assert_eq!(
+            set(&mut cell, "open", json!(18))["ok"],
+            false,
+            "past the tool's"
+        );
+        // Its settings changed, its wiring stays.
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": m.to_string(), "kind": "cnc", "props": {"cycle": 60}}),
+        );
+        let io = cell.export(&doc);
+        assert_eq!(io.io.get(&(m, "start".into())), Some(&4));
+        assert_eq!(io.io.get(&(m, "done".into())), Some(&9));
+        // Cleared, and saved and read back.
+        assert_eq!(set(&mut cell, "done", Value::Null)["ok"], true);
+        let mut again = Cell::from_saved(cell.to_saved());
+        again.adopt(&doc);
+        let io = again.export(&doc);
+        assert_eq!(io.io.len(), 1);
+        assert_eq!(io.io.get(&(m, "start".into())), Some(&4));
     }
 }

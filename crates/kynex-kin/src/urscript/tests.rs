@@ -53,11 +53,13 @@ fn a_ur_program_reads_as_movej_and_movel_in_the_base_frame() {
                     name: "P1",
                     waypoint: &a,
                     notes: Vec::new(),
+                    offset: None,
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
                     notes: Vec::new(),
+                    offset: None,
                 },
             ],
             close: false,
@@ -65,6 +67,7 @@ fn a_ur_program_reads_as_movej_and_movel_in_the_base_frame() {
             flange,
             trailing: Vec::new(),
             markers: false,
+            globals: Vec::new(),
         },
     )
     .unwrap();
@@ -117,11 +120,13 @@ fn a_closed_program_loops_back_to_its_first_point() {
                     name: "P1",
                     waypoint: &a,
                     notes: Vec::new(),
+                    offset: None,
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
                     notes: Vec::new(),
+                    offset: None,
                 },
             ],
             close: true,
@@ -129,6 +134,7 @@ fn a_closed_program_loops_back_to_its_first_point() {
             flange,
             trailing: Vec::new(),
             markers: false,
+            globals: Vec::new(),
         },
     )
     .unwrap();
@@ -170,12 +176,14 @@ fn only_a_six_joint_arm_has_urscript() {
                 name: "P1",
                 waypoint: &w,
                 notes: Vec::new(),
+                offset: None,
             }],
             close: false,
             base: root,
             flange: tip,
             trailing: Vec::new(),
             markers: false,
+            globals: Vec::new(),
         },
     )
     .unwrap_err();
@@ -210,11 +218,13 @@ fn what_cannot_be_said_yet_is_left_as_comments_in_its_place() {
                     name: "P1",
                     waypoint: &a,
                     notes: Vec::new(),
+                    offset: None,
                 },
                 Move {
                     name: "P2",
                     waypoint: &b,
                     notes: vec!["close gripper grip_a".into()],
+                    offset: None,
                 },
             ],
             close: false,
@@ -222,6 +232,7 @@ fn what_cannot_be_said_yet_is_left_as_comments_in_its_place() {
             flange,
             trailing: vec!["wait for machine".into()],
             markers: false,
+            globals: Vec::new(),
         },
     )
     .unwrap();

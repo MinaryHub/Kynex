@@ -4,6 +4,7 @@ use serde_json::json;
 use super::*;
 use crate::collide::Collider;
 use crate::library::Library;
+use crate::program;
 use crate::timeline::{Now, Timeline};
 
 /// The M1 cell from the library: a tending UR10e on a 0.7 m pedestal, a
@@ -836,7 +837,15 @@ fn ursim_program() {
     }
     let program = c.posing.program(c.robot).unwrap().clone();
     let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
-    let (script, _) = program.urscript(c.robot, &c.doc, &kin, true).unwrap();
+    let (script, _) = program
+        .urscript(
+            c.robot,
+            &c.doc,
+            &kin,
+            true,
+            &crate::program::CellIo::default(),
+        )
+        .unwrap();
     let plan = program.plan(&kin).unwrap();
     let names: Vec<&str> = program.moves().map(|(_, p)| p.name.as_str()).collect();
     let moves: Vec<serde_json::Value> = plan
@@ -903,4 +912,102 @@ fn a_program_for_a_library_robot_saved_before_layout_2_is_turned_at_the_base() {
         );
         assert!(a.abs() < std::f64::consts::TAU, "{a}");
     }
+}
+
+/// Writes the M1 tending program wired for URSim: its gripper on digital
+/// output 0 and the machine's commands on 2–6, its pallet points counted
+/// in the script, twice round — the second time at the pallets' next
+/// places — and where the tool should be at the end of each move. Run by
+/// `tools/ursim/check.py --io`, not with the tests.
+#[test]
+#[ignore = "writes target/ursim for tools/ursim/check.py --io"]
+fn ursim_wired_program() {
+    let mut c = cell1();
+    tending(&mut c);
+    let (infeed, outfeed) = (c.infeed, c.outfeed);
+    for i in [0, 1, 3] {
+        edit_step(&mut c, i, "pallet", infeed);
+    }
+    for i in [23, 24, 26] {
+        edit_step(&mut c, i, "pallet", outfeed);
+    }
+    c.act(json!({"type": "next", "pallet": infeed.to_string()}));
+    c.act(json!({"type": "next", "pallet": outfeed.to_string()}));
+    // Twice round, one after the other.
+    let once = c.posing.program(c.robot).unwrap().steps.clone();
+    let program = {
+        let mut p = c.posing.program(c.robot).unwrap().clone();
+        p.steps.extend(once.clone());
+        p
+    };
+    // The gripper and the machine wired; its signals left for a machine
+    // URSim does not have.
+    let mut io = c.cell.export(&c.doc);
+    io.io.insert((c.grip_a, "close".into()), 0);
+    for (k, command) in ["open", "close", "clamp", "unclamp", "start"]
+        .iter()
+        .enumerate()
+    {
+        io.io.insert((c.machine, command.to_string()), 2 + k as u32);
+    }
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let (script, _) = program.urscript(c.robot, &c.doc, &kin, true, &io).unwrap();
+    assert!(
+        script.contains("set_standard_digital_out(0, True)"),
+        "{script}"
+    );
+    assert!(
+        script.contains("kynex_place_0 = (kynex_place_0 + 1) % 20"),
+        "{script}"
+    );
+
+    // Where the tool ends each move, in the controller's base frame: a
+    // pallet point at the place counted to, as a run takes it.
+    let tool = program.tool(&kin).unwrap();
+    let base = kin
+        .world_of(
+            &kin.current,
+            program::names(&c.doc)
+                .iter()
+                .find(|(_, n)| *n == "base")
+                .map(|(u, _)| *u)
+                .unwrap(),
+        )
+        .unwrap();
+    let mut placed: std::collections::HashMap<u64, usize> = Default::default();
+    let mut ends = Vec::new();
+    for step in &program.steps {
+        match step {
+            Step::Move(p) => {
+                let mut at = kin.pose(&kin.with(&p.positions), &tool).translation;
+                if let Some(pallet) = p.pallet {
+                    let slots = &io.pallets[&pallet];
+                    let from = (0..slots.len())
+                        .min_by(|a, b| {
+                            let d = |i: usize| (slots[i] - at).truncate().length();
+                            d(*a).total_cmp(&d(*b))
+                        })
+                        .unwrap();
+                    at += slots[placed.get(&pallet).copied().unwrap_or(0)] - slots[from];
+                }
+                let b = base.inverse().transform_point3(at);
+                ends.push(json!([b.x, b.y, b.z]));
+            }
+            Step::Do(Action::Next { pallet }) => *placed.entry(*pallet).or_default() += 1,
+            _ => {}
+        }
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ursim");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("m1_io.script"), script).unwrap();
+    std::fs::write(
+        dir.join("m1_io.json"),
+        serde_json::to_string_pretty(&json!({
+            "program": "M1 machine tending, UR10e, wired, twice round",
+            "ends": ends,
+            "gripper_output": 0,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }

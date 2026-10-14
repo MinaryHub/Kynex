@@ -38,6 +38,9 @@ pub struct Posing {
     /// By robot root: the via point of a circular move being taught, until
     /// its end is.
     via: BTreeMap<u64, BTreeMap<u64, f64>>,
+    /// How the cell is wired, for a program's export: set before it is
+    /// asked for (see `crate::view`).
+    pub cell_io: program::CellIo,
 }
 
 /// What the project file holds besides programs, as saved.
@@ -560,7 +563,7 @@ impl Posing {
                 return Ok(json!({ "ok": true, "added": added }));
             }
             "urscript" => {
-                let (script, file) = program.urscript(root, doc, kin, false)?;
+                let (script, file) = program.urscript(root, doc, kin, false, &self.cell_io)?;
                 return Ok(json!({ "ok": true, "script": script, "file": file }));
             }
             _ => unreachable!("program::is_op lists {op}"),

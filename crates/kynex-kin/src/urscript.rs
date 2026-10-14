@@ -21,12 +21,30 @@ use kreate_scene::robot::JointKind;
 use crate::path::{self, MoveKind, Waypoint};
 use crate::{Kinematics, Tool};
 
+/// A line the program has between its moves: script, or a comment for
+/// what the script cannot say yet.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Line {
+    Note(String),
+    /// URScript, its own lines indented within it as they go.
+    Code(String),
+}
+
+impl From<&str> for Line {
+    fn from(note: &str) -> Self {
+        Line::Note(note.to_string())
+    }
+}
+
 /// One move of the program: the point it reaches, by its name, and what
-/// the program does before it that the script cannot say yet, as comments.
+/// the program does before it.
 pub struct Move<'a> {
     pub name: &'a str,
     pub waypoint: &'a Waypoint,
-    pub notes: Vec<String>,
+    pub notes: Vec<Line>,
+    /// A pose the move's target is moved by, as a URScript expression —
+    /// a pallet's place, counted in the script — or none.
+    pub offset: Option<String>,
 }
 
 pub struct Export<'a> {
@@ -39,8 +57,10 @@ pub struct Export<'a> {
     pub base: u64,
     /// The flange the tool point is set from (`tool0`).
     pub flange: u64,
-    /// What the program does after its last move, as comments.
-    pub trailing: Vec<String>,
+    /// What the program does after its last move.
+    pub trailing: Vec<Line>,
+    /// Lines at the top of the function: what the moves and lines use.
+    pub globals: Vec<String>,
     /// Number the moves on output integer register 0 as they start — 1,
     /// 2, … and one past the last at the end — for timing them on a
     /// controller or URSim (see `tools/ursim`).
@@ -84,9 +104,21 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     );
     let _ = writeln!(out, "def {name}():");
     let _ = writeln!(out, "  set_tcp({})", pose(&tcp));
-    let notes = |out: &mut String, indent: &str, notes: &[String]| {
+    for g in &export.globals {
+        let _ = writeln!(out, "  {g}");
+    }
+    let notes = |out: &mut String, indent: &str, notes: &[Line]| {
         for n in notes {
-            let _ = writeln!(out, "{indent}# {}", ascii(n));
+            match n {
+                Line::Note(n) => {
+                    let _ = writeln!(out, "{indent}# {}", ascii(n));
+                }
+                Line::Code(code) => {
+                    for line in code.lines() {
+                        let _ = writeln!(out, "{indent}{line}");
+                    }
+                }
+            }
         }
     };
     let mut mark = 0;
@@ -105,38 +137,49 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
         } else {
             String::new()
         };
+        // A pose, moved by the move's offset if it has one.
+        let target = |q: &[f64]| {
+            let p = pose(&(base.inverse() * kin.pose(q, tool)));
+            match &m.offset {
+                Some(o) => format!("pose_add({p}, {o})"),
+                None => p,
+            }
+        };
         match kind {
             MoveKind::Joint => {
                 let v = w.speed.clamp(0.01, 1.0) * slowest;
+                // On a pallet, to a pose the controller solves for: the
+                // joints taught are for one place only.
+                let to = if m.offset.is_some() {
+                    target(&w.positions)
+                } else {
+                    joints(&w.positions)
+                };
                 let _ = writeln!(
                     out,
-                    "{indent}movej({}, a={:.4}, v={:.4}{r})",
-                    joints(&w.positions),
+                    "{indent}movej({to}, a={:.4}, v={:.4}{r})",
                     path::JOINT_ACCELERATION * slowest,
                     v
                 );
             }
             MoveKind::Linear => {
-                let at = base.inverse() * kin.pose(&w.positions, tool);
                 let _ = writeln!(
                     out,
                     "{indent}movel({}, a={:.4}, v={:.4}{r})",
-                    pose(&at),
+                    target(&w.positions),
                     path::LINEAR_ACCELERATION,
                     w.speed
                 );
             }
             MoveKind::Circular => {
-                let at = base.inverse() * kin.pose(&w.positions, tool);
                 // Without its via point, as a line.
                 match &w.via {
                     Some(via) => {
-                        let via = base.inverse() * kin.pose(via, tool);
                         let _ = writeln!(
                             out,
                             "{indent}movec({}, {}, a={:.4}, v={:.4}{r}, mode=0)",
-                            pose(&via),
-                            pose(&at),
+                            target(via),
+                            target(&w.positions),
                             path::LINEAR_ACCELERATION,
                             w.speed
                         );
@@ -145,7 +188,7 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
                         let _ = writeln!(
                             out,
                             "{indent}movel({}, a={:.4}, v={:.4}{r})",
-                            pose(&at),
+                            target(&w.positions),
                             path::LINEAR_ACCELERATION,
                             w.speed
                         );

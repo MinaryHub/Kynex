@@ -528,7 +528,12 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 }
 .icon-mini:hover { background: var(--panel); color: var(--text); }
 .pprob { grid-column: 2 / -1; color: var(--warn); font-size: 11px; line-height: 1.35; }
-.pslot { grid-column: 2 / -1; color: var(--info); font-size: 11px; }
+.pslot { grid-column: 2 / -1; display: flex; align-items: center; gap: 6px; color: var(--info); font-size: 11px; }
+.pslot select { min-width: 0; flex: 1; height: 20px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 11px; }
+.point.inrange { background: rgba(90, 169, 255, 0.1); }
+.copy-bar { display: flex; align-items: center; gap: 6px; margin: 2px 0 6px; font-size: 11.5px; color: var(--info); }
+.copy-bar[hidden] { display: none; }
+.copy-bar select { flex: 1; min-width: 0; height: 24px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 11.5px; }
 .icon-mini.on { color: var(--info); }
 .act-next { color: var(--info); background: rgba(90, 169, 255, 0.14); }
 .prog-actions .step-pick {

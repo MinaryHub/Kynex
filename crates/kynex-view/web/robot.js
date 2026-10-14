@@ -394,6 +394,7 @@ export class RobotPanel {
               <option value="next">팔레트 다음 칸</option>
             </select>
           </div>
+          <div class="copy-bar" hidden></div>
           <ol class="points"></ol>
           <div class="run-bar">
             <button class="chip-btn play" data-act="play" aria-pressed="false">▶ 실행</button>
@@ -439,8 +440,12 @@ export class RobotPanel {
         continue;
       }
       const firstMove = points.findIndex((p) => p.type === 'move');
+      // A span picked with Shift: copied as one for another machine.
+      const span = ui.anchor != null && ui.cursor != null ? [Math.min(ui.anchor, ui.cursor), Math.max(ui.anchor, ui.cursor)] : null;
+      const inRange = (i) => !!span && i >= span[0] && i <= span[1];
+      this.renderCopyBar(section, span);
       const rows = points.map((p, i) => {
-        if (p.type !== 'move') return this.actionRow(r, p, i, i === ui.cursor);
+        if (p.type !== 'move') return this.actionRow(r, p, i, i === ui.cursor, inRange(i));
         const linear = p.kind === 'linear';
         const speed = linear ? Math.round(p.speed * 1000) : Math.round(p.speed * 100);
         const bad = p.move?.problems?.length;
@@ -448,7 +453,7 @@ export class RobotPanel {
         // unless the program comes back round to it.
         const into = i > firstMove || program.close;
         return `
-          <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}" data-index="${i}">
+          <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}">
             <span class="pidx num">${i + 1}</span>
             <span class="pname">${escapeHtml(p.name)}</span>
             <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${linear ? 'L' : 'J'}</button>
@@ -456,12 +461,12 @@ export class RobotPanel {
             <span class="unit">${linear ? 'mm/s' : '%'}</span>
             <span class="ptime num">${p.move ? seconds(p.move.duration) : i === firstMove ? '시작' : ''}</span>
             <span class="pacts">
-              <button class="icon-mini${p.pallet ? ' on' : ''}" data-act="pallet" title="${p.pallet ? '팔레트 기준 해제' : '가까운 팔레트를 기준으로: 실행할 때 팔레트의 지금 칸으로 옮겨 갑니다'}">▦</button>
+              <button class="icon-mini${p.frame ? ' on' : ''}" data-act="frame" title="${p.frame ? '기준 해제: 월드 좌표로' : '가까운 장비를 기준으로: 장비가 옮겨지면 따라가고, 팔레트면 실행할 때 지금 칸으로 갑니다'}">⌖</button>
               <button class="icon-mini" data-act="goto" title="이 지점으로 이동">→</button>
               <button class="icon-mini" data-act="retouch" title="현재 자세로 다시 지정">⟳</button>
               <button class="icon-mini" data-act="delete" title="삭제">✕</button>
             </span>
-            ${p.pallet ? `<div class="pslot">▦ ${escapeHtml(this.pallets().find(([u]) => u === p.pallet)?.[1] ?? p.pallet_name ?? '팔레트')} 기준 · 실행할 때 지금 칸으로</div>` : ''}
+            ${p.frame ? this.frameLine(p) : ''}
             ${problems(p.move)}
           </li>`;
       });
@@ -481,7 +486,7 @@ export class RobotPanel {
 
   // An action's row: what it is, and what it is for, to be changed in
   // place.
-  actionRow(r, step, i, cursor) {
+  actionRow(r, step, i, cursor, inrange) {
     const { escapeHtml } = this.ctx;
     const pick = (field, options, value) =>
       `<select data-field="${field}">${options
@@ -517,7 +522,7 @@ export class RobotPanel {
         break;
     }
     return `
-          <li class="point action${cursor ? ' cursor' : ''}" data-index="${i}" data-type="${step.type}">
+          <li class="point action${cursor ? ' cursor' : ''}${inrange ? ' inrange' : ''}" data-index="${i}" data-type="${step.type}">
             <span class="pidx num">${i + 1}</span>
             <span class="act-icon act-${step.type}">${icon}</span>
             <span class="act-body">${body}</span>
@@ -532,6 +537,52 @@ export class RobotPanel {
       step[field.dataset.field] = field.dataset.field === 'seconds' ? Number(field.value) : field.value;
     }
     return step;
+  }
+
+  // A point's frame, to be changed in place: the world, a machine, or a
+  // pallet (place by place).
+  frameLine(p) {
+    const { escapeHtml } = this.ctx;
+    const options = [
+      ['', '월드 (기준 없음)'],
+      ...this.machines().map(([u, n]) => [`m:${u}`, n]),
+      ...this.pallets().map(([u, n]) => [`p:${u}`, `${n} · 칸마다`]),
+    ];
+    const value = p.pallet ? `p:${p.pallet}` : `m:${p.frame}`;
+    if (!options.some(([v]) => v === value)) options.push([value, `${p.frame_name || '?'} (없음)`]);
+    return `<div class="pslot">⌖ 기준 <select data-opt="frame">${options
+      .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+      .join('')}</select></div>`;
+  }
+
+  // Under the add buttons, while a span is picked: copy it for another
+  // machine.
+  renderCopyBar(section, span) {
+    const { escapeHtml } = this.ctx;
+    const bar = section.querySelector('.copy-bar');
+    const machines = this.machines();
+    bar.hidden = !span || span[1] <= span[0] || machines.length < 2;
+    if (bar.hidden) return;
+    bar.innerHTML = `<span>${span[0] + 1}–${span[1] + 1}단계를</span>
+      <select data-opt="copyto" aria-label="복제할 CNC"><option value="">CNC 골라 복제…</option>${machines
+        .map(([u, n]) => `<option value="${escapeHtml(u)}">${escapeHtml(n)}용으로 복제</option>`)
+        .join('')}</select>`;
+  }
+
+  machines() {
+    return this.cell.components.filter((c) => c.kind === 'cnc').map((c) => [c.object, c.name]);
+  }
+
+  // The machine a point is at: the one whose chuck is nearest, within reach
+  // of a robot working at it.
+  machineNear(at) {
+    let best = null;
+    for (const c of this.cell.components) {
+      if (c.kind !== 'cnc' || !c.seat) continue;
+      const d = Math.hypot(c.seat[0] - at[0], c.seat[1] - at[1], c.seat[2] - at[2]);
+      if (d < 1.0 && (!best || d < best.d)) best = { d, object: c.object };
+    }
+    return best?.object ?? null;
   }
 
   // The cell's pallets, by identity and name.
@@ -875,7 +926,12 @@ export class RobotPanel {
     // A click on a step's row (not its controls) picks it: what is taught
     // or added next goes after it.
     if (row && !e.target.closest('button, input, select')) {
-      ui.cursor = ui.cursor === index ? null : index;
+      if (e.shiftKey && ui.cursor != null && ui.cursor !== index) {
+        ui.anchor = index;
+      } else {
+        ui.cursor = ui.cursor === index ? null : index;
+        ui.anchor = null;
+      }
       this.renderPrograms();
       return;
     }
@@ -904,13 +960,15 @@ export class RobotPanel {
       });
     } else if (act === 'clear') {
       if (confirm('이 로봇의 프로그램 지점을 모두 지울까요?')) this.programOp(r, { op: 'clear' });
-    } else if (act === 'pallet' && index != null) {
+    } else if (act === 'frame' && index != null) {
       const point = this.programs[r.root]?.steps[index];
-      if (point?.pallet) this.programOp(r, { op: 'edit', index, pallet: null });
+      if (point?.frame) this.programOp(r, { op: 'edit', index, frame: null });
       else if (point?.at) {
         const pallet = this.palletNear(point.at);
-        if (!pallet) return this.ctx.toast('이 지점 가까이에 팔레트가 없습니다. 팔레트의 칸 위에서 티칭하세요');
-        this.programOp(r, { op: 'edit', index, pallet });
+        const machine = pallet ? null : this.machineNear(point.at);
+        if (pallet) this.programOp(r, { op: 'edit', index, pallet });
+        else if (machine) this.programOp(r, { op: 'edit', index, frame: machine });
+        else this.ctx.toast('이 지점 가까이에 CNC나 팔레트가 없습니다. 아래 줄에서 직접 고를 수도 있습니다');
       }
     } else if (act === 'kind' && index != null) {
       const point = this.programs[r.root]?.steps[index];
@@ -964,6 +1022,20 @@ export class RobotPanel {
     if (e.target.dataset.field) {
       const row = e.target.closest('.point.action');
       this.programOp(r, { op: 'edit', index: Number(row.dataset.index), step: this.actionOf(row) });
+    }
+    if (opt === 'frame') {
+      const index = Number(e.target.closest('.point').dataset.index);
+      const [kind, uid] = e.target.value.split(':');
+      this.programOp(r, kind === 'p' ? { op: 'edit', index, pallet: uid } : { op: 'edit', index, frame: uid || null });
+    }
+    if (opt === 'copyto' && e.target.value) {
+      const [from, to] = [Math.min(ui.anchor, ui.cursor), Math.max(ui.anchor, ui.cursor)];
+      this.programOp(r, { op: 'copy', from, to, machine: e.target.value }, (a) => {
+        this.ctx.toast(`${a.added}단계를 복제했습니다. 복제한 지점은 그 CNC를 기준으로 합니다`);
+        ui.anchor = null;
+        ui.cursor = to + a.added;
+        this.renderPrograms();
+      });
     }
     if (opt === 'speed') {
       const index = Number(e.target.closest('.point').dataset.index);

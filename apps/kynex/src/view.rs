@@ -27,6 +27,15 @@ const PORT: u16 = 8090;
 const OLD_PROGRAMS: &str = "kynex-programs.json";
 
 pub fn run(args: Vec<String>) -> Result<(), String> {
+    run_with(args, None)
+}
+
+/// [`run`], saying where the viewer is on `ready` once it is served (for
+/// KYNEX's own window, `crate::studio`).
+pub fn run_with(
+    args: Vec<String>,
+    ready: Option<std::sync::mpsc::Sender<Result<String, String>>>,
+) -> Result<(), String> {
     let mut address = None;
     let mut key = std::env::var("KYNEX_KEY").unwrap_or_default();
     let mut name = None;
@@ -64,6 +73,9 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         }
     }
 
+    // The project first: one another KYNEX holds is not served at all.
+    let mut stage = Stage::open(project)?;
+
     // Only this machine unless asked: the viewer shows the whole scene to
     // whoever can reach the port.
     let bind = if lan {
@@ -84,9 +96,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     if open {
         open_browser(&local);
     }
+    if let Some(ready) = ready {
+        let _ = ready.send(Ok(local.clone()));
+    }
 
     let requests = server.robot_requests();
-    let mut stage = Stage::open(project)?;
     if let Some(path) = file {
         let file = std::fs::File::open(&path).map_err(|e| format!("{path}: {e}"))?;
         let loaded = kreate_io::container::read(std::io::BufReader::new(file))

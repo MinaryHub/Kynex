@@ -49,3 +49,8 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 3
 debug = false
+
+# What the installers carry (tools/package.ps1): smaller, no debug symbols.
+[profile.release]
+lto = "thin"
+strip = true

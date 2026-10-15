@@ -1,0 +1,48 @@
+<!--
+  KYNEX's MSI (WiX Toolset v5): built by tools/package.ps1, which gives the
+  version and where the programs are:
+    wix build kynex.wxs -arch x64 -d Version=0.1.0 -d Bin=..\target\release
+              -o KYNEX-0.1.0.msi
+
+  For all users of the computer, as an MSI is: what IT deploys. A newer one
+  replaces an older one. What KYNEX keeps — projects in Documents\KYNEX,
+  settings in %APPDATA%\kynex — stays when it is removed. No wizard pages:
+  the standard ones ask the user to accept a licence, and KYNEX has none to
+  show yet; the MSI installs with Windows' own progress window.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="KYNEX"
+           Manufacturer="SMIC"
+           Version="$(var.Version)"
+           UpgradeCode="5B552DF3-38B9-45DE-A484-5A4AC723AB32"
+           Language="1042"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="더 새 버전의 KYNEX가 이미 설치되어 있습니다." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="KynexIcon.exe" SourceFile="..\apps\kynex\assets\kynex.ico" />
+    <Property Id="ARPPRODUCTICON" Value="KynexIcon.exe" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="KYNEX" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <ComponentGroup Id="Programs" Directory="INSTALLFOLDER">
+      <Component>
+        <File Id="KynexStudio" Source="$(var.Bin)\kynex-studio.exe" KeyPath="yes">
+          <Shortcut Name="KYNEX" Directory="ProgramMenuFolder" Icon="KynexIcon.exe"
+                    Advertise="yes" WorkingDirectory="INSTALLFOLDER" />
+        </File>
+      </Component>
+      <Component>
+        <File Source="$(var.Bin)\kynex.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="Programs" />
+    </Feature>
+
+  </Package>
+</Wix>

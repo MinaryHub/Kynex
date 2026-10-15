@@ -27,3 +27,20 @@ pkcs8 = { version = "0.10", features = ["pem"] }
 cbc = { version = "0.1", features = ["alloc"] }
 x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
 const-oid = "0.9"
+
+# KYNEX's own window (`studio`): the system's WebView2 in a window of its
+# own, on Windows.
+[target.'cfg(windows)'.dependencies]
+tao = "0.37"
+wry = "0.57"
+
+[[bin]]
+name = "kynex"
+path = "src/main.rs"
+
+[[bin]]
+name = "kynex-studio"
+path = "src/bin/kynex-studio.rs"
+
+[build-dependencies]
+embed-resource = "3"

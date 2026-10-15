@@ -896,6 +896,42 @@ kynex view --empty --port 8101 --project target/umati/kynex-project.json
 target/plc/venv38/Scripts/python tools/umati/check.py
 ```
 
+## Installing KYNEX
+
+```
+powershell -ExecutionPolicy Bypass -File tools\package.ps1
+```
+
+builds `target\dist\KYNEX-<version>-setup.exe` and
+`target\dist\KYNEX-<version>.msi` from a release build. Both install two
+programs:
+
+- **`kynex-studio.exe`**, what the Start menu's (and the desktop's) KYNEX
+  starts: KYNEX on its own in a window of its own, the system's WebView2
+  (part of Windows 10 and 11), no console and no browser. It serves the
+  viewer on 8090, or the next free port up to 8099, with the project last
+  opened. Closing the window ends KYNEX; the project is saved as it goes.
+  WebView2's own data is kept in `%APPDATA%\kynex\webview`. If KYNEX cannot
+  start (its project open in another KYNEX, say), the window says why.
+- **`kynex.exe`**, the command line, as before (`kynex view`, `compare`,
+  `link`, `inspect`, `bench`).
+
+The setup.exe (Inno Setup 6, Korean or English) installs for the user alone
+without administrator rights, or for all users if chosen; it adds a Start
+menu entry, a desktop one if asked, and starts KYNEX at the end. The MSI
+(WiX 5) installs for all users, as IT deploys it, and replaces an older
+version; it shows no wizard pages, as the standard ones need a licence to
+accept and KYNEX has none yet. Removing either leaves the user's projects
+(`Documents\KYNEX`) and settings (`%APPDATA%\kynex`). Both programs carry
+KYNEX's icon and version (`apps/kynex/assets/kynex.rc`, built in by
+`build.rs` with the Windows SDK's `rc.exe`).
+
+The tools are free: Inno Setup (`winget install JRSoftware.InnoSetup`) and
+WiX 5 (`dotnet tool install --global wix --version 5.0.2`; WiX 6 and later
+come with a maintenance-fee licence). The installers are not code-signed:
+Windows SmartScreen warns about an unsigned setup.exe until a code-signing
+certificate signs it.
+
 ## Benchmark
 
 ```

@@ -80,6 +80,8 @@ pub struct Project {
     pub library: Vec<Value>,
     /// Saved variants of the cell, to compare (see `crate::scenario`).
     pub scenarios: Vec<Value>,
+    /// Where the PLC is, if one is wired (see `crate::plc`).
+    pub plc: Value,
 }
 
 impl Posing {
@@ -112,6 +114,7 @@ impl Posing {
                         cell: list("cell"),
                         library: list("library"),
                         scenarios,
+                        plc: all["plc"].clone(),
                     },
                 )
             }
@@ -226,6 +229,7 @@ impl Posing {
             "cell": rest.cell,
             "library": rest.library,
             "scenarios": rest.scenarios,
+            "plc": rest.plc,
         }))
         .expect("programs serialise");
         let next = file.with_extension("json.new");

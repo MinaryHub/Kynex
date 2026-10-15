@@ -643,6 +643,38 @@ cargo run -p kynex-link --example demo_session -- --key demo
 cargo run -p kynex -- view 127.0.0.1:7878 --key demo --open
 ```
 
+## PLC (virtual commissioning)
+
+The cell's machines can be run by a PLC's program instead of the robot's,
+to try the PLC's logic before the machines exist (`apps/kynex/src/plc.rs`).
+KYNEX is a Modbus TCP client of the PLC, as Visual Components is:
+
+- **PLC** in the toolbar: the PLC's address, port (502 by default) and
+  unit, and **연결**. Kept in the project file. The dot on the button is
+  green while KYNEX exchanges with the PLC, every 50 ms.
+- **PLC 코일** in a machine's inspector: a coil address (from 0, as
+  Modbus addresses them) for each command and each state. A command — 문
+  열기, 척 물림, 시작 … — is given as the PLC turns its coil on; a state —
+  문 열림, 척 물림됨, 척 풀림됨, 완료 … — is written to its coil as it
+  changes. A command the machine cannot take (a door while machining) is
+  shown beside the link's state.
+- The chuck closes and opens over the machine's **척 개폐** time: **척
+  물림됨** comes on once it has closed, **척 풀림됨** once it is open
+  again, and a cycle starts only clamped.
+
+Checked against a server that is not KYNEX's own, pymodbus (free), with
+a small PLC program in `tools/plc/check.py` running a lathe's door and
+chuck over and over:
+
+```
+pip install pymodbus
+cargo run -p kynex -- view --empty --port 8097 --project target/plc/kynex-project.json
+python tools/plc/check.py --cycles 3
+```
+
+Every step took the lathe's own time to within 0.13 s (3 s doors, 1 s
+chuck), the rest being the 50 ms exchange.
+
 ## Benchmark
 
 ```

@@ -73,6 +73,8 @@ pub enum Signal {
     DoorOpen,
     DoorClosed,
     Clamped,
+    /// The chuck all the way open: a part can go in or come out.
+    Unclamped,
     /// Not machining.
     Idle,
     /// Not machining, and a finished part in the chuck.
@@ -84,11 +86,12 @@ pub enum Signal {
 }
 
 impl Signal {
-    pub const ALL: [Signal; 7] = [
+    pub const ALL: [Signal; 8] = [
         Signal::Arrived,
         Signal::DoorOpen,
         Signal::DoorClosed,
         Signal::Clamped,
+        Signal::Unclamped,
         Signal::Idle,
         Signal::Done,
         Signal::PartAtEnd,
@@ -99,6 +102,7 @@ impl Signal {
             Signal::DoorOpen => "door_open",
             Signal::DoorClosed => "door_closed",
             Signal::Clamped => "clamped",
+            Signal::Unclamped => "unclamped",
             Signal::Idle => "idle",
             Signal::Done => "done",
             Signal::PartAtEnd => "part_at_end",
@@ -365,6 +369,10 @@ pub struct Component {
     /// [`io_points`]): 0–7 the standard ones, 8–15 the configurable, 16
     /// and 17 the tool's.
     pub io: BTreeMap<String, u32>,
+    /// The PLC's coils it is wired to, by what it does (see
+    /// [`io_points`] and `crate::plc`): a command it is given when its coil
+    /// comes on, a state written to its coil.
+    pub plc: BTreeMap<String, u32>,
 }
 
 /// What a component of kind `kind` can be wired to: the robot's outputs
@@ -374,7 +382,7 @@ pub fn io_points(kind: Kind) -> (&'static [&'static str], &'static [&'static str
         Kind::Gripper => (&["close"], &["closed"]),
         Kind::Cnc => (
             &["open", "close", "clamp", "unclamp", "start"],
-            &["door_open", "door_closed", "clamped", "idle", "done"],
+            &["door_open", "door_closed", "clamped", "unclamped", "idle", "done"],
         ),
         Kind::Molder => (
             &["open", "close", "start"],
@@ -387,6 +395,25 @@ pub fn io_points(kind: Kind) -> (&'static [&'static str], &'static [&'static str
 
 /// The highest I/O number: the tool's second output or input.
 pub const LAST_IO: u32 = 17;
+
+/// The highest PLC coil address: Modbus addresses a coil in 16 bits.
+pub const LAST_COIL: u32 = 65535;
+
+/// A PLC map as saved: `{"open": 100, …}`.
+fn plc_of(v: &Value) -> BTreeMap<String, u32> {
+    v.as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| {
+                    Some((
+                        k.clone(),
+                        v.as_u64().filter(|n| *n <= LAST_COIL as u64)? as u32,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// An I/O map as saved: `{"close": 0, …}`.
 fn io_of(v: &Value) -> BTreeMap<String, u32> {
@@ -433,7 +460,11 @@ pub struct Machine {
     pub door: f64,
     /// Whether the door is opening (or open), rather than closing.
     pub opening: bool,
+    /// Whether the chuck is told to clamp (or has), rather than let go.
     pub clamped: bool,
+    /// How far closed the chuck is: 0 open, 1 clamped. It closes and opens
+    /// over the machine's chuck time.
+    pub chuck: f64,
     /// Seconds into the cycle, while machining.
     pub machining: Option<f64>,
 }
@@ -441,6 +472,16 @@ pub struct Machine {
 impl Machine {
     pub fn shut(&self) -> bool {
         self.door <= 0.0 && !self.opening
+    }
+
+    /// Whether the chuck has closed on what is in it.
+    pub fn gripping(&self) -> bool {
+        self.clamped && self.chuck >= 1.0
+    }
+
+    /// Whether the chuck holds what is in it, however little: not open.
+    pub fn holding(&self) -> bool {
+        self.clamped || self.chuck > 0.0
     }
 }
 
@@ -558,6 +599,9 @@ pub struct Cell {
     /// Each AMR that has been sent anywhere: where it is, and the legs of
     /// its way still to go.
     rovers: BTreeMap<u64, Rover>,
+    /// Each PLC command coil as last read: a command is given as its coil
+    /// comes on.
+    plc_last: BTreeMap<u32, bool>,
 }
 
 /// An AMR on its way: where its centre is on the floor and which way it
@@ -756,6 +800,7 @@ impl Cell {
                         kind,
                         props,
                         io: io_of(&saved["io"]),
+                        plc: plc_of(&saved["plc"]),
                     });
                     self.changed = true;
                 }
@@ -764,6 +809,7 @@ impl Cell {
                 (Some(object), Some(kind)) => {
                     if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {
                         c.io = io_of(&saved["io"]);
+                        c.plc = plc_of(&saved["plc"]);
                         c.kind = kind;
                         c.props.update(&saved["props"]);
                         self.changed = true;
@@ -807,6 +853,7 @@ impl Cell {
                     "kind": c.kind.tag(),
                     "props": c.props.to_json(),
                     "io": c.io,
+                    "plc": c.plc,
                 })
             })
             .chain(self.pending.iter().cloned())
@@ -846,6 +893,7 @@ impl Cell {
             kind,
             props: Props::for_kind(kind),
             io: BTreeMap::new(),
+            plc: BTreeMap::new(),
         });
         self.roles_changed = true;
         self.changed = true;
@@ -1240,8 +1288,13 @@ impl Cell {
                         kind,
                         props,
                         io: was
+                            .as_ref()
                             .filter(|c| c.kind == kind)
-                            .map(|c| c.io)
+                            .map(|c| c.io.clone())
+                            .unwrap_or_default(),
+                        plc: was
+                            .filter(|c| c.kind == kind)
+                            .map(|c| c.plc)
                             .unwrap_or_default(),
                     });
                 }
@@ -1329,6 +1382,7 @@ impl Cell {
                         kind,
                         props: Props::for_kind(kind),
                         io: BTreeMap::new(),
+                        plc: BTreeMap::new(),
                     });
                     added += 1;
                 }
@@ -1396,6 +1450,31 @@ impl Cell {
                 self.roles_changed = true;
                 self.changed = true;
             }
+            // A command or a state wired to a PLC's coil, or no more.
+            "plc" => {
+                let object = uid("object")?;
+                let key = req["key"].as_str().ok_or("no key")?;
+                let c = self
+                    .components
+                    .iter_mut()
+                    .find(|c| c.object == object)
+                    .ok_or("셀 역할이 없습니다")?;
+                let (outs, ins) = io_points(c.kind);
+                if !outs.contains(&key) && !ins.contains(&key) {
+                    return Err(format!("{key}: 이 역할에 없는 신호입니다"));
+                }
+                match req["coil"].as_u64() {
+                    Some(n) if n <= LAST_COIL as u64 => {
+                        c.plc.insert(key.to_string(), n as u32);
+                    }
+                    Some(_) => return Err(format!("코일 주소는 0–{LAST_COIL}입니다")),
+                    None => {
+                        c.plc.remove(key);
+                    }
+                }
+                self.roles_changed = true;
+                self.changed = true;
+            }
             "grip" => self.grip(doc, uid("gripper")?)?,
             "release" => self.release(doc, uid("gripper")?)?,
             "machine" => {
@@ -1416,7 +1495,7 @@ impl Cell {
         let clamped_seats: Vec<DVec3> = self
             .components
             .iter()
-            .filter(|c| self.machines.get(&c.object).is_some_and(|m| m.clamped))
+            .filter(|c| self.machines.get(&c.object).is_some_and(Machine::holding))
             .filter_map(|c| self.seat(doc, c))
             .collect();
         if self
@@ -1568,7 +1647,7 @@ impl Cell {
                     Some(true) => return Err("척에 있는 것은 이미 완성품입니다".into()),
                     Some(false) => {}
                 }
-                if !m.clamped {
+                if !m.gripping() {
                     return Err("척을 물려야 가공을 시작할 수 있습니다".into());
                 }
                 m.machining = Some(0.0);
@@ -1603,7 +1682,8 @@ impl Cell {
         match signal {
             Signal::DoorOpen => m.door >= 1.0 && m.opening,
             Signal::DoorClosed => m.shut(),
-            Signal::Clamped => m.clamped,
+            Signal::Clamped => m.gripping(),
+            Signal::Unclamped => !m.clamped && m.chuck <= 0.0,
             Signal::Idle => m.machining.is_none(),
             Signal::Done => m.machining.is_none() && self.in_chuck(doc, c) == Some(true),
             Signal::PartAtEnd | Signal::Arrived => false,
@@ -1615,6 +1695,69 @@ impl Cell {
     /// is. `doc` is the scene the chucks are in. Returns whether the viewers
     /// have anything to look at again: at a change of state at once, and
     /// while running, every [`REPORT`] of real time `now`.
+    /// The PLC's coils the cell reads: its machines' commands.
+    pub fn plc_reads(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = self
+            .components
+            .iter()
+            .flat_map(|c| {
+                let (outs, _) = io_points(c.kind);
+                c.plc
+                    .iter()
+                    .filter(move |(k, _)| outs.contains(&k.as_str()))
+                    .map(|(_, a)| *a)
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// One exchange with a PLC: `coils` its command coils as read. A
+    /// command whose coil has come on since last read is given; an error a
+    /// command meets (a door opened while machining) is returned, with the
+    /// machine's name. Returns the state coils to write, and what went
+    /// wrong.
+    pub fn plc_exchange(
+        &mut self,
+        doc: &Document,
+        coils: &BTreeMap<u32, bool>,
+    ) -> (Vec<(u32, bool)>, Vec<String>) {
+        let mut errors = Vec::new();
+        for c in self.components.clone() {
+            let (outs, _) = io_points(c.kind);
+            for (key, address) in &c.plc {
+                if !outs.contains(&key.as_str()) {
+                    continue;
+                }
+                let Some(&on) = coils.get(address) else {
+                    continue;
+                };
+                let was = self.plc_last.insert(*address, on).unwrap_or(false);
+                if on && !was {
+                    if let Some(command) = Command::of(key) {
+                        if let Err(e) = self.command(doc, c.object, command) {
+                            errors.push(format!("{}: {e}", c.name));
+                        }
+                    }
+                }
+            }
+        }
+        let mut writes = Vec::new();
+        for c in &self.components {
+            let (_, ins) = io_points(c.kind);
+            for (key, address) in &c.plc {
+                if !ins.contains(&key.as_str()) {
+                    continue;
+                }
+                if let Some(signal) = Signal::of(key) {
+                    writes.push((*address, self.signal(doc, c.object, signal)));
+                }
+            }
+        }
+        (writes, errors)
+    }
+
     pub fn tick(&mut self, doc: &Document, sim: f64, now: Instant) -> bool {
         let dt = self.last_tick.map_or(0.0, |t| (sim - t).max(0.0));
         self.last_tick = Some(sim);
@@ -1639,7 +1782,10 @@ impl Cell {
                 .iter()
                 .any(|c| c.kind == Kind::Conveyor && c.props.feed > 0.0)
             || self.machines.values().any(|m| {
-                m.machining.is_some() || (m.opening && m.door < 1.0) || (!m.opening && m.door > 0.0)
+                m.machining.is_some()
+                    || (m.opening && m.door < 1.0)
+                    || (!m.opening && m.door > 0.0)
+                    || m.chuck != if m.clamped { 1.0 } else { 0.0 }
             })
     }
 
@@ -1669,6 +1815,22 @@ impl Cell {
                     (m.door - pace).max(0.0)
                 };
                 finished |= m.door == target;
+            }
+            // The chuck closing or opening, over its own time.
+            let target = if m.clamped { 1.0 } else { 0.0 };
+            if m.chuck != target {
+                moving = true;
+                let pace = if c.props.chuck > 0.0 {
+                    dt / c.props.chuck
+                } else {
+                    1.0
+                };
+                m.chuck = if m.clamped {
+                    (m.chuck + pace).min(1.0)
+                } else {
+                    (m.chuck - pace).max(0.0)
+                };
+                finished |= m.chuck == target;
             }
             if let Some(t) = m.machining {
                 moving = true;
@@ -2273,6 +2435,7 @@ impl Cell {
                     "kind": c.kind.tag(),
                     "props": c.props.to_json(),
                     "io": c.io,
+                    "plc": c.plc,
                     "io_points": {
                         "outputs": io_points(c.kind).0,
                         "inputs": io_points(c.kind).1,
@@ -2323,6 +2486,7 @@ impl Cell {
                             "door": m.door,
                             "opening": m.opening,
                             "clamped": m.clamped,
+                            "chuck": m.chuck,
                             "progress": m.machining.map(|t| (t / c.props.cycle.max(1e-9)).min(1.0)),
                             "left": m.machining.map(|t| (c.props.cycle - t).max(0.0)),
                             "part": part,
@@ -2368,6 +2532,7 @@ pub fn is_op(op: &str) -> bool {
             | "turn"
             | "io"
             | "point"
+            | "plc"
     )
 }
 
@@ -2685,6 +2850,14 @@ mod tests {
             json!({"op": "grip", "gripper": grip.to_string()}),
         );
         assert!(a["error"].as_str().unwrap().contains("척"), "{a}");
+        // Not machined until the chuck has closed, over its 1 s.
+        let a = act(&mut cell, &doc, "start");
+        assert!(a["error"].as_str().unwrap().contains("척"), "{a}");
+        assert!(cell.is_running(), "the chuck closing");
+        cell.tick(&doc, 7.5, at(7.5));
+        assert!(!cell.signal(&doc, machine, Signal::Clamped));
+        cell.tick(&doc, 8.0, at(8.0));
+        assert!(cell.signal(&doc, machine, Signal::Clamped));
         assert_eq!(act(&mut cell, &doc, "start")["ok"], true);
         assert_eq!(
             act(&mut cell, &doc, "open")["ok"],
@@ -2694,10 +2867,10 @@ mod tests {
         assert_eq!(act(&mut cell, &doc, "unclamp")["ok"], false);
 
         // 90 s later the part in the chuck is finished.
-        cell.tick(&doc, 50.0, at(50.0));
+        cell.tick(&doc, 51.0, at(51.0));
         assert!(cell.is_running());
         assert!(
-            cell.tick(&doc, 97.5, at(97.5)),
+            cell.tick(&doc, 98.5, at(98.5)),
             "the cycle's end is reported"
         );
         assert!(!cell.is_running());

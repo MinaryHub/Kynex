@@ -219,6 +219,37 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   pointer-events: none;
 }
 .toolbar .sep { width: 1px; height: 18px; background: var(--line-2); margin: 0 4px; }
+.toolbar button { position: relative; }
+.plc-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn, #ffb347);
+}
+.plc-dot.ok { background: #3ddc84; }
+.plc-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 58px;
+  transform: translateX(-50%);
+  width: min(340px, calc(100% - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: rgba(20, 23, 28, 0.96);
+  z-index: 5;
+}
+.plc-head { font-weight: 600; margin-bottom: 8px; }
+.plc-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.plc-fields label:first-child { grid-column: 1 / -1; }
+.plc-fields input[type="text"] { flex: 1; min-width: 0; }
+.plc-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.plc-status.ok { color: #3ddc84; }
+.plc-status.bad { color: #ff7a6b; }
+.plc-help { margin: 8px 0 0; font-size: 11px; line-height: 1.45; }
 
 .hint {
   position: absolute;

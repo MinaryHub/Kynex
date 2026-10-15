@@ -28,6 +28,7 @@ const SIGNALS = [
   ['door_open', '문 열림'],
   ['door_closed', '문 닫힘'],
   ['clamped', '척 물림'],
+  ['unclamped', '척 풀림'],
   ['idle', '가공 대기'],
   ['done', '가공 완료'],
 ];

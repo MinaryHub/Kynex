@@ -35,6 +35,7 @@ mod cell;
 mod collide;
 mod edges;
 mod library;
+mod plc;
 mod pose;
 mod program;
 mod run;

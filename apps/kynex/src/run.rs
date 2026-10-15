@@ -483,6 +483,7 @@ pub fn signal_label(signal: Signal) -> &'static str {
         Signal::DoorOpen => "문 열림",
         Signal::DoorClosed => "문 닫힘",
         Signal::Clamped => "척 물림",
+        Signal::Unclamped => "척 풀림",
         Signal::Idle => "가공 대기",
         Signal::Done => "가공 완료",
         Signal::PartAtEnd => "부품 도착",

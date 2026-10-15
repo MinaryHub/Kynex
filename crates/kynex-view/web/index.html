@@ -81,9 +81,25 @@
       <button data-toggle="measure" title="측정: 장면에서 두 점을 누르면 거리를 잽니다 (M)"><svg viewBox="0 0 20 20"><path d="M3 14L14 3l3 3L6 17zM6 11l1.5 1.5M8.5 8.5l2 2M11 6l1.5 1.5"/></svg></button>
       <button data-action="report" title="배치 보고서: 그림, 장비, 로봇, 셀 역할을 한 장에 (인쇄 또는 PDF로 저장)"><svg viewBox="0 0 20 20"><path d="M5 2.5h7l3 3v12H5zM12 2.5v3h3M7.5 9h5M7.5 12h5M7.5 15h3"/></svg></button>
       <button data-action="record" title="화면 녹화: 다시 누르면 영상(WebM)으로 내려받습니다"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="5" class="rec-dot"/></svg><span class="rec-time" hidden></span></button>
+      <span class="sep"></span>
+      <button data-action="plc" title="PLC 연결 (Modbus TCP): PLC 프로그램으로 장비를 움직이는 가상 시운전"><svg viewBox="0 0 20 20"><path d="M3 4h14v12H3zM6 8h2M6 12h2M11 7v2M14 7v2M11 11v2M14 11v2"/></svg><span class="plc-dot" hidden></span></button>
     </div>
 
     <div class="measure-readout num" id="measure" hidden></div>
+
+    <div class="plc-panel" id="plc-panel" hidden>
+      <div class="plc-head">PLC 연결 <span class="muted">Modbus TCP</span></div>
+      <div class="plc-fields">
+        <label class="insp-field">주소<input id="plc-host" type="text" value="127.0.0.1" spellcheck="false"></label>
+        <label class="insp-field">포트<input id="plc-port" type="number" class="num" value="502" min="1" max="65535"></label>
+        <label class="insp-field">유닛<input id="plc-unit" type="number" class="num" value="1" min="0" max="255"></label>
+      </div>
+      <div class="plc-actions">
+        <button class="text-btn" id="plc-connect">연결</button>
+        <span class="plc-status muted" id="plc-status">연결 안 됨</span>
+      </div>
+      <p class="muted plc-help">장비의 셀 역할 아래 "PLC 코일"에서 명령·상태마다 코일 주소를 정하세요. PLC가 명령 코일을 켜면 장비가 움직이고, 장비 상태는 상태 코일로 PLC에 갑니다.</p>
+    </div>
 
     <div class="inspector" id="inspector" hidden>
       <div class="insp-head">
@@ -105,6 +121,10 @@
         <details class="insp-io" id="cell-io-box" hidden>
           <summary>I/O 연결 <span class="muted">URScript로 내보낼 때</span></summary>
           <div id="cell-io"></div>
+        </details>
+        <details class="insp-io" id="cell-plc-box" hidden>
+          <summary>PLC 코일 <span class="muted">Modbus TCP, 주소 0부터</span></summary>
+          <div id="cell-plc"></div>
         </details>
       </div>
       <div class="insp-custom">

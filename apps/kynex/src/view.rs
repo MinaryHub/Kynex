@@ -241,6 +241,10 @@ struct Stage {
     scenarios_changed: bool,
     /// A comparison running away from the loop: its results, when done.
     comparing: Option<Receiver<Vec<Value>>>,
+    /// The PLC the cell's machines are wired to, and whether where it is
+    /// changed since last saved.
+    plc: crate::plc::Plc,
+    plc_changed: bool,
 }
 
 /// How often the timeline goes to the viewers while it grows.
@@ -284,6 +288,8 @@ impl Stage {
             compared: Vec::new(),
             scenarios_changed: false,
             comparing: None,
+            plc: crate::plc::Plc::new(crate::plc::Settings::of(&saved.plc)),
+            plc_changed: false,
         })
     }
 
@@ -349,7 +355,14 @@ impl Stage {
                     .retain(|r| robot.is_some_and(|robot| robot != r.root));
                 touched |= self.runners.len() != before;
             }
-            let reply = if op == "scenario" {
+            let reply = if op == "plc_link" {
+                // Where the PLC is, and whether to be linked to it.
+                let req: Value = serde_json::from_str(&request.body).unwrap_or_default();
+                self.plc.set(crate::plc::Settings::of(&req));
+                self.plc_changed = true;
+                touched = true;
+                serde_json::json!({ "ok": true }).to_string()
+            } else if op == "scenario" {
                 touched = true;
                 self.scenario_op(doc, &request.body)
             } else if matches!(op.as_str(), "play" | "stop" | "speed") {
@@ -434,6 +447,13 @@ impl Stage {
             }
         }
         touched |= self.cell.tick(scene, time, now);
+        // A PLC's commands given, the machines' states handed back.
+        if self.plc.on() {
+            let (writes, errors) = self.cell.plc_exchange(scene, &self.plc.coils());
+            self.plc.warn(errors);
+            self.plc.hand(self.cell.plc_reads(), writes);
+            touched |= self.cell.take_changed();
+        }
         // A program going round is kept supplied, as an operator would:
         // raw parts on the infeed, finished parts off the outfeed — whole
         // pallets at a time for the pallets it goes through place by place.
@@ -506,6 +526,7 @@ impl Stage {
     fn running(&self) -> bool {
         self.runners.iter().any(|r| !r.stopped())
             || self.cell.is_running()
+            || self.plc.on()
             || self.comparing.is_some()
     }
 
@@ -697,11 +718,14 @@ impl Stage {
         let roles = self.cell.take_roles_changed();
         let items = self.library.take_items_changed();
         let scenarios = std::mem::take(&mut self.scenarios_changed);
-        if programs || roles || items || scenarios || replaced {
+        let plc = std::mem::take(&mut self.plc_changed);
+        server.state("plc", &self.plc.to_json().to_string());
+        if programs || roles || items || scenarios || plc || replaced {
             let rest = Project {
                 cell: self.cell.to_saved(),
                 library: self.library.to_saved(),
                 scenarios: self.scenarios.clone(),
+                plc: self.plc.settings.to_json(),
             };
             if let Err(e) = self.posing.save(scene, rest) {
                 println!("프로젝트를 저장하지 못했습니다: {e}");

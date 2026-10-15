@@ -37,6 +37,7 @@ const IO_LABELS = {
   door_open: '문 열림',
   door_closed: '문 닫힘',
   clamped: '척 물림됨',
+  unclamped: '척 풀림됨',
   idle: '대기 중',
   done: '완료',
   part_at_end: '부품 도착',
@@ -138,9 +139,19 @@ export class CellPanel {
       }
       this.send({ op: 'io', object: this.ctx.selected(), key, port });
     });
+    document.getElementById('cell-plc').addEventListener('change', (e) => {
+      const key = e.target.dataset.plc;
+      if (!key) return;
+      const v = e.target.value.trim();
+      const coil = v === '' ? null : Number(v);
+      if (coil != null && !(Number.isInteger(coil) && coil >= 0 && coil <= 65535)) {
+        return this.ctx.toast('코일 주소는 0–65535입니다');
+      }
+      this.send({ op: 'plc', object: this.ctx.selected(), key, coil });
+    });
     // What the inspector last drew, so that a running machine's progress
     // does not redraw the fields under the pointer.
-    this.drawn = { props: '', actions: '', io: '' };
+    this.drawn = { props: '', actions: '', io: '', plc: '' };
     document.getElementById('cell-auto').addEventListener('click', () =>
       this.send({ op: 'auto' }, (a) => this.ctx.toast(a.added ? `셀 역할 ${a.added}개를 이름으로 정했습니다` : '이름으로 정할 역할이 없습니다')),
     );
@@ -253,16 +264,34 @@ export class CellPanel {
       document.getElementById('cell-io').innerHTML =
         io.outputs.map((k) => row(k, true)).join('') + io.inputs.map((k) => row(k, false)).join('');
     }
+    // Its PLC coils: commands the PLC gives it, states it gives the PLC.
+    // A gripper is the robot's: its program closes it.
+    const plcBox = document.getElementById('cell-plc-box');
+    const plcPoints = c && c.kind !== 'gripper' ? c.io_points : null;
+    plcBox.hidden = !plcPoints || !(plcPoints.outputs.length + plcPoints.inputs.length);
+    const plcKey = `${uid}|${JSON.stringify(c?.plc)}`;
+    if (!plcBox.hidden && plcKey !== this.drawn.plc && !plcBox.contains(document.activeElement)) {
+      this.drawn.plc = plcKey;
+      const row = (key, command) => {
+        const n = c.plc?.[key];
+        const label = IO_LABELS[`${c.kind}:${key}`] ?? IO_LABELS[key] ?? key;
+        return `<label class="insp-field">${command ? 'PLC →' : '→ PLC'} ${escapeHtml(label)}<input type="number" class="num" data-plc="${escapeHtml(key)}" value="${n ?? ''}" min="0" max="65535" placeholder="없음"></label>`;
+      };
+      document.getElementById('cell-plc').innerHTML =
+        plcPoints.outputs.map((k) => row(k, true)).join('') + plcPoints.inputs.map((k) => row(k, false)).join('');
+    }
   }
 
   // A CNC machine's state, in words and a bar.
   machineHtml(m, kind) {
     const door = m.door >= 1 ? '열림' : m.door <= 0 ? '닫힘' : m.opening ? '여는 중' : '닫는 중';
     const molder = kind === 'molder';
+    const travel = m.chuck ?? (m.clamped ? 1 : 0);
+    const chuck = m.clamped ? (travel >= 1 ? '물림' : '무는 중') : travel <= 0 ? '풀림' : '푸는 중';
     const part = m.part === 'raw' ? '소재' : m.part === 'finished' ? (molder ? '성형품' : '완성품') : '없음';
     let html = molder
       ? `<div class="machine-state"><span>가드 <b>${door}</b></span><span>금형 <b>${part}</b></span></div>`
-      : `<div class="machine-state"><span>문 <b>${door}</b></span><span>척 <b>${m.clamped ? '물림' : '풀림'}</b></span><span>척 안 <b>${part}</b></span></div>`;
+      : `<div class="machine-state"><span>문 <b>${door}</b></span><span>척 <b>${chuck}</b></span><span>척 안 <b>${part}</b></span></div>`;
     if (m.progress != null) {
       html += `<div class="machine-bar"><span style="width:${(m.progress * 100).toFixed(1)}%"></span><em>${molder ? '성형' : '가공'} 중 ${Math.round(m.progress * 100)}% · 남은 ${Math.ceil(m.left)} s</em></div>`;
     }

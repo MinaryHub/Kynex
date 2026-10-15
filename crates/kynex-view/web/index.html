@@ -140,10 +140,16 @@
           <div id="cell-io"></div>
         </details>
         <details class="insp-io" id="cell-mirror-box" hidden>
-          <summary>실제 장비 따라가기 <span class="muted">MTConnect</span></summary>
+          <summary>실제 장비 따라가기 <span class="muted">MTConnect · umati</span></summary>
           <div class="insp-props">
-            <label class="insp-field">에이전트<input id="mirror-agent" type="text" placeholder="http://10.0.0.5:5000" spellcheck="false"></label>
-            <label class="insp-field">장비<input id="mirror-device" type="text" placeholder="이름 (비우면 첫 장비)" spellcheck="false"></label>
+            <label class="insp-field">방식<select id="mirror-kind"><option value="mtconnect">MTConnect</option><option value="umati">umati (OPC UA)</option></select></label>
+            <label class="insp-field" data-mirror="mtconnect">에이전트<input id="mirror-agent" type="text" placeholder="http://10.0.0.5:5000" spellcheck="false"></label>
+            <label class="insp-field" data-mirror="mtconnect">장비<input id="mirror-device" type="text" placeholder="이름 (비우면 첫 장비)" spellcheck="false"></label>
+            <label class="insp-field" data-mirror="umati">서버<input id="mirror-url" type="text" placeholder="opc.tcp://10.0.0.5:4840" spellcheck="false"></label>
+            <label class="insp-field" data-mirror="umati">장비 노드<input id="mirror-node" type="text" placeholder="ns=3;s=Machine1" spellcheck="false"></label>
+            <label class="insp-field" data-mirror="umati">보안<select id="mirror-security"><option value="none">없음</option><option value="sign">서명</option><option value="encrypt">서명·암호화</option></select></label>
+            <label class="insp-field" data-mirror="umati">사용자<input id="mirror-user" type="text" placeholder="익명" spellcheck="false" autocomplete="off"></label>
+            <label class="insp-field" data-mirror="umati">비밀번호<input id="mirror-password" type="password" autocomplete="new-password"></label>
           </div>
           <div class="insp-actions"><button class="text-btn" id="mirror-go">따라가기</button><span class="muted" id="mirror-state"></span></div>
         </details>

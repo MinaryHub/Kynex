@@ -292,6 +292,7 @@ impl Identity {
         self.key.size()
     }
 
+    #[cfg(test)]
     pub fn thumbprint(&self) -> [u8; 20] {
         thumbprint(&self.der)
     }

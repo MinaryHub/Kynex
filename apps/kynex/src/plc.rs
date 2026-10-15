@@ -442,6 +442,49 @@ impl Drop for Plc {
     }
 }
 
+/// An OPC UA session as `settings` say: with no security, or a channel
+/// kept with Basic256Sha256 — the server's certificate from its endpoints,
+/// and only if it is the one trusted — as anonymous or as a user. With it,
+/// the thumbprint of the server's certificate, when the channel is kept.
+pub fn open_opcua(settings: &Settings) -> Result<(opcua::Session, Option<String>), String> {
+    let url = settings.url();
+    let user =
+        (!settings.user.is_empty()).then(|| (settings.user.clone(), settings.password.clone()));
+    let mode = settings.security;
+    if mode == opcua::Mode::None {
+        let options = opcua::Options {
+            user,
+            ..opcua::Options::anonymous()
+        };
+        return Ok((
+            opcua::Session::open(connect(settings)?, &url, options)?,
+            None,
+        ));
+    }
+    let endpoints = opcua::Session::endpoints(connect(settings)?, &url)?;
+    let endpoint = endpoints
+        .iter()
+        .find(|e| e.mode == mode.code() && e.policy == mode.policy())
+        .ok_or("OPC UA: 서버에 Basic256Sha256 보안 방식의 엔드포인트가 없습니다")?;
+    let server = secure::Peer::of(&endpoint.certificate)?;
+    let thumbprint = secure::hex(&server.thumbprint());
+    if !settings.trust.is_empty() && settings.trust != thumbprint {
+        return Err(format!(
+            "OPC UA: 서버 인증서가 믿기로 한 것과 다릅니다 (믿는 지문 {}, 지금 {thumbprint})",
+            settings.trust
+        ));
+    }
+    let identity = secure::Identity::load_or_create(&secure::pki_dir())?;
+    let options = opcua::Options {
+        mode,
+        identity: Some(identity),
+        server: Some(server),
+        user,
+    };
+    let session = opcua::Session::open(connect(settings)?, &url, options)?;
+    Ok((session, Some(thumbprint)))
+}
+
 /// A connection to a PLC, by protocol.
 enum Conn {
     Modbus {
@@ -497,45 +540,9 @@ impl Conn {
                 None,
             ));
         }
-        let url = settings.url();
-        let user =
-            (!settings.user.is_empty()).then(|| (settings.user.clone(), settings.password.clone()));
-        let mode = settings.security;
-        if mode == opcua::Mode::None {
-            let options = opcua::Options {
-                user,
-                ..opcua::Options::anonymous()
-            };
-            return Ok((
-                Conn::OpcUa(opcua::Session::open(stream, &url, options)?),
-                None,
-            ));
-        }
-        // The server's certificate, from its endpoints: the one it is kept
-        // with as asked, and only if it is the one trusted.
         drop(stream);
-        let endpoints = opcua::Session::endpoints(connect(settings)?, &url)?;
-        let endpoint = endpoints
-            .iter()
-            .find(|e| e.mode == mode.code() && e.policy == mode.policy())
-            .ok_or("OPC UA: 서버에 Basic256Sha256 보안 방식의 엔드포인트가 없습니다")?;
-        let server = secure::Peer::of(&endpoint.certificate)?;
-        let thumbprint = secure::hex(&server.thumbprint());
-        if !settings.trust.is_empty() && settings.trust != thumbprint {
-            return Err(format!(
-                "OPC UA: 서버 인증서가 믿기로 한 것과 다릅니다 (믿는 지문 {}, 지금 {thumbprint})",
-                settings.trust
-            ));
-        }
-        let identity = secure::Identity::load_or_create(&secure::pki_dir())?;
-        let options = opcua::Options {
-            mode,
-            identity: Some(identity),
-            server: Some(server),
-            user,
-        };
-        let session = opcua::Session::open(connect(settings)?, &url, options)?;
-        Ok((Conn::OpcUa(session), Some(thumbprint)))
+        let (session, thumbprint) = open_opcua(settings)?;
+        Ok((Conn::OpcUa(session), thumbprint))
     }
 
     /// What is at `addresses`, and the addresses that could not be read.

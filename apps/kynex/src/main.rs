@@ -42,6 +42,7 @@ mod program;
 mod run;
 mod scenario;
 mod timeline;
+mod umati;
 mod view;
 
 const USAGE: &str = "\

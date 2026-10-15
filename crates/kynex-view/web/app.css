@@ -654,7 +654,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .insp-props { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
 .insp-props:empty { display: none; }
 .insp-field { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.insp-field[hidden] { display: none; }
 .insp-field.wide select { flex: 1; }
+#cell-mirror-box .insp-props { grid-template-columns: 1fr; }
+#cell-mirror-box .insp-field > :is(input, select) { flex: 1; min-width: 0; }
+#cell-mirror-box .insp-field { white-space: nowrap; }
 .insp-field input, .insp-field select {
   min-width: 0;
   height: 24px;

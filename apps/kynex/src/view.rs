@@ -485,6 +485,13 @@ impl Stage {
                 .or_insert_with(|| crate::mtconnect::Mirror::start(source));
             self.cell
                 .mirror(uid, link.observation().as_ref(), time, link.to_json());
+            // A umati server's certificate met first is trusted, and kept,
+            // its link going on as it is.
+            if let Some(thumbprint) = link.thumbprint() {
+                if let Some(source) = self.cell.trust_mirror(uid, &thumbprint) {
+                    link.source = source;
+                }
+            }
         }
         touched |= self.cell.take_changed();
         // A PLC's commands given, the machines' states handed back.

@@ -76,7 +76,7 @@ fn an_answer_is_read_whole_in_chunks_or_by_length() {
 #[test]
 #[ignore = "asks demo.mtconnect.org over the internet"]
 fn the_public_demo_agent_is_read_live() {
-    let mirror = Mirror::start(Source {
+    let mirror = Mirror::start(Source::MtConnect {
         agent: "http://demo.mtconnect.org:5000".into(),
         device: "OKUMA".into(),
     });
@@ -131,4 +131,43 @@ fn a_trickling_agent_is_let_go() {
         "{:?}",
         start.elapsed()
     );
+}
+
+/// A umati source given as one URL: its host, port and path; a password
+/// never saved; a URL that is not OPC UA's refused.
+#[test]
+fn a_umati_server_is_given_as_one_url() {
+    let v = serde_json::json!({
+        "kind": "umati", "url": "opc.tcp://10.0.0.5:4841/umati/",
+        "node": "ns=3;s=Machine1", "security": "encrypt",
+        "user": "kynex", "password": "secret",
+    });
+    let Some(Source::Umati { settings, node }) = Source::of(&v) else {
+        panic!("a umati source");
+    };
+    assert_eq!(
+        (
+            settings.host.as_str(),
+            settings.port,
+            settings.path.as_str()
+        ),
+        ("10.0.0.5", 4841, "/umati/")
+    );
+    assert_eq!(node, "ns=3;s=Machine1");
+    let source = Source::Umati { settings, node };
+    assert!(source.check().is_ok());
+    let saved = source.to_json();
+    assert_eq!(saved["url"], "opc.tcp://10.0.0.5:4841/umati/");
+    assert!(!saved.to_string().contains("secret"));
+
+    let default_port =
+        serde_json::json!({ "kind": "umati", "url": "opc.tcp://machine", "node": "i=85" });
+    let Some(Source::Umati { settings, .. }) = Source::of(&default_port) else {
+        panic!("a umati source");
+    };
+    assert_eq!((settings.host.as_str(), settings.port), ("machine", 4840));
+    assert!(Source::of(
+        &serde_json::json!({ "kind": "umati", "url": "http://machine", "node": "i=85" })
+    )
+    .is_none());
 }

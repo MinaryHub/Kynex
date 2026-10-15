@@ -144,11 +144,24 @@ export class CellPanel {
       const object = this.ctx.selected();
       const c = this.componentOf(object);
       const following = !!c?.mirror;
-      const agent = following ? '' : document.getElementById('mirror-agent').value.trim();
-      const device = document.getElementById('mirror-device').value.trim();
-      if (!following && !agent) return this.ctx.toast('에이전트 주소를 넣으세요 (http://호스트:5000)');
-      this.send({ op: 'mirror', object, agent, device });
+      if (following) return this.send({ op: 'mirror', object, agent: '' });
+      const value = (id) => document.getElementById(id).value.trim();
+      if (value('mirror-kind') === 'umati') {
+        const url = value('mirror-url');
+        const node = value('mirror-node');
+        if (!url.startsWith('opc.tcp://')) return this.ctx.toast('서버 주소를 넣으세요 (opc.tcp://호스트:4840)');
+        if (!node) return this.ctx.toast('장비 노드를 넣으세요 (예: ns=3;s=Machine1)');
+        const request = { op: 'mirror', object, kind: 'umati', url, node, security: value('mirror-security'), user: value('mirror-user') };
+        const password = document.getElementById('mirror-password').value;
+        if (password) request.password = password;
+        document.getElementById('mirror-password').value = '';
+        return this.send(request);
+      }
+      const agent = value('mirror-agent');
+      if (!agent) return this.ctx.toast('에이전트 주소를 넣으세요 (http://호스트:5000)');
+      this.send({ op: 'mirror', object, agent, device: value('mirror-device') });
     });
+    document.getElementById('mirror-kind').addEventListener('change', () => this.mirrorFields());
     document.getElementById('cell-plc').addEventListener('change', (e) => {
       const key = e.target.dataset.plc;
       if (!key) return;
@@ -171,6 +184,12 @@ export class CellPanel {
     } catch (err) {
       this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
     }
+  }
+
+  // The mirror box's fields for the way chosen.
+  mirrorFields() {
+    const kind = document.getElementById('mirror-kind').value;
+    for (const el of document.querySelectorAll('#cell-mirror-box [data-mirror]')) el.hidden = el.dataset.mirror !== kind;
   }
 
   componentOf(uid) {
@@ -274,17 +293,26 @@ export class CellPanel {
     const mirrorBox = document.getElementById('cell-mirror-box');
     mirrorBox.hidden = !(c && (c.kind === 'cnc' || c.kind === 'molder'));
     if (!mirrorBox.hidden) {
-      const agent = document.getElementById('mirror-agent');
-      const device = document.getElementById('mirror-device');
-      if (c.mirror && !mirrorBox.contains(document.activeElement)) {
-        agent.value = c.mirror.agent;
-        device.value = c.mirror.device;
+      const m = c.mirror;
+      if (m && !mirrorBox.contains(document.activeElement)) {
+        const set = (id, v) => (document.getElementById(id).value = v ?? '');
+        set('mirror-kind', m.kind === 'umati' ? 'umati' : 'mtconnect');
+        if (m.kind === 'umati') {
+          set('mirror-url', m.url);
+          set('mirror-node', m.node);
+          set('mirror-security', m.security || 'none');
+          set('mirror-user', m.user);
+        } else {
+          set('mirror-agent', m.agent);
+          set('mirror-device', m.device);
+        }
       }
-      agent.disabled = device.disabled = !!c.mirror;
-      document.getElementById('mirror-go').textContent = c.mirror ? '그만 따라가기' : '따라가기';
+      for (const el of mirrorBox.querySelectorAll('input, select')) el.disabled = !!m;
+      this.mirrorFields();
+      document.getElementById('mirror-go').textContent = m ? '그만 따라가기' : '따라가기';
       const st = c.machine?.mirror;
       let text = '';
-      if (c.mirror && st) {
+      if (m && st) {
         const last = st.last;
         if (st.error) text = st.error;
         if (last) {
@@ -293,9 +321,11 @@ export class CellPanel {
             .join(' · ');
           text = `${said} (${st.age ?? '?'}초 전)${st.error ? ` · ${st.error}` : ''}`;
         }
-      } else if (c.mirror) {
+      } else if (m) {
         text = '연결 중…';
       }
+      // A umati server's certificate, trusted on first meeting.
+      if (m?.kind === 'umati' && m.trust) text += `${text ? ' · ' : ''}서버 인증서 ${m.trust.slice(0, 16)}…`;
       document.getElementById('mirror-state').textContent = text;
     }
     // Its PLC coils: commands the PLC gives it, states it gives the PLC.

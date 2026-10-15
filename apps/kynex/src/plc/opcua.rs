@@ -32,6 +32,8 @@ mod id {
     pub const GET_ENDPOINTS_REQUEST: u32 = 428;
     pub const GET_ENDPOINTS_RESPONSE: u32 = 431;
     pub const USER_NAME_IDENTITY_TOKEN: u32 = 324;
+    pub const TRANSLATE_REQUEST: u32 = 554;
+    pub const TRANSLATE_RESPONSE: u32 = 557;
     pub const READ_REQUEST: u32 = 631;
     pub const READ_RESPONSE: u32 = 634;
     pub const WRITE_REQUEST: u32 = 673;
@@ -362,14 +364,43 @@ impl<'a> In<'a> {
             tokens,
         })
     }
-    /// A Variant holding a Boolean or a number: its type, and its value
-    /// as a whole number (a Boolean 0 or 1, a real rounded).
-    fn variant(&mut self) -> Result<Option<(u8, i64)>, String> {
+    /// A Variant: its type, and its value — a Boolean or a number as a
+    /// whole number (a Boolean 0 or 1, a real rounded), a text (a String,
+    /// a LocalizedText's text, a QualifiedName's name), or a list of
+    /// Strings.
+    fn variant(&mut self) -> Result<Option<(u8, Datum)>, String> {
         let kind = self.u8()?;
-        if kind & 0xC0 != 0 {
-            return Err("OPC UA: 배열 값은 읽지 않습니다".into());
-        }
         let t = kind & 0x3F;
+        if kind & 0x80 != 0 {
+            if t != 12 || kind & 0x40 != 0 {
+                return Err("OPC UA: 문자열 목록 말고는 배열 값을 읽지 않습니다".into());
+            }
+            let mut out = Vec::new();
+            for _ in 0..self.count()? {
+                out.push(self.string()?.unwrap_or_default());
+            }
+            return Ok(Some((t, Datum::Texts(out))));
+        }
+        match t {
+            12 => return Ok(Some((t, Datum::Text(self.string()?.unwrap_or_default())))),
+            20 => {
+                self.u16()?;
+                return Ok(Some((t, Datum::Text(self.string()?.unwrap_or_default()))));
+            }
+            21 => {
+                let mask = self.u8()?;
+                if mask & 1 != 0 {
+                    self.string()?; // locale
+                }
+                let text = if mask & 2 != 0 {
+                    self.string()?.unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                return Ok(Some((t, Datum::Text(text))));
+            }
+            _ => {}
+        }
         let take8 =
             |r: &mut Self| -> Result<[u8; 8], String> { Ok(r.take(8)?.try_into().unwrap()) };
         Ok(Some((
@@ -387,10 +418,20 @@ impl<'a> In<'a> {
                 9 => u64::from_le_bytes(take8(self)?).min(i64::MAX as u64) as i64,
                 10 => f32::from_le_bytes(self.take(4)?.try_into().unwrap()).round() as i64,
                 11 => f64::from_le_bytes(take8(self)?).round() as i64,
-                k => return Err(format!("OPC UA: 숫자로 읽을 수 없는 값 형식 {k}")),
+                k => return Err(format!("OPC UA: 읽을 수 없는 값 형식 {k}")),
             },
-        )))
+        ))
+        .map(|(t, v)| (t, Datum::Number(v))))
     }
+}
+
+/// A value as read: a number (a Boolean 0 or 1), a text, or a list of
+/// texts.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Datum {
+    Number(i64),
+    Text(String),
+    Texts(Vec<String>),
 }
 
 /// A status code as words, for the bad ones met most.
@@ -815,6 +856,21 @@ impl Session {
     /// number — each or why it could not be read. Each node's type is
     /// kept, to write it in.
     pub fn read(&mut self, nodes: &[NodeId]) -> Result<Vec<Result<i64, String>>, String> {
+        Ok(self
+            .read_data(nodes)?
+            .into_iter()
+            .zip(nodes)
+            .map(|(d, node)| match d {
+                Ok(Datum::Number(v)) => Ok(v),
+                Ok(_) => Err(format!("{node}: 숫자나 Boolean이 아닙니다")),
+                Err(e) => Err(e),
+            })
+            .collect())
+    }
+
+    /// The values of `nodes`, whatever they hold, each or why it could not
+    /// be read.
+    pub fn read_data(&mut self, nodes: &[NodeId]) -> Result<Vec<Result<Datum, String>>, String> {
         let mut body = Out::default();
         body.type_id(id::READ_REQUEST);
         let handle = self.next_request();
@@ -859,6 +915,45 @@ impl Session {
             return Err("OPC UA: 읽은 값의 수가 맞지 않습니다".into());
         }
         Ok(out)
+    }
+
+    /// The node `path` leads to from `start`, each step a browse name (its
+    /// namespace index, and its name) along hierarchical references, as a
+    /// companion specification names its parts.
+    pub fn translate(&mut self, start: &NodeId, path: &[(u16, &str)]) -> Result<NodeId, String> {
+        let mut body = Out::default();
+        body.type_id(id::TRANSLATE_REQUEST);
+        let handle = self.next_request();
+        let auth = self.auth.clone();
+        body.header(&auth, handle).i32(1); // one path
+        body.node(start).i32(path.len() as i32);
+        for (ns, name) in path {
+            body.node(&NodeId::Numeric(0, 33)) // HierarchicalReferences
+                .u8(0) // not inverse
+                .u8(1) // its subtypes too
+                .u16(*ns)
+                .string(Some(name));
+        }
+        let reply = self.call(&body.0, id::TRANSLATE_RESPONSE)?;
+        let mut r = In::new(&reply);
+        r.header()?;
+        let where_ = || {
+            path.iter()
+                .map(|(n, s)| format!("{n}:{s}"))
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        if r.count()? < 1 {
+            return Err(format!("OPC UA: {} 경로의 결과가 없습니다", where_()));
+        }
+        let code = r.u32()?;
+        if code & 0x8000_0000 != 0 {
+            return Err(format!("OPC UA: {}: {}", where_(), status(code)));
+        }
+        if r.count()? < 1 {
+            return Err(format!("OPC UA: {} 경로에 노드가 없습니다", where_()));
+        }
+        r.node()
     }
 
     /// Writes `value` to `node`'s value: as a Boolean, or else as a number

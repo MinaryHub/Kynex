@@ -744,7 +744,7 @@ running and coil 111 to 준비, `tools/plc/robot_check.py` on pymodbus
 turned coil 10 on: the program ran 0.05 s later, set 준비 at 0.42 s, and
 was done at 1.05 s.
 
-## Machine tools (MTConnect)
+## Machine tools (MTConnect, umati)
 
 A machine of the cell can follow a real machine tool on the shop floor
 (`apps/kynex/src/mtconnect.rs`): **실제 장비 따라가기** in a CNC machine's or
@@ -770,6 +770,40 @@ Checked two ways, as no reference agent ran here (Docker was off):
   its machine opening its door for 2 s, shutting it, cutting for 4 s and
   making a part, over and over; KYNEX's lathe followed each change, its
   cycles counting the parts.
+
+The same box follows a machine over **umati**, OPC UA for Machine Tools
+(OPC 40501-1, on Machinery, OPC 40001-1; `apps/kynex/src/umati.rs`): its
+way set to umati, it takes the machine's OPC UA server
+(`opc.tcp://host:4840/path`), the node id of the machine's own object
+(`ns=3;s=Machine1`) and the server's security and user, as the PLC
+connection takes them (same client, same certificate, the server's
+certificate trusted on first meeting and refused if it changes, the
+password never saved). KYNEX finds the machine's parts by the
+specifications' browse names from that node and reads them about once a
+second:
+
+- `Monitoring/MachineTool/MachineryItemState/CurrentState`: `Executing`
+  is cutting; `NotAvailable` and `OutOfService` are the machine away.
+- `Production/ActiveProgram/State/CurrentState`: `Running` is cutting
+  too, and each time it comes to `Ended` a part is counted.
+- `Production/ActiveProgram/Name`: the program.
+
+The specifications name no door, so a machine followed over umati keeps
+its door as it is.
+
+Checked with `tools/umati/check.py`, on asyncua (1.1.5 on Python 3.8, as
+for the PLC): an OPC UA server loading the OPC Foundation's own nodesets
+(DI, IA, Machinery, ISA95 Job Control, MachineTool, from
+OPCFoundation/UA-Nodeset) and making one machine of `MachineToolType`,
+idle, then running its program for 4 s, then the program ended, over and
+over. KYNEX's lathe, set to follow it through the viewer's request, cut
+while it ran and counted every ended program as a part ("ACTIVE · 생산 3
+· O1234").
+
+```
+kynex view --empty --port 8101 --project target/umati/kynex-project.json
+target/plc/venv38/Scripts/python tools/umati/check.py
+```
 
 ## Benchmark
 

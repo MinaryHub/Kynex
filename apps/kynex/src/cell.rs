@@ -380,22 +380,9 @@ pub struct Component {
     pub mirror: Option<crate::mtconnect::Source>,
 }
 
-/// A mirror's source as saved: `{"agent": …, "device": …}`.
+/// A mirror's source as saved (see `crate::mtconnect::Source`).
 fn mirror_of(v: &Value) -> Option<crate::mtconnect::Source> {
-    let agent = v["agent"].as_str()?.trim();
-    if agent.is_empty() || agent.len() > 300 {
-        return None;
-    }
-    Some(crate::mtconnect::Source {
-        agent: agent.to_string(),
-        device: v["device"]
-            .as_str()
-            .unwrap_or("")
-            .trim()
-            .chars()
-            .take(100)
-            .collect(),
-    })
+    crate::mtconnect::Source::of(v)
 }
 
 /// What a component of kind `kind` can be wired to: the robot's outputs
@@ -1029,7 +1016,7 @@ impl Cell {
                     "props": c.props.to_json(),
                     "io": c.io,
                     "plc": c.plc,
-                    "mirror": c.mirror.as_ref().map(|m| json!({"agent": m.agent, "device": m.device})),
+                    "mirror": c.mirror.as_ref().map(crate::mtconnect::Source::to_json),
                 })
             })
             .chain(self.pending.iter().cloned())
@@ -1675,10 +1662,7 @@ impl Cell {
                     .ok_or("CNC나 사출기가 아닙니다")?;
                 c.mirror = mirror_of(&req);
                 if let Some(m) = c.mirror.as_ref() {
-                    crate::mtconnect::split_url(&m.agent)?;
-                    if !crate::mtconnect::device_safe(&m.device) {
-                        return Err("장비 이름에는 영문자, 숫자와 - . _ ~ 만 쓸 수 있습니다".into());
-                    }
+                    m.check()?;
                 }
                 // Its state its own again, or the real one's from now.
                 self.machines.remove(&object);
@@ -2032,6 +2016,26 @@ impl Cell {
             }
         }
         out
+    }
+
+    /// Machine `machine`, following a umati server it trusts no
+    /// certificate of yet, trusts `thumbprint` from now on (and so it is
+    /// saved). Returns its source as it is then, if it changed.
+    pub fn trust_mirror(
+        &mut self,
+        machine: u64,
+        thumbprint: &str,
+    ) -> Option<crate::mtconnect::Source> {
+        let c = self.components.iter_mut().find(|c| c.object == machine)?;
+        let Some(crate::mtconnect::Source::Umati { settings, .. }) = c.mirror.as_mut() else {
+            return None;
+        };
+        if !settings.trust.is_empty() {
+            return None;
+        }
+        settings.trust = thumbprint.to_string();
+        self.roles_changed = true;
+        c.mirror.clone()
     }
 
     /// The machines that follow real ones, and where.
@@ -2842,7 +2846,7 @@ impl Cell {
                     "props": c.props.to_json(),
                     "io": c.io,
                     "plc": c.plc,
-                    "mirror": c.mirror.as_ref().map(|m| json!({"agent": m.agent, "device": m.device})),
+                    "mirror": c.mirror.as_ref().map(crate::mtconnect::Source::to_json),
                     "io_points": {
                         "outputs": io_points(c.kind).0,
                         "inputs": io_points(c.kind).1,

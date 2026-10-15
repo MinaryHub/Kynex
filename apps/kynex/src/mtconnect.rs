@@ -342,11 +342,102 @@ pub fn parse(xml: &str, device: &str) -> Result<Observation, String> {
 
 // --- the link ----------------------------------------------------------------
 
-/// Where a machine's agent is, and which of its devices.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Source {
-    pub agent: String,
-    pub device: String,
+/// The real machine a machine of the cell follows, and how it is reached:
+/// a device of an MTConnect agent, or a machine on an OPC UA server that
+/// speaks umati (see `crate::umati`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    MtConnect {
+        agent: String,
+        device: String,
+    },
+    Umati {
+        settings: crate::plc::Settings,
+        node: String,
+    },
+}
+
+impl Source {
+    /// A source as a request or the project file gives it; none for an
+    /// empty one. A umati source's password only from a request.
+    pub fn of(v: &Value) -> Option<Self> {
+        if v["kind"] == "umati" {
+            let node: String = v["node"].as_str()?.trim().chars().take(300).collect();
+            if node.is_empty() {
+                return None;
+            }
+            let mut settings = crate::plc::Settings::of(v);
+            settings.protocol = crate::plc::Protocol::OpcUa;
+            settings.on = true;
+            // Or the server as one URL, `opc.tcp://host:port/path`.
+            if let Some(url) = v["url"].as_str() {
+                let rest = url.trim().strip_prefix("opc.tcp://")?;
+                let (authority, path) = match rest.find('/') {
+                    Some(i) => (&rest[..i], &rest[i..]),
+                    None => (rest, ""),
+                };
+                let (host, port) = match authority.rsplit_once(':') {
+                    Some((h, p)) => (h, p.parse().ok()?),
+                    None => (authority, 4840),
+                };
+                settings.host = host.to_string();
+                settings.port = port;
+                settings.path = path.chars().take(200).collect();
+            }
+            return Some(Source::Umati { settings, node });
+        }
+        let agent = v["agent"].as_str()?.trim();
+        if agent.is_empty() || agent.len() > 300 {
+            return None;
+        }
+        Some(Source::MtConnect {
+            agent: agent.to_string(),
+            device: v["device"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(100)
+                .collect(),
+        })
+    }
+
+    /// As saved, and as the page reads it: never a password.
+    pub fn to_json(&self) -> Value {
+        match self {
+            Source::MtConnect { agent, device } => {
+                json!({ "kind": "mtconnect", "agent": agent, "device": device })
+            }
+            Source::Umati { settings, node } => {
+                let mut v = settings.to_json();
+                v["kind"] = json!("umati");
+                v["node"] = json!(node);
+                v["url"] = json!(settings.url());
+                v.as_object_mut().map(|o| o.remove("on"));
+                v
+            }
+        }
+    }
+
+    /// Whether it is set as it may be: an agent's address KYNEX can ask,
+    /// a device's name it can put in a URL; an OPC UA server and a node id.
+    pub fn check(&self) -> Result<(), String> {
+        match self {
+            Source::MtConnect { agent, device } => {
+                split_url(agent)?;
+                if !device_safe(device) {
+                    return Err("장비 이름에는 영문자, 숫자와 - . _ ~ 만 쓸 수 있습니다".into());
+                }
+            }
+            Source::Umati { settings, node } => {
+                if settings.host.is_empty() {
+                    return Err("umati: 서버 주소가 없습니다".into());
+                }
+                crate::plc::opcua::NodeId::parse(node)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -354,6 +445,8 @@ struct Shared {
     last: Option<Observation>,
     error: Option<String>,
     at: Option<Instant>,
+    /// A umati server's certificate's thumbprint, on a kept channel.
+    thumbprint: Option<String>,
 }
 
 /// A machine's agent, asked about once a second on a thread of its own.
@@ -370,15 +463,34 @@ impl Mirror {
         let stop: Arc<AtomicBool> = Arc::default();
         let (s, st, src) = (shared.clone(), stop.clone(), source.clone());
         let thread = std::thread::spawn(move || {
+            // A umati machine's session, kept between reads.
+            let mut umati: Option<crate::umati::Link> = None;
             while !st.load(Ordering::Relaxed) {
-                let result = split_url(&src.agent).and_then(|(host, port, base)| {
-                    let path = if src.device.is_empty() {
-                        format!("{base}/current")
-                    } else {
-                        format!("{base}/{}/current", src.device)
-                    };
-                    parse(&get(&host, port, &path)?, &src.device)
-                });
+                let result = match &src {
+                    Source::MtConnect { agent, device } => {
+                        split_url(agent).and_then(|(host, port, base)| {
+                            let path = if device.is_empty() {
+                                format!("{base}/current")
+                            } else {
+                                format!("{base}/{device}/current")
+                            };
+                            parse(&get(&host, port, &path)?, device)
+                        })
+                    }
+                    Source::Umati { settings, node } => (|| {
+                        if umati.is_none() {
+                            let (session, thumbprint) = crate::plc::open_opcua(settings)?;
+                            s.lock().unwrap().thumbprint = thumbprint;
+                            umati = Some(crate::umati::Link::new(session, node)?);
+                        }
+                        let seen = umati.as_mut().expect("just opened").observe();
+                        // Failed: opened again next time.
+                        if seen.is_err() {
+                            umati = None;
+                        }
+                        seen
+                    })(),
+                };
                 {
                     let mut s = s.lock().unwrap();
                     match result {
@@ -394,6 +506,9 @@ impl Mirror {
                 while start.elapsed() < EVERY && !st.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(20));
                 }
+            }
+            if let Some(link) = umati.take() {
+                link.close();
             }
         });
         Self {
@@ -412,13 +527,18 @@ impl Mirror {
             .and(s.last.clone())
     }
 
+    /// A umati server's certificate's thumbprint, once met on a kept
+    /// channel.
+    pub fn thumbprint(&self) -> Option<String> {
+        self.shared.lock().unwrap().thumbprint.clone()
+    }
+
     /// How it is going: the last state read, how long ago, and what is
     /// wrong, if anything.
     pub fn to_json(&self) -> Value {
         let s = self.shared.lock().unwrap();
         json!({
-            "agent": self.source.agent,
-            "device": self.source.device,
+            "source": self.source.to_json(),
             "last": s.last.as_ref().map(Observation::to_json),
             // Whole seconds: the page told once a second, not every tick.
             "age": s.at.map(|a| a.elapsed().as_secs()),

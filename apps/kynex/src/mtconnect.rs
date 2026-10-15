@@ -465,6 +465,9 @@ impl Mirror {
         let thread = std::thread::spawn(move || {
             // A umati machine's session, kept between reads.
             let mut umati: Option<crate::umati::Link> = None;
+            // The server's certificate once met: every session opened again
+            // must show the same one, not whatever answers then.
+            let mut pinned: Option<String> = None;
             while !st.load(Ordering::Relaxed) {
                 let result = match &src {
                     Source::MtConnect { agent, device } => {
@@ -479,7 +482,14 @@ impl Mirror {
                     }
                     Source::Umati { settings, node } => (|| {
                         if umati.is_none() {
-                            let (session, thumbprint) = crate::plc::open_opcua(settings)?;
+                            let mut settings = settings.clone();
+                            if let Some(p) = pinned.as_ref().filter(|_| settings.trust.is_empty()) {
+                                settings.trust = p.clone();
+                            }
+                            let (session, thumbprint) = crate::plc::open_opcua(&settings)?;
+                            if pinned.is_none() {
+                                pinned = thumbprint.clone();
+                            }
                             s.lock().unwrap().thumbprint = thumbprint;
                             umati = Some(crate::umati::Link::new(session, node)?);
                         }

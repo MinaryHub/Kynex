@@ -221,13 +221,30 @@ impl Identity {
             return Ok(Self { key, der });
         }
         let identity = Self::create()?;
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        // The key for this user's eyes only: on Windows %APPDATA% is the
+        // user's own; elsewhere the folder and the file are made so.
+        let mut folder = std::fs::DirBuilder::new();
+        folder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+        folder
+            .create(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
         let pem = identity
             .key
             .to_pkcs8_pem(LineEnding::LF)
             .map_err(|e| e.to_string())?;
-        std::fs::write(&key_file, pem.as_bytes())
-            .map_err(|e| format!("{}: {e}", key_file.display()))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let written = options.open(&key_file).and_then(|mut f| {
+            // One left by someone else keeps its mode on opening: set it.
+            #[cfg(unix)]
+            f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+            std::io::Write::write_all(&mut f, pem.as_bytes())
+        });
+        written.map_err(|e| format!("{}: {e}", key_file.display()))?;
         std::fs::write(&cert_file, &identity.der)
             .map_err(|e| format!("{}: {e}", cert_file.display()))?;
         Ok(identity)

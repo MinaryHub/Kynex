@@ -566,9 +566,13 @@ with their roles and run (see below).
 Drag an entry onto the scene, or click it and then click the scene. It
 lands on the floor, or on top of whatever is under the pointer (a robot
 on its pedestal). A CNC machine is turned so its door faces the origin.
-Select a placed item, here or in the scene, to set its position, turn
-and sizes in the inspector, or to move it with a handle (`R` turns it,
-`T` moves it). Sizes change the item's shape, and the item keeps its
+Select a placed item, here or in the scene, and its gizmo is on it at
+once: drag an arrow to move it along that axis, a square to move it in
+that plane, or press `R` for the rings to turn it (`T` back to moving);
+Alt held as it is let go keeps it from snapping onto a connection point.
+The inspector sets its position, turn and sizes by number too, and
+**기즈모 끄기** turns the gizmo off (kept for the browser). Locked
+equipment has none. Sizes change the item's shape, and the item keeps its
 identities when they do.
 
 Equipment comes with its roles. A CNC machine is a CNC to the cell, a

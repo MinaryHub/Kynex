@@ -777,6 +777,8 @@ function select(uid, { frame: andFrame = false, keep = [] } = {}) {
   levelsDirty = true;
   if (was != null) highlight(was);
   if (selected != null) highlight(selected);
+  // The gizmo onto the equipment selected, or away.
+  libraryPanel.selectionChanged(selected);
   document.querySelectorAll('.node.selected, .joint.selected').forEach((n) => n.classList.remove('selected'));
   if (selected != null) {
     revealInTree(selected);

@@ -96,6 +96,11 @@ export class LibraryPanel {
     this.handle.setSpace('world');
     this.helper = this.handle.getHelper();
     this.handleItem = null;
+    // The gizmo on the equipment selected, unless turned off in this browser.
+    this.gizmo = true;
+    try {
+      this.gizmo = localStorage.getItem('kynex.gizmo') !== '0';
+    } catch {}
     // Items hidden on this page alone, by id (and the name they had, so a
     // project opened anew does not hide its own by chance).
     this.hidden = new Map();
@@ -224,7 +229,7 @@ export class LibraryPanel {
       } else if (act === 'duplicate') {
         this.duplicate();
       } else if (act === 'handle') {
-        this.showHandle(this.handleItem === item.id ? null : item.id);
+        this.setGizmo(!this.gizmo);
       }
     });
   }
@@ -512,7 +517,9 @@ export class LibraryPanel {
       }
     }
     this.renderList();
-    if (this.handleItem != null && !this.itemById(this.handleItem)) this.showHandle(null);
+    if (this.handleItem != null && !this.itemById(this.handleItem)?.root) this.showHandle(null);
+    // Locked, or just placed and selected: the gizmo as the selection says.
+    this.selectionChanged(this.ctx.selected());
     this.followHandle();
     const s = this.ctx.selected();
     if (s != null) this.showFor(s);
@@ -606,7 +613,7 @@ export class LibraryPanel {
         </optgroup>
       </select></label>` : ''}
       <div class="insp-actions">
-        <button class="text-btn" data-item-act="handle">${this.handleItem === item.id ? '핸들 끄기' : '이동 핸들'}</button>
+        <button class="text-btn${this.gizmo ? ' on' : ''}" data-item-act="handle" title="장비를 고르면 기즈모(이동·회전 화살표)가 나와 마우스로 바로 끌 수 있습니다. R: 회전, T: 이동, Alt: 맞붙이지 않기">${this.gizmo ? '기즈모 끄기' : '기즈모 켜기'}</button>
         <label class="insp-snap" title="핸들로 옮길 때 격자 간격, 돌릴 때 각도 단위">스냅<select data-snap="grid">${[0, 10, 50, 100, 500].map((v) => `<option value="${v}"${v === this.snap.grid ? ' selected' : ''}>${v ? `${v} mm` : '끔'}</option>`).join('')}</select><select data-snap="angle">${[0, 5, 15, 45, 90].map((v) => `<option value="${v}"${v === this.snap.angle ? ' selected' : ''}>${v ? `${v}°` : '끔'}</option>`).join('')}</select></label>
         <button class="text-btn quiet" data-item-act="duplicate" title="옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V">복제</button>
         <button class="text-btn quiet danger" data-item-act="remove" title="삭제 (Delete)">${many > 1 ? `${many}개 삭제` : '삭제'}</button>
@@ -737,6 +744,24 @@ export class LibraryPanel {
       const scale = e.target.dataset.choice !== undefined ? 1 : 1000;
       this.send({ op: 'resize', item: item.id, params: { [e.target.dataset.param]: v / scale } });
     }
+  }
+
+  // The selection changed: the gizmo onto the equipment selected, to drag
+  // straight away — not onto locked equipment, nor when it was turned off.
+  selectionChanged(uid) {
+    const item = uid != null ? this.itemOf(uid) : null;
+    const want = item && !item.locked && this.gizmo ? item.id : null;
+    if (want !== this.handleItem) this.showHandle(want);
+  }
+
+  // The gizmo on selecting, or not; kept for this browser.
+  setGizmo(on) {
+    this.gizmo = on;
+    try {
+      localStorage.setItem('kynex.gizmo', on ? '1' : '0');
+    } catch {}
+    this.selectionChanged(this.ctx.selected());
+    this.ctx.toast(on ? '장비를 고르면 기즈모가 나옵니다' : '기즈모를 껐습니다 (숫자 칸으로 옮길 수 있습니다)');
   }
 
   showHandle(id) {

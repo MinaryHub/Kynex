@@ -1676,6 +1676,9 @@ impl Cell {
                 c.mirror = mirror_of(&req);
                 if let Some(m) = c.mirror.as_ref() {
                     crate::mtconnect::split_url(&m.agent)?;
+                    if !crate::mtconnect::device_safe(&m.device) {
+                        return Err("장비 이름에는 영문자, 숫자와 - . _ ~ 만 쓸 수 있습니다".into());
+                    }
                 }
                 // Its state its own again, or the real one's from now.
                 self.machines.remove(&object);

@@ -49,6 +49,57 @@ impl Observation {
 
 // --- HTTP --------------------------------------------------------------------
 
+/// The longest a whole request to an agent may take: an agent trickling
+/// its answer is let go after it.
+const DEADLINE: Duration = Duration::from_secs(10);
+/// The longest a line of an answer's head may be.
+const LONGEST_LINE: usize = 8 * 1024;
+
+/// Whether `text` is fit for a request line: the characters a URL path
+/// takes unencoded, nothing that could end the line or start another.
+fn url_safe(text: &str) -> bool {
+    text.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-._~/%:@!$&'()*+,;=".contains(c))
+}
+
+/// A device's name in a URL path: one segment of it.
+pub fn device_safe(device: &str) -> bool {
+    device
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c))
+}
+
+/// A reader that gives up past a deadline, however slowly the bytes come.
+struct Deadline<R> {
+    inner: R,
+    until: Instant,
+}
+
+impl<R: Read> Read for Deadline<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if Instant::now() > self.until {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "MTConnect: 에이전트 응답이 너무 오래 걸립니다",
+            ));
+        }
+        self.inner.read(buf)
+    }
+}
+
+/// A line of the answer's head, no longer than [`LONGEST_LINE`].
+fn head_line(reader: &mut impl BufRead) -> Result<String, String> {
+    let mut line = Vec::new();
+    reader
+        .take(LONGEST_LINE as u64)
+        .read_until(b'\n', &mut line)
+        .map_err(|e| e.to_string())?;
+    if line.len() >= LONGEST_LINE && !line.ends_with(b"\n") {
+        return Err("MTConnect: 응답 머리 줄이 너무 깁니다".into());
+    }
+    Ok(String::from_utf8_lossy(&line).into_owned())
+}
+
 /// `url`, `http://host[:port]/path`, as host, port and path.
 pub fn split_url(url: &str) -> Result<(String, u16, String), String> {
     let rest = url
@@ -70,6 +121,10 @@ pub fn split_url(url: &str) -> Result<(String, u16, String), String> {
     if host.is_empty() {
         return Err(format!("{url}: 호스트가 없습니다"));
     }
+    // Nothing that could break out of the request line or its Host.
+    if !url_safe(host) || !url_safe(path) || host.contains('/') {
+        return Err(format!("{url}: 주소에 쓸 수 없는 글자가 있습니다"));
+    }
     Ok((
         host.to_string(),
         port,
@@ -79,6 +134,9 @@ pub fn split_url(url: &str) -> Result<(String, u16, String), String> {
 
 /// GETs `path` from `host:port`: the answer's body, whole.
 pub fn get(host: &str, port: u16, path: &str) -> Result<String, String> {
+    if !url_safe(host) || !url_safe(path) {
+        return Err("MTConnect: 주소에 쓸 수 없는 글자가 있습니다".into());
+    }
     let at = (host, port)
         .to_socket_addrs()
         .map_err(|e| format!("{host}: {e}"))?
@@ -88,20 +146,24 @@ pub fn get(host: &str, port: u16, path: &str) -> Result<String, String> {
         .map_err(|e| format!("{at}: {e}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
-    write!(
-        stream,
+    // The whole request in one write.
+    let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/xml\r\nConnection: close\r\n\r\n"
-    )
-    .map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(stream.take(LONGEST as u64 + 64 * 1024));
-    let mut status = String::new();
-    reader.read_line(&mut status).map_err(|e| e.to_string())?;
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(Deadline {
+        inner: stream.take(LONGEST as u64 + 64 * 1024),
+        until: Instant::now() + DEADLINE,
+    });
+    let status = head_line(&mut reader)?;
     let code = status.split_whitespace().nth(1).unwrap_or("");
     let mut length = None;
     let mut chunked = false;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+    for lines in 0.. {
+        let line = head_line(&mut reader)?;
+        if line.is_empty() || lines > 100 {
             return Err("MTConnect: 응답 머리가 끝나지 않았습니다".into());
         }
         let line = line.trim_end();
@@ -127,8 +189,7 @@ pub fn get(host: &str, port: u16, path: &str) -> Result<String, String> {
     let mut body = Vec::new();
     if chunked {
         loop {
-            let mut size = String::new();
-            reader.read_line(&mut size).map_err(|e| e.to_string())?;
+            let size = head_line(&mut reader)?;
             let n = usize::from_str_radix(size.trim().split(';').next().unwrap_or(""), 16)
                 .map_err(|_| "MTConnect: 조각 크기가 맞지 않습니다".to_string())?;
             if n == 0 {

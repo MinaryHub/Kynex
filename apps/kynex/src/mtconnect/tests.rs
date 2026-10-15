@@ -54,8 +54,12 @@ fn an_answer_is_read_whole_in_chunks_or_by_length() {
     std::thread::spawn(move || {
         for (i, stream) in listener.incoming().enumerate().take(2) {
             let mut s = stream.unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = s.read(&mut buf);
+            // The whole request head, before answering.
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && s.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
             let reply = if i == 0 {
                 "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n".to_string()
             } else {
@@ -84,4 +88,47 @@ fn the_public_demo_agent_is_read_live() {
     println!("{}", seen.to_json());
     assert_eq!(seen.device, "OKUMA");
     assert!(seen.execution.is_some());
+}
+
+/// Nothing that could break out of the request line: an address or a
+/// device with a line break, a space or a slash where it does not belong
+/// is refused before anything is sent.
+#[test]
+fn an_address_cannot_inject_into_the_request() {
+    assert!(split_url("http://agent:5000/x\r\nX-Evil: 1").is_err());
+    assert!(split_url("http://agent:5000/a b").is_err());
+    assert!(get("127.0.0.1", 1, "/Mazak\r\nHost: evil/current").is_err());
+    assert!(device_safe("Mazak-1.A_b~"));
+    assert!(!device_safe("Mazak/../x"));
+    assert!(!device_safe("a\r\nb"));
+}
+
+/// An agent trickling its answer a byte at a time is let go at the
+/// deadline, not waited on for ever.
+#[test]
+#[ignore = "takes the 10 s deadline"]
+fn a_trickling_agent_is_let_go() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = s.read(&mut buf);
+        for b in b"HTTP/1.1 200 OK\r\nX-Slow: "
+            .iter()
+            .chain(std::iter::repeat(&b'a'))
+        {
+            if s.write_all(&[*b]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+    let start = Instant::now();
+    assert!(get("127.0.0.1", port, "/current").is_err());
+    assert!(
+        start.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        start.elapsed()
+    );
 }

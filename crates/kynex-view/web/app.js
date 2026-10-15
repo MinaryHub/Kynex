@@ -680,6 +680,7 @@ const libraryPanel = new LibraryPanel({
   selected: () => selected,
   group: () => group,
   toggleGroup: (uid) => toggleGroup(uid),
+  boxUnder: (root) => boxUnder(root),
   select,
   pick,
   toast,
@@ -871,6 +872,18 @@ const VIEWS = {
   front: new THREE.Vector3(0, -1, 0.0001),
   right: new THREE.Vector3(1, 0, 0.0001),
 };
+
+// The box about `root` and everything below it that has a shape.
+function boxUnder(root) {
+  const box = new THREE.Box3();
+  const part = new THREE.Box3();
+  for (const uid of records.keys()) {
+    let at = uid;
+    for (let n = 0; at != null && at !== root && n < 64; n++) at = records.get(at)?.parent;
+    if (at === root && batch.boxOf(uid, part)) box.union(part);
+  }
+  return box;
+}
 
 function bounds(uid) {
   const box = new THREE.Box3();

@@ -243,7 +243,8 @@ fn a_plc_not_there_is_said_so() {
         .unwrap()
         .port();
     let link = Plc::new(settings(port));
-    assert!(until(3.0, || link.to_json()["error"].is_string()));
+    // Windows takes some seconds to give up on a port nobody listens on.
+    assert!(until(8.0, || link.to_json()["error"].is_string()));
     assert_eq!(link.to_json()["connected"], false);
     drop(link);
 }

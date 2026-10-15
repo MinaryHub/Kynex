@@ -1003,3 +1003,80 @@ fn items_are_copied_moved_and_removed_together() {
     );
     assert_eq!(twice["ok"], false);
 }
+
+/// A robot hung upside down: its root turned half round about X, saved
+/// and read back so; tilted, it snaps onto nothing; a tilt not a number
+/// is refused.
+#[test]
+fn equipment_is_tilted_about_x_and_y() {
+    let mut library = Library::default();
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "ur5e", "at": [0.0, 0.0, 2.5]}),
+    );
+    let id = a["item"].as_u64().unwrap();
+    let (moved, _) = ask(
+        &mut library,
+        json!({"op": "move", "item": id, "roll": std::f64::consts::PI, "snap": true}),
+    );
+    assert_eq!(moved["ok"], true, "{moved}");
+    assert_eq!(moved["snapped"], Value::Null);
+    let (doc, _) = shown(&mut library);
+    let root = library.items()[0].root_uid();
+    let root = doc.object_by_uid(Uid::from_raw(root)).unwrap();
+    let up = doc.world_transform(root).transform_vector3(DVec3::Z);
+    assert!((up - DVec3::NEG_Z).length() < 1e-9, "{up}");
+
+    let saved = library.to_saved();
+    let back = Library::from_saved(&saved);
+    assert!((back.items()[0].roll.abs() - std::f64::consts::PI).abs() < 1e-12);
+
+    let (bad, _) = ask(
+        &mut library,
+        json!({"op": "move", "item": id, "pitch": "steil"}),
+    );
+    assert_eq!(bad["ok"], false);
+    let (upright, _) = ask(&mut library, json!({"op": "move", "item": id, "roll": 0.0}));
+    assert_eq!(upright["ok"], true);
+    assert!(library.items()[0].upright());
+}
+
+/// A robot hung upside down still reaches: its base points down, and a
+/// point 10 cm below its tool, in the world, is solved for.
+#[test]
+fn a_robot_hung_upside_down_reaches_below_it() {
+    let mut library = Library::default();
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "ur5e", "at": [0.0, 0.0, 2.5]}),
+    );
+    let id = a["item"].as_u64().unwrap();
+    ask(
+        &mut library,
+        json!({"op": "move", "item": id, "roll": std::f64::consts::PI}),
+    );
+    let (doc, _) = shown(&mut library);
+    let robots = kynex_model::robots(&doc);
+    let kin = Kinematics::of(&doc, robots[0].root).unwrap();
+    // Its tool end: what lies farthest from its base.
+    let base = DVec3::new(0.0, 0.0, 2.5);
+    let tip = kin
+        .uids()
+        .max_by(|a, b| {
+            let d = |u: u64| (kin.world_of(&kin.current, u).unwrap().translation - base).length();
+            d(*a).total_cmp(&d(*b))
+        })
+        .unwrap();
+    let tool = kin.tool(tip, DAffine3::IDENTITY).unwrap();
+    let now = kin.world_of(&kin.current, tip).unwrap();
+    // Hung under 2.5 m, its tool is below the base.
+    assert!(now.translation.z < 2.5, "{}", now.translation);
+    let goal = kynex_kin::Goal {
+        position: now.translation - DVec3::Z * 0.1,
+        rotation: None,
+    };
+    let found = kin.solve(&tool, &goal, &kin.current, &kynex_kin::Options::default());
+    assert!(found.reached, "{found:?}");
+    let got = kin.world_of(&found.positions, tip).unwrap().translation;
+    assert!((got - goal.position).length() < 1e-3, "{got}");
+}

@@ -436,6 +436,10 @@ pub struct Item {
     /// Where its origin stands, and its turn about Z, radians.
     pub at: DVec3,
     pub yaw: f64,
+    /// Tilted about X, then Y (before its turn about Z), radians: a robot
+    /// on a wall or upside down under a gantry. Mostly none.
+    pub roll: f64,
+    pub pitch: f64,
 }
 
 impl Item {
@@ -449,6 +453,21 @@ impl Item {
             .or(spec.map(|p| p.default))
             .unwrap_or(0.0);
         spec.map_or(v, |p| v.clamp(p.min, p.max))
+    }
+
+    /// How it is turned: tilted about X, then Y, then turned about Z.
+    fn turn(&self) -> DQuat {
+        DQuat::from_euler(
+            kreate_math::glam::EulerRot::ZYX,
+            self.yaw,
+            self.pitch,
+            self.roll,
+        )
+    }
+
+    /// Whether it stands upright, as connection points need.
+    fn upright(&self) -> bool {
+        self.roll == 0.0 && self.pitch == 0.0
     }
 
     fn root_uid(&self) -> u64 {
@@ -489,6 +508,24 @@ pub const SNAP: f64 = 0.25;
 
 /// How many items one request may move, copy or remove.
 const MOST_AT_ONCE: usize = 200;
+
+/// Tilts `item` as request `v` says (`roll`, `pitch`, radians), if it does:
+/// a number, within half a turn either way.
+fn tilt(item: &mut Item, v: &Value) -> Result<(), String> {
+    for (key, slot) in [("roll", &mut item.roll), ("pitch", &mut item.pitch)] {
+        if v.get(key).is_none() {
+            continue;
+        }
+        let a = v[key]
+            .as_f64()
+            .filter(|a| a.is_finite())
+            .ok_or("기울기는 숫자입니다")?;
+        // Kept within (−π, π], and exactly upright when near it.
+        let a = (a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+        *slot = if a.abs() < 1e-9 { 0.0 } else { a };
+    }
+    Ok(())
+}
 
 /// The item ids `v` lists: some, not too many, none twice.
 fn ids(v: &Value) -> Result<Vec<u64>, String> {
@@ -563,7 +600,7 @@ impl Item {
                 .map(Custom::plugs)
                 .unwrap_or_default(),
         };
-        let turn = DQuat::from_rotation_z(self.yaw);
+        let turn = self.turn();
         local
             .into_iter()
             .map(|(plug, p)| (plug, self.at + turn * p))
@@ -679,6 +716,8 @@ impl Library {
                 params,
                 at,
                 yaw: v["yaw"].as_f64().unwrap_or(0.0),
+                roll: v["roll"].as_f64().unwrap_or(0.0),
+                pitch: v["pitch"].as_f64().unwrap_or(0.0),
             });
             library.next = library.next.max(id);
         }
@@ -707,6 +746,8 @@ impl Library {
                     "params": i.params,
                     "at": [i.at.x, i.at.y, i.at.z],
                     "yaw": i.yaw,
+                    "roll": i.roll,
+                    "pitch": i.pitch,
                 })
             }))
             .collect()
@@ -777,6 +818,8 @@ impl Library {
                 params: params(&req["params"]),
                 at: point(&req["at"]).unwrap_or(DVec3::ZERO),
                 yaw: req["yaw"].as_f64().unwrap_or(0.0),
+                roll: 0.0,
+                pitch: 0.0,
             };
             let mut item = item;
             let snapped = if req["snap"] == true {
@@ -850,6 +893,7 @@ impl Library {
                 if let Some(yaw) = m["yaw"].as_f64() {
                     item.yaw = yaw;
                 }
+                tilt(item, m)?;
             }
             self.items = next;
             self.items_changed = true;
@@ -904,6 +948,7 @@ impl Library {
                 if let Some(yaw) = req["yaw"].as_f64() {
                     item.yaw = yaw;
                 }
+                tilt(&mut item, &req)?;
                 let snapped = if req["snap"] == true {
                     self.snap(&mut item)
                 } else {
@@ -953,13 +998,17 @@ impl Library {
     fn snap(&self, item: &mut Item) -> Option<String> {
         let flat = |v: DVec3| DVec3::new(v.x, v.y, 0.0).length();
         let customs = &self.customs;
+        // Tilted, it meets nothing as it stands.
+        if !item.upright() {
+            return None;
+        }
         let (mine, other, theirs, _) = item
             .plugs(customs)
             .into_iter()
             .flat_map(|(mine, here)| {
                 self.items
                     .iter()
-                    .filter(|o| o.id != item.id)
+                    .filter(|o| o.id != item.id && o.upright())
                     .flat_map(move |o| {
                         o.plugs(customs)
                             .into_iter()
@@ -1061,6 +1110,8 @@ impl Library {
                     params: BTreeMap::new(),
                     at: DVec3::ZERO,
                     yaw: 0.0,
+                    roll: 0.0,
+                    pitch: 0.0,
                 };
                 if let Ok(built) = build(&item) {
                     out.insert(t.key.to_string(), triangles(&built.doc));
@@ -1177,6 +1228,8 @@ impl Library {
                 "params": i.params,
                 "at": [i.at.x, i.at.y, i.at.z],
                 "yaw": i.yaw,
+                "roll": i.roll,
+                "pitch": i.pitch,
             })).collect::<Vec<_>>(),
         })
         .to_string()
@@ -1269,7 +1322,7 @@ fn graft(item: &Item, built: &Built, doc: &mut Document) -> Vec<u64> {
     let base = item.root_uid();
     let mut root = Object::new(item.name.clone(), ObjectData::Empty);
     root.transform.translation = item.at;
-    root.transform.rotation = DQuat::from_rotation_z(item.yaw);
+    root.transform.rotation = item.turn();
     let root_id = doc.restore_object(root, Uid::from_raw(base));
     let mut uids = vec![base];
 

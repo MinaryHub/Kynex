@@ -96,6 +96,14 @@ export class LibraryPanel {
     this.handle.setSpace('world');
     this.helper = this.handle.getHelper();
     this.handleItem = null;
+    // The handle's grid and angle steps, as last chosen in this browser.
+    this.snap = { grid: 0, angle: 0 };
+    try {
+      const kept = JSON.parse(localStorage.getItem('kynex.snap') || '{}');
+      if ([0, 10, 50, 100, 500].includes(kept.grid)) this.snap.grid = kept.grid;
+      if ([0, 5, 15, 45, 90].includes(kept.angle)) this.snap.angle = kept.angle;
+    } catch {}
+    this.applySnap();
     this.dragging = false;
     this.draggedAt = 0;
     this.handle.addEventListener('dragging-changed', (e) => {
@@ -219,6 +227,70 @@ export class LibraryPanel {
     this.move(null, null, null, { op: 'move_many', moves });
   }
 
+  // The handle's steps: the grid it moves on, the angle it turns by. Kept
+  // for this browser.
+  applySnap() {
+    this.handle.setTranslationSnap(this.snap.grid ? this.snap.grid / 1000 : null);
+    this.handle.setRotationSnap(this.snap.angle ? rad(this.snap.angle) : null);
+    try {
+      localStorage.setItem('kynex.snap', JSON.stringify(this.snap));
+    } catch {}
+  }
+
+  // A point placed on: on the grid, if the handle moves on one.
+  onGrid(p) {
+    const g = this.snap.grid / 1000;
+    return g ? [Math.round(p.x / g) * g, Math.round(p.y / g) * g, p.z] : [p.x, p.y, p.z];
+  }
+
+  // The group lined up by its boxes: to the selected item's side or
+  // middle, one against the next, or spaced evenly. One edit.
+  align(kind) {
+    const [axisName, how] = kind.split('-');
+    const axis = { x: 'x', y: 'y', z: 'z' }[axisName];
+    const primary = this.selectedItem();
+    const items = this.groupItems();
+    if (!primary || items.length < 2) return;
+    const boxes = new Map(items.map((i) => [i.id, this.ctx.boxUnder(i.root)]));
+    if ([...boxes.values()].some((b) => b.isEmpty())) return this.ctx.toast('모양이 아직 없는 장비가 있습니다');
+    const mid = (b) => (b.min[axis] + b.max[axis]) / 2;
+    const shift = new Map();
+    if (how === 'min' || how === 'mid' || how === 'max') {
+      const of = (b) => (how === 'mid' ? mid(b) : b[how][axis]);
+      const to = of(boxes.get(primary.id));
+      for (const i of items) shift.set(i.id, to - of(boxes.get(i.id)));
+    } else {
+      const sorted = [...items].sort((a, b) => mid(boxes.get(a.id)) - mid(boxes.get(b.id)));
+      const size = (i) => boxes.get(i.id).max[axis] - boxes.get(i.id).min[axis];
+      let gap = 0;
+      if (how === 'spread') {
+        if (items.length < 3) return this.ctx.toast('간격 맞추기는 장비 3개 이상일 때 합니다');
+        const first = boxes.get(sorted[0].id);
+        const last = boxes.get(sorted[sorted.length - 1].id);
+        const used = sorted.reduce((s, i) => s + size(i), 0);
+        gap = (last.max[axis] - first.min[axis] - used) / (sorted.length - 1);
+      }
+      // The first stays; each next starts where the one before ends.
+      let end = boxes.get(sorted[0].id).max[axis];
+      for (const i of sorted.slice(1)) {
+        const b = boxes.get(i.id);
+        const d = end + gap - b.min[axis];
+        shift.set(i.id, d);
+        end = b.max[axis] + d;
+      }
+    }
+    const k = { x: 0, y: 1, z: 2 }[axis];
+    const moves = items
+      .filter((i) => Math.abs(shift.get(i.id) ?? 0) > 1e-9)
+      .map((i) => {
+        const at = [...i.at];
+        at[k] += shift.get(i.id);
+        return { item: i.id, at };
+      });
+    if (!moves.length) return this.ctx.toast('이미 그렇게 놓여 있습니다');
+    this.send({ op: 'move_many', moves }, () => this.ctx.toast(`장비 ${moves.length}개를 옮겼습니다`));
+  }
+
   // Delete: the selected equipment, all of it. Whether there was any.
   removeSelected() {
     const items = this.groupItems();
@@ -314,7 +386,7 @@ export class LibraryPanel {
     // usually stands: (sin ψ, −cos ψ) along (−x, −y).
     const t = this.library.templates.find((t) => t.key === key);
     const yaw = t?.group === '공작기계' || t?.group === '성형기' ? Math.atan2(-hit.x, hit.y) : 0;
-    this.send({ op: 'place', template: key, at: [hit.x, hit.y, hit.z], yaw, snap: !this.alt }, (a) =>
+    this.send({ op: 'place', template: key, at: this.onGrid(hit), yaw, snap: !this.alt }, (a) =>
       this.ctx.toast(`${t?.name ?? key}을(를) 놓았습니다${a.snapped ? ` · ${a.snapped}에 맞붙였습니다` : ''}`),
     );
   }
@@ -414,11 +486,28 @@ export class LibraryPanel {
         <label class="insp-field">Y<input type="number" class="num" data-at="1" value="${y}" step="10"><span>mm</span></label>
         <label class="insp-field">Z<input type="number" class="num" data-at="2" value="${z}" step="10"><span>mm</span></label>
         <label class="insp-field">회전<input type="number" class="num" data-yaw value="${Math.round(deg(item.yaw))}" step="15"><span>°</span></label>
+        <label class="insp-field" title="X축으로 기울이기 (벽에 단 로봇은 90°, 천장에 거꾸로 단 로봇은 180°)">X축<input type="number" class="num" data-tilt="roll" value="${Math.round(deg(item.roll ?? 0))}" step="15"><span>°</span></label>
+        <label class="insp-field" title="Y축으로 기울이기">Y축<input type="number" class="num" data-tilt="pitch" value="${Math.round(deg(item.pitch ?? 0))}" step="15"><span>°</span></label>
         ${params}
       </div>
-      ${many > 1 ? `<div class="muted insp-group">함께 선택: 장비 ${many}개 · 핸들로 함께 옮기고 돌립니다</div>` : ''}
+      ${many > 1 ? `<div class="muted insp-group">함께 선택: 장비 ${many}개 · 핸들로 함께 옮기고 돌립니다</div>
+      <label class="insp-field wide insp-align">정렬<select data-align>
+        <option value="">고르기…</option>
+        <optgroup label="${escapeHtml(item.name)}에 맞추기">
+          <option value="x-min">X 왼쪽</option><option value="x-mid">X 가운데</option><option value="x-max">X 오른쪽</option>
+          <option value="y-min">Y 앞</option><option value="y-mid">Y 가운데</option><option value="y-max">Y 뒤</option>
+          <option value="z-min">바닥 높이</option>
+        </optgroup>
+        <optgroup label="맞붙여 늘어놓기">
+          <option value="x-chain">X 방향으로</option><option value="y-chain">Y 방향으로</option>
+        </optgroup>
+        <optgroup label="간격 같게 (3개 이상)">
+          <option value="x-spread">X 방향</option><option value="y-spread">Y 방향</option>
+        </optgroup>
+      </select></label>` : ''}
       <div class="insp-actions">
         <button class="text-btn" data-item-act="handle">${this.handleItem === item.id ? '핸들 끄기' : '이동 핸들'}</button>
+        <label class="insp-snap" title="핸들로 옮길 때 격자 간격, 돌릴 때 각도 단위">스냅<select data-snap="grid">${[0, 10, 50, 100, 500].map((v) => `<option value="${v}"${v === this.snap.grid ? ' selected' : ''}>${v ? `${v} mm` : '끔'}</option>`).join('')}</select><select data-snap="angle">${[0, 5, 15, 45, 90].map((v) => `<option value="${v}"${v === this.snap.angle ? ' selected' : ''}>${v ? `${v}°` : '끔'}</option>`).join('')}</select></label>
         <button class="text-btn quiet" data-item-act="duplicate" title="옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V">복제</button>
         <button class="text-btn quiet danger" data-item-act="remove" title="삭제 (Delete)">${many > 1 ? `${many}개 삭제` : '삭제'}</button>
       </div>
@@ -428,9 +517,20 @@ export class LibraryPanel {
   edited(e) {
     const item = this.selectedItem();
     if (!item) return;
+    if (e.target.dataset.align !== undefined) {
+      const kind = e.target.value;
+      e.target.value = '';
+      return kind && this.align(kind);
+    }
+    if (e.target.dataset.snap) {
+      this.snap[e.target.dataset.snap] = Number(e.target.value);
+      return this.applySnap();
+    }
     const v = Number(e.target.value);
     if (!Number.isFinite(v)) return;
-    if (e.target.dataset.at !== undefined) {
+    if (e.target.dataset.tilt) {
+      this.move(null, null, null, { op: 'move', item: item.id, [e.target.dataset.tilt]: rad(v) });
+    } else if (e.target.dataset.at !== undefined) {
       const at = [...item.at];
       at[Number(e.target.dataset.at)] = v / 1000;
       this.move(item.id, at, item.yaw);

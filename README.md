@@ -339,6 +339,17 @@ grid), not its PLC wiring or the real machine it follows. Each of these
 is one edit to undo. A new item takes the first number its kind's names
 do not have, so no two names are alike.
 
+**Placing exactly.** The inspector's **스냅** sets the handle's steps: a
+grid of 10, 50, 100 or 500 mm to move on (a click that places equipment
+lands on it too) and 5, 15, 45 or 90° to turn by; the choice is kept in
+the browser. **X축** and **Y축** tilt equipment, before its turn about
+Z: a robot on a wall at 90°, one hung under a gantry at 180°, which
+still reaches as it should. Tilted equipment does not snap onto
+connection points. With several selected, **정렬** lines them up by
+their boxes: to a side or the middle of the one selected, its floor
+height, one against the next along X or Y, or evenly spaced between the
+outermost two.
+
 **Projects.** The folder button at the left of the toolbar shows the
 project open; it opens the project panel. **새로 만들기** makes an empty
 project under the name typed and opens it. **다른 이름으로 저장** saves

@@ -862,13 +862,19 @@ fn offline(
 }
 
 /// Why request `op` (`body`) from another computer — a viewer shared with
-/// `--lan` — is refused, if it reaches a PLC: where the PLC is and what is
-/// wired to it, a program step that writes or waits on its signals, and,
-/// while KYNEX is linked to one, running programs and commanding machines,
-/// whose states go to it. `None` when it does not.
+/// `--lan` — is refused, if it could reach a PLC. While KYNEX is linked to
+/// one, every request is: what changes the cell, its programs or its
+/// machines can change what goes to the PLC, so another computer only
+/// watches. Linked or not, so is what sets the PLC up for later: where it
+/// is and what is wired to it, a program step on its signals, and a
+/// scenario taken back, which brings programs and wiring with it. `None`
+/// when it does not.
 fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
-    if matches!(op, "plc_link" | "plc" | "signals") {
-        return Some("PLC 설정은 KYNEX를 실행한 컴퓨터에서만 바꿀 수 있습니다");
+    if linked {
+        return Some("PLC에 연결된 동안 다른 컴퓨터에서는 보기만 할 수 있습니다");
+    }
+    if matches!(op, "plc_link" | "plc" | "signals" | "scenario") {
+        return Some("PLC 설정과 시나리오 불러오기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다");
     }
     if matches!(op, "add" | "edit") {
         let req: Value = serde_json::from_str(body).unwrap_or_default();
@@ -876,11 +882,6 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
         if kind.starts_with("signal") {
             return Some("PLC 신호 동작은 KYNEX를 실행한 컴퓨터에서만 넣을 수 있습니다");
         }
-    }
-    if linked && matches!(op, "play" | "stop" | "machine") {
-        return Some(
-            "PLC에 연결된 동안에는 KYNEX를 실행한 컴퓨터에서만 실행하고 장비를 움직일 수 있습니다",
-        );
     }
     None
 }
@@ -921,23 +922,33 @@ pub(crate) fn open_browser(url: &str) {
 mod tests {
     use super::*;
 
-    /// From another computer: the PLC's settings never; a program step on
-    /// its signals never; running and machine commands not while linked;
+    /// From another computer: while linked, nothing; linked or not, the
+    /// PLC's settings, a program step on its signals, a scenario taken back;
     /// anything else, as before.
     #[test]
     fn another_computer_cannot_reach_the_plc() {
         assert!(reaches_plc("plc_link", "{}", false).is_some());
         assert!(reaches_plc("signals", "{}", false).is_some());
+        assert!(reaches_plc("scenario", r#"{"action":"load"}"#, false).is_some());
         let set = r#"{"op":"add","step":{"type":"signal_set","name":"go","value":1}}"#;
         assert!(reaches_plc("add", set, false).is_some());
         let edit = r#"{"op":"edit","index":2,"step":{"type":"signal_wait","name":"go","value":1}}"#;
         assert!(reaches_plc("edit", edit, false).is_some());
         let delay = r#"{"op":"add","step":{"type":"delay","seconds":1}}"#;
-        assert!(reaches_plc("add", delay, true).is_none());
+        assert!(reaches_plc("add", delay, false).is_none());
         assert!(reaches_plc("play", "{}", false).is_none());
-        assert!(reaches_plc("play", "{}", true).is_some());
-        assert!(reaches_plc("machine", "{}", true).is_some());
-        assert!(reaches_plc("jog", "{}", true).is_none());
+        assert!(reaches_plc("jog", "{}", false).is_none());
+        for op in [
+            "add",
+            "play",
+            "machine",
+            "role",
+            "place",
+            "jog",
+            "routine_new",
+        ] {
+            assert!(reaches_plc(op, delay, true).is_some(), "{op}");
+        }
     }
 
     #[test]

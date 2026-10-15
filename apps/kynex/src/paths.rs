@@ -114,6 +114,36 @@ pub fn default_project() -> PathBuf {
     projects_dir().join(NEW_PROJECT)
 }
 
+/// The project to open when none is named, held: the first of the recent
+/// ones no other KYNEX has open, the older KYNEX's one, else a new one in
+/// the projects folder (`새 프로젝트.json`, `새 프로젝트 2.json`, …). A second
+/// KYNEX started with nothing named so opens a project of its own.
+pub fn open_default() -> Result<(PathBuf, Option<std::fs::File>), String> {
+    let new = projects_dir();
+    let candidates = recent()
+        .into_iter()
+        .chain(
+            Path::new(OLD_PROJECT)
+                .is_file()
+                .then(|| PathBuf::from(OLD_PROJECT)),
+        )
+        .chain((1..=100).map(|n| match n {
+            1 => new.join(NEW_PROJECT),
+            n => new.join(format!("새 프로젝트 {n}.json")),
+        }));
+    let mut last = String::from("열 수 있는 프로젝트가 없습니다");
+    for file in candidates {
+        if let Some(dir) = file.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        match hold(&file) {
+            Ok(lock) => return Ok((file, lock)),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

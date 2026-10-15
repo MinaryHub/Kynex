@@ -56,9 +56,11 @@ pub fn run() {
     };
     let _webview = match builder.build(&window) {
         Ok(w) => w,
-        Err(e) => return fail(&format!(
+        Err(e) => {
+            return fail(&format!(
             "화면(WebView2)을 열지 못했습니다: {e}\nMicrosoft Edge WebView2 런타임을 설치하세요."
-        )),
+        ))
+        }
     };
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;

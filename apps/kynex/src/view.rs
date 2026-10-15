@@ -315,13 +315,16 @@ const TIMELINE_EVERY: std::time::Duration = std::time::Duration::from_millis(500
 impl Stage {
     /// From the project file `project`, or the default one.
     fn open(project: Option<PathBuf>) -> Result<Self, String> {
-        let file = project
-            .clone()
-            .unwrap_or_else(crate::paths::default_project);
-        if let Some(dir) = file.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        let lock = crate::paths::hold(&file)?;
+        // The one named, or else the first free of the recent ones.
+        let (file, lock) = match &project {
+            Some(file) => {
+                if let Some(dir) = file.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                }
+                (file.clone(), crate::paths::hold(file)?)
+            }
+            None => crate::paths::open_default()?,
+        };
         crate::paths::remember(&file);
         // The project file's forerunner, read once into it.
         let from = if project.is_none() && !file.exists() && Path::new(OLD_PROGRAMS).exists() {

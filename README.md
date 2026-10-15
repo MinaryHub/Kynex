@@ -568,7 +568,9 @@ lands on the floor, or on top of whatever is under the pointer (a robot
 on its pedestal). A CNC machine is turned so its door faces the origin.
 Select a placed item, here or in the scene, and its gizmo is on it at
 once: drag an arrow to move it along that axis, a square to move it in
-that plane, or press `R` for the rings to turn it (`T` back to moving);
+that plane; in **회전** (or `R`; `T` or **이동** back) drag the red, green
+or blue ring to turn it about X, Y or Z — its X and Y tilt and its turn,
+in the angle snap's steps. Several selected together turn about Z only;
 Alt held as it is let go keeps it from snapping onto a connection point.
 The inspector sets its position, turn and sizes by number too, and
 **기즈모 끄기** turns the gizmo off (kept for the browser). Locked

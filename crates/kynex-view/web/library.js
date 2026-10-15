@@ -143,11 +143,16 @@ export class LibraryPanel {
     for (const type of ['keydown', 'keyup']) window.addEventListener(type, (e) => (this.alt = e.altKey));
     this.handle.addEventListener('objectChange', () => {
       if (!this.dragging || this.handleItem == null) return;
-      // Turned about Z only: the floor stays the floor.
+      // Its turn about Z, then its tilt about Y and X, as the item keeps
+      // them (`roll`, `pitch`, `yaw`).
       const e = new THREE.Euler().setFromQuaternion(this.proxy.quaternion, 'ZYX');
-      this.proxy.quaternion.setFromEuler(new THREE.Euler(0, 0, e.z, 'ZYX'));
-      if (this.dragFrom) return this.moveGroup(this.proxy.position.toArray(), e.z);
-      this.move(this.handleItem, this.proxy.position.toArray(), e.z);
+      // Several together turn about Z only: the floor stays the floor.
+      if (this.dragFrom) {
+        this.proxy.quaternion.setFromEuler(new THREE.Euler(0, 0, e.z, 'ZYX'));
+        return this.moveGroup(this.proxy.position.toArray(), e.z);
+      }
+      const at = this.proxy.position.toArray();
+      this.move(null, null, null, { op: 'move', item: this.handleItem, at, yaw: e.z, pitch: e.y, roll: e.x });
     });
 
     this.list.addEventListener('dragstart', (e) => {
@@ -230,6 +235,10 @@ export class LibraryPanel {
         this.duplicate();
       } else if (act === 'handle') {
         this.setGizmo(!this.gizmo);
+      } else if (act === 'mode-move') {
+        this.setMode('translate');
+      } else if (act === 'mode-turn') {
+        this.setMode('rotate');
       }
     });
   }
@@ -256,6 +265,8 @@ export class LibraryPanel {
   // The group changed: the inspector says so.
   groupChanged() {
     this.markGroup();
+    // Several turn about Z only.
+    if (this.mode === 'rotate') this.handle.showX = this.handle.showY = this.groupItems().length <= 1;
     const s = this.ctx.selected();
     if (s != null) this.showFor(s);
   }
@@ -614,6 +625,7 @@ export class LibraryPanel {
       </select></label>` : ''}
       <div class="insp-actions">
         <button class="text-btn${this.gizmo ? ' on' : ''}" data-item-act="handle" title="장비를 고르면 기즈모(이동·회전 화살표)가 나와 마우스로 바로 끌 수 있습니다. R: 회전, T: 이동, Alt: 맞붙이지 않기">${this.gizmo ? '기즈모 끄기' : '기즈모 켜기'}</button>
+        ${this.gizmo ? `<span class="seg gizmo-mode"><button data-item-act="mode-move" class="${this.mode !== 'rotate' ? 'on' : ''}" title="화살표로 X·Y·Z 이동 (T)">이동</button><button data-item-act="mode-turn" class="${this.mode === 'rotate' ? 'on' : ''}" title="고리로 X·Y·Z축 회전 (R)">회전</button></span>` : ''}
         <label class="insp-snap" title="핸들로 옮길 때 격자 간격, 돌릴 때 각도 단위">스냅<select data-snap="grid">${[0, 10, 50, 100, 500].map((v) => `<option value="${v}"${v === this.snap.grid ? ' selected' : ''}>${v ? `${v} mm` : '끔'}</option>`).join('')}</select><select data-snap="angle">${[0, 5, 15, 45, 90].map((v) => `<option value="${v}"${v === this.snap.angle ? ' selected' : ''}>${v ? `${v}°` : '끔'}</option>`).join('')}</select></label>
         <button class="text-btn quiet" data-item-act="duplicate" title="옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V">복제</button>
         <button class="text-btn quiet danger" data-item-act="remove" title="삭제 (Delete)">${many > 1 ? `${many}개 삭제` : '삭제'}</button>
@@ -783,17 +795,26 @@ export class LibraryPanel {
     const item = this.handleItem != null && this.itemById(this.handleItem);
     if (!item || this.dragging) return;
     this.proxy.position.fromArray(item.at);
-    this.proxy.quaternion.setFromEuler(new THREE.Euler(0, 0, item.yaw, 'ZYX'));
+    this.proxy.quaternion.setFromEuler(new THREE.Euler(item.roll ?? 0, item.pitch ?? 0, item.yaw, 'ZYX'));
     this.proxy.updateMatrixWorld();
   }
 
-  // Keys while the handle is on: R turns, T moves.
+  // Keys while the gizmo is on: R turns, T moves.
   key(k) {
     if (this.handleItem == null) return false;
-    if (k === 'r') this.handle.setMode('rotate');
-    else if (k === 't') this.handle.setMode('translate');
+    if (k === 'r') this.setMode('rotate');
+    else if (k === 't') this.setMode('translate');
     else return false;
-    this.handle.showX = this.handle.showY = k !== 'r';
     return true;
+  }
+
+  // The gizmo moving (arrows along X, Y, Z) or turning (rings about X, Y,
+  // Z); several selected together turn about Z only.
+  setMode(mode) {
+    this.handle.setMode(mode);
+    this.mode = mode;
+    this.handle.showX = this.handle.showY = mode !== 'rotate' || this.groupItems().length <= 1;
+    const s = this.ctx.selected();
+    if (s != null) this.showFor(s);
   }
 }

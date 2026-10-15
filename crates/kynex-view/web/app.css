@@ -926,3 +926,5 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .lib-import { display: flex; align-items: center; gap: 10px; padding-top: 0; padding-bottom: 8px; }
 .lib-import label { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; }
 .lib-import select { height: 22px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 11px; }
+.gizmo-mode button.on { color: var(--accent); background: var(--accent-soft); }
+.gizmo-mode { vertical-align: middle; }

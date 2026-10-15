@@ -1,18 +1,22 @@
-"""Virtual commissioning over Modbus TCP, checked against a server that is
-not KYNEX's own: pymodbus (free) plays a PLC, and a small PLC program in
-this script runs a CNC lathe in a running KYNEX through its cycle.
+"""Virtual commissioning, checked against servers that are not KYNEX's own:
+a free Modbus TCP server (pymodbus) or a free OPC UA server (asyncua) plays
+a PLC, and a small PLC program in this script runs a CNC lathe in a running
+KYNEX through its cycle.
 
-    pip install pymodbus
+    pip install pymodbus asyncua
     kynex view --empty --port 8097 --project target/plc/kynex-project.json
-    python tools/plc/check.py
+    python tools/plc/check.py                    # Modbus TCP
+    python tools/plc/check.py --protocol opcua   # OPC UA
 
 The script places a lathe in that KYNEX (over its page's requests), wires
-the lathe's commands to coils 0-4 and its states to coils 100-105, links
-KYNEX to the PLC, and runs its program: open the door, close it, clamp,
-unclamp, over and over. Each step's command coil is turned on, held until
-the state coil says it is done, then turned off, as a PLC program's
-outputs would be. It reports how long each step took: the door takes the
-lathe's 3 s, the chuck its 1 s, give or take KYNEX's 50 ms exchange.
+the lathe's commands and states to the PLC — over Modbus, commands to coils
+0-4 and states to coils 100-105; over OPC UA, Boolean variables
+`ns=2;s=Lathe.<name>` under an object Lathe — links KYNEX to the PLC, and
+runs its program: open the door, close it, clamp, unclamp, over and over.
+Each step's command is turned on, held until the state says it is done,
+then turned off, as a PLC program's outputs would be. It reports how long
+each step took: the door takes the lathe's 3 s, the chuck its 1 s, give or
+take KYNEX's 50 ms exchange and the program's own scan.
 """
 
 import argparse
@@ -22,17 +26,12 @@ import sys
 import time
 import urllib.request
 
-from pymodbus.server import ModbusTcpServer
-from pymodbus.simulator import DataType, SimData, SimDevice
-
-COMMANDS = {"open": 0, "close": 1, "clamp": 2, "unclamp": 3, "start": 4}
-STATES = {
-    "door_open": 100,
-    "door_closed": 101,
-    "clamped": 102,
-    "unclamped": 103,
-    "idle": 104,
-    "done": 105,
+COMMANDS = ["open", "close", "clamp", "unclamp", "start"]
+STATES = ["door_open", "door_closed", "clamped", "unclamped", "idle", "done"]
+# Over Modbus: each name's coil.
+COILS = {
+    **{name: i for i, name in enumerate(COMMANDS)},
+    **{name: 100 + i for i, name in enumerate(STATES)},
 }
 
 # The PLC program: each step's command, the state that ends it (and whether
@@ -71,19 +70,8 @@ def event(kynex, name, timeout=10.0):
     sys.exit(f"no {name} event from KYNEX")
 
 
-def coil(words, n):
-    return bool(words[n // 16] & (1 << (n % 16)))
-
-
-def set_coil(words, n, on):
-    if on:
-        words[n // 16] |= 1 << (n % 16)
-    else:
-        words[n // 16] &= ~(1 << (n % 16))
-
-
 class Program:
-    """The PLC program, run once each time KYNEX asks the PLC anything."""
+    """The PLC program: one scan reads the states, sets the commands."""
 
     def __init__(self, cycles):
         self.cycles = cycles
@@ -93,19 +81,20 @@ class Program:
         self.timings = []
         self.done = asyncio.Event()
 
-    async def scan(self, _fc, _x, _address, _count, words, _values):
+    def scan(self, state, command):
+        """`state(name)` reads a state; `command(name, on)` sets one."""
         if self.done.is_set():
-            return None
-        name, state, want, _ = STEPS[self.step]
+            return
+        name, ends, want, _ = STEPS[self.step]
         now = time.monotonic()
         if self.started is None:
             # Waiting for KYNEX to say the door is shut before the first step.
-            if not coil(words, STATES["door_closed"]):
-                return None
+            if not state("door_closed"):
+                return
             self.started = now
-        set_coil(words, COMMANDS[name], True)
-        if coil(words, STATES[state]) == want:
-            set_coil(words, COMMANDS[name], False)
+        command(name, True)
+        if state(ends) == want:
+            command(name, False)
             self.timings.append((self.cycle, name, now - self.started))
             self.started = now
             self.step += 1
@@ -114,31 +103,106 @@ class Program:
                 self.cycle += 1
                 if self.cycle == self.cycles:
                     self.done.set()
-        return None
 
 
-async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--kynex", default="http://127.0.0.1:8097")
-    parser.add_argument("--port", type=int, default=5020)
-    parser.add_argument("--cycles", type=int, default=2)
-    args = parser.parse_args()
+async def modbus_plc(program, port):
+    """A Modbus TCP server whose program scans each time KYNEX asks it
+    anything. Returns its stop, and each name's address."""
+    from pymodbus.server import ModbusTcpServer
+    from pymodbus.simulator import DataType, SimData, SimDevice
 
-    program = Program(args.cycles)
-    words = [SimData(0, count=16, values=0, datatype=DataType.REGISTERS)]
+    def coil(words, n):
+        return bool(words[n // 16] & (1 << (n % 16)))
+
+    def set_coil(words, n, on):
+        if on:
+            words[n // 16] |= 1 << (n % 16)
+        else:
+            words[n // 16] &= ~(1 << (n % 16))
+
+    async def scan(_fc, _x, _address, _count, words, _values):
+        program.scan(
+            lambda name: coil(words, COILS[name]),
+            lambda name, on: set_coil(words, COILS[name], on),
+        )
+
+    registers = [SimData(0, count=16, values=0, datatype=DataType.REGISTERS)]
     device = SimDevice(
         1,
         simdata=(
             [SimData(0, count=1024, values=False, datatype=DataType.BITS)],
             [SimData(0, count=1, values=False, datatype=DataType.BITS)],
-            words,
-            words,
+            registers,
+            registers,
         ),
-        action=program.scan,
+        action=scan,
     )
-    server = ModbusTcpServer(device, address=("127.0.0.1", args.port))
+    server = ModbusTcpServer(device, address=("127.0.0.1", port))
     serving = asyncio.create_task(server.serve_forever())
     await asyncio.sleep(0.3)
+
+    async def stop():
+        await server.shutdown()
+        serving.cancel()
+
+    link = {"protocol": "modbus", "host": "127.0.0.1", "port": port, "unit": 1}
+    return stop, link, {name: str(n) for name, n in COILS.items()}
+
+
+async def opcua_plc(program, port):
+    """An OPC UA server with no security and anonymous access, its program
+    scanning every 10 ms. Returns its stop, and each name's node id."""
+    from asyncua import Server, ua
+
+    server = Server()
+    await server.init()
+    server.set_endpoint(f"opc.tcp://127.0.0.1:{port}/kynex/")
+    server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
+    ns = await server.register_namespace("urn:kynex:check")
+    lathe = await server.nodes.objects.add_object(ua.NodeId("Lathe", ns), "Lathe")
+    nodes = {}
+    for name in COMMANDS + STATES:
+        var = await lathe.add_variable(ua.NodeId(f"Lathe.{name}", ns), name, False)
+        await var.set_writable()
+        nodes[name] = var
+    await server.start()
+    values = {name: False for name in nodes}
+
+    async def scanning():
+        while True:
+            for name in STATES:
+                values[name] = bool(await nodes[name].read_value())
+            wanted = {}
+            program.scan(lambda name: values[name], wanted.__setitem__)
+            for name, on in wanted.items():
+                if values[name] != on:
+                    await nodes[name].write_value(on)
+                    values[name] = on
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(scanning())
+
+    async def stop():
+        task.cancel()
+        await server.stop()
+
+    link = {"protocol": "opcua", "host": "127.0.0.1", "port": port, "path": "/kynex/"}
+    return stop, link, {name: f"ns={ns};s=Lathe.{name}" for name in nodes}
+
+
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--kynex", default="http://127.0.0.1:8097")
+    parser.add_argument("--protocol", choices=["modbus", "opcua"], default="modbus")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--cycles", type=int, default=2)
+    args = parser.parse_args()
+
+    program = Program(args.cycles)
+    if args.protocol == "modbus":
+        stop, link, addresses = await modbus_plc(program, args.port or 5020)
+    else:
+        stop, link, addresses = await opcua_plc(program, args.port or 4840)
 
     # A lathe, wired to the PLC.
     post(args.kynex, {"op": "place", "template": "cnc_lathe", "at": [0, 0, 0]})
@@ -146,20 +210,20 @@ async def main():
     library = event(args.kynex, "library")
     lathe = [i for i in library["items"] if i["template"] == "cnc_lathe"][-1]
     machine = lathe["root"]
-    for key, n in {**COMMANDS, **STATES}.items():
-        post(args.kynex, {"op": "plc", "object": machine, "key": key, "coil": n})
-    post(args.kynex, {"op": "plc_link", "host": "127.0.0.1", "port": args.port, "unit": 1, "on": True})
-    print(f"{lathe['name']} wired to the PLC on port {args.port}")
+    for key, address in addresses.items():
+        post(args.kynex, {"op": "plc", "object": machine, "key": key, "address": address})
+    post(args.kynex, {"op": "plc_link", **link, "on": True})
+    print(f"{lathe['name']} wired to the PLC over {args.protocol}, port {link['port']}")
 
     try:
         await asyncio.wait_for(program.done.wait(), timeout=30 * args.cycles)
     except asyncio.TimeoutError:
         print("the PLC program did not finish:", program.timings)
+        print("KYNEX says:", event(args.kynex, "plc"))
         return 1
     finally:
-        post(args.kynex, {"op": "plc_link", "host": "127.0.0.1", "port": args.port, "unit": 1, "on": False})
-        await server.shutdown()
-        serving.cancel()
+        post(args.kynex, {"op": "plc_link", **link, "on": False})
+        await stop()
 
     worst = 0.0
     for cycle, name, took in program.timings:

@@ -369,10 +369,11 @@ pub struct Component {
     /// [`io_points`]): 0–7 the standard ones, 8–15 the configurable, 16
     /// and 17 the tool's.
     pub io: BTreeMap<String, u32>,
-    /// The PLC's coils it is wired to, by what it does (see
-    /// [`io_points`] and `crate::plc`): a command it is given when its coil
-    /// comes on, a state written to its coil.
-    pub plc: BTreeMap<String, u32>,
+    /// Where on the PLC it is wired, by what it does (see [`io_points`]
+    /// and `crate::plc`): a Modbus coil's number or an OPC UA node's id. A
+    /// command is given as its address comes on; a state is written to
+    /// its address.
+    pub plc: BTreeMap<String, String>,
 }
 
 /// What a component of kind `kind` can be wired to: the robot's outputs
@@ -403,19 +404,22 @@ pub fn io_points(kind: Kind) -> (&'static [&'static str], &'static [&'static str
 /// The highest I/O number: the tool's second output or input.
 pub const LAST_IO: u32 = 17;
 
-/// The highest PLC coil address: Modbus addresses a coil in 16 bits.
-pub const LAST_COIL: u32 = 65535;
+/// The longest PLC address KYNEX keeps: room for an OPC UA node id.
+pub const LONGEST_ADDRESS: usize = 200;
 
-/// A PLC map as saved: `{"open": 100, …}`.
-fn plc_of(v: &Value) -> BTreeMap<String, u32> {
+/// A PLC map as saved: `{"open": "100", "done": "ns=2;s=Lathe.Done", …}`,
+/// a coil's number as a number from before addresses were text.
+fn plc_of(v: &Value) -> BTreeMap<String, String> {
     v.as_object()
         .map(|m| {
             m.iter()
                 .filter_map(|(k, v)| {
-                    Some((
-                        k.clone(),
-                        v.as_u64().filter(|n| *n <= LAST_COIL as u64)? as u32,
-                    ))
+                    let a = match v {
+                        Value::Number(n) => n.to_string(),
+                        Value::String(s) => s.trim().to_string(),
+                        _ => return None,
+                    };
+                    (!a.is_empty() && a.len() <= LONGEST_ADDRESS).then(|| (k.clone(), a))
                 })
                 .collect()
         })
@@ -606,9 +610,9 @@ pub struct Cell {
     /// Each AMR that has been sent anywhere: where it is, and the legs of
     /// its way still to go.
     rovers: BTreeMap<u64, Rover>,
-    /// Each PLC command coil as last read: a command is given as its coil
-    /// comes on.
-    plc_last: BTreeMap<u32, bool>,
+    /// Each PLC command as last read, by address: a command is given as
+    /// its address comes on.
+    plc_last: BTreeMap<(u64, String), bool>,
 }
 
 /// An AMR on its way: where its centre is on the floor and which way it
@@ -1457,7 +1461,7 @@ impl Cell {
                 self.roles_changed = true;
                 self.changed = true;
             }
-            // A command or a state wired to a PLC's coil, or no more.
+            // A command or a state wired to a PLC's address, or no more.
             "plc" => {
                 let object = uid("object")?;
                 let key = req["key"].as_str().ok_or("no key")?;
@@ -1470,14 +1474,19 @@ impl Cell {
                 if !outs.contains(&key) && !ins.contains(&key) {
                     return Err(format!("{key}: 이 역할에 없는 신호입니다"));
                 }
-                match req["coil"].as_u64() {
-                    Some(n) if n <= LAST_COIL as u64 => {
-                        c.plc.insert(key.to_string(), n as u32);
-                    }
-                    Some(_) => return Err(format!("코일 주소는 0–{LAST_COIL}입니다")),
-                    None => {
-                        c.plc.remove(key);
-                    }
+                // A coil's number, or a node's id; none, or empty, for none.
+                let address = match &req["address"] {
+                    Value::Number(n) => n.to_string(),
+                    Value::String(s) => s.trim().to_string(),
+                    _ => String::new(),
+                };
+                if address.len() > LONGEST_ADDRESS {
+                    return Err(format!("주소는 {LONGEST_ADDRESS}자까지입니다"));
+                }
+                if address.is_empty() {
+                    c.plc.remove(key);
+                } else {
+                    c.plc.insert(key.to_string(), address);
                 }
                 self.roles_changed = true;
                 self.changed = true;
@@ -1697,14 +1706,9 @@ impl Cell {
         }
     }
 
-    /// Moves the machines on to `sim`, the simulation's clock in seconds:
-    /// doors at their pace, cycles at theirs, a part done when its cycle
-    /// is. `doc` is the scene the chucks are in. Returns whether the viewers
-    /// have anything to look at again: at a change of state at once, and
-    /// while running, every [`REPORT`] of real time `now`.
-    /// The PLC's coils the cell reads: its machines' commands.
-    pub fn plc_reads(&self) -> Vec<u32> {
-        let mut out: Vec<u32> = self
+    /// The PLC addresses the cell reads: its machines' commands.
+    pub fn plc_reads(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
             .components
             .iter()
             .flat_map(|c| {
@@ -1712,7 +1716,7 @@ impl Cell {
                 c.plc
                     .iter()
                     .filter(move |(k, _)| outs.contains(&k.as_str()))
-                    .map(|(_, a)| *a)
+                    .map(|(_, a)| a.clone())
             })
             .collect();
         out.sort_unstable();
@@ -1720,16 +1724,16 @@ impl Cell {
         out
     }
 
-    /// One exchange with a PLC: `coils` its command coils as read. A
-    /// command whose coil has come on since last read is given; an error a
-    /// command meets (a door opened while machining) is returned, with the
-    /// machine's name. Returns the state coils to write, and what went
-    /// wrong.
+    /// One exchange with a PLC: `read` its commands as read, by address. A
+    /// command whose address has come on since last read is given; an
+    /// error a command meets (a door opened while machining) is returned,
+    /// with the machine's name. Returns the states to write, by address,
+    /// and what went wrong.
     pub fn plc_exchange(
         &mut self,
         doc: &Document,
-        coils: &BTreeMap<u32, bool>,
-    ) -> (Vec<(u32, bool)>, Vec<String>) {
+        read: &BTreeMap<String, bool>,
+    ) -> (Vec<(String, bool)>, Vec<String>) {
         let mut errors = Vec::new();
         for c in self.components.clone() {
             let (outs, _) = io_points(c.kind);
@@ -1737,10 +1741,14 @@ impl Cell {
                 if !outs.contains(&key.as_str()) {
                     continue;
                 }
-                let Some(&on) = coils.get(address) else {
+                let Some(&on) = read.get(address) else {
                     continue;
                 };
-                let was = self.plc_last.insert(*address, on).unwrap_or(false);
+                // Each machine its own: two on one address both take it.
+                let was = self
+                    .plc_last
+                    .insert((c.object, address.clone()), on)
+                    .unwrap_or(false);
                 if on && !was {
                     if let Some(command) = Command::of(key) {
                         if let Err(e) = self.command(doc, c.object, command) {
@@ -1750,7 +1758,10 @@ impl Cell {
                 }
             }
         }
-        let mut writes = Vec::new();
+        // A state's address, as each machine on it says it: one written
+        // by two machines is on only when both say so, and said to be
+        // shared.
+        let mut states: BTreeMap<String, Vec<(&str, bool)>> = BTreeMap::new();
         for c in &self.components {
             let (_, ins) = io_points(c.kind);
             for (key, address) in &c.plc {
@@ -1758,13 +1769,32 @@ impl Cell {
                     continue;
                 }
                 if let Some(signal) = Signal::of(key) {
-                    writes.push((*address, self.signal(doc, c.object, signal)));
+                    states
+                        .entry(address.clone())
+                        .or_default()
+                        .push((c.name.as_str(), self.signal(doc, c.object, signal)));
                 }
             }
+        }
+        let mut writes = Vec::new();
+        for (address, said) in states {
+            if said.len() > 1 {
+                let names: Vec<&str> = said.iter().map(|(n, _)| *n).collect();
+                errors.push(format!(
+                    "{address}: 상태 주소를 {}가 함께 씁니다",
+                    names.join(", ")
+                ));
+            }
+            writes.push((address, said.iter().all(|(_, on)| *on)));
         }
         (writes, errors)
     }
 
+    /// Moves the machines on to `sim`, the simulation's clock in seconds:
+    /// doors at their pace, cycles at theirs, a part done when its cycle
+    /// is. `doc` is the scene the chucks are in. Returns whether the viewers
+    /// have anything to look at again: at a change of state at once, and
+    /// while running, every [`REPORT`] of real time `now`.
     pub fn tick(&mut self, doc: &Document, sim: f64, now: Instant) -> bool {
         let dt = self.last_tick.map_or(0.0, |t| (sim - t).max(0.0));
         self.last_tick = Some(sim);

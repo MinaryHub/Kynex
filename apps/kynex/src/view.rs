@@ -460,7 +460,7 @@ impl Stage {
         touched |= self.cell.tick(scene, time, now);
         // A PLC's commands given, the machines' states handed back.
         if self.plc.on() {
-            let (writes, errors) = self.cell.plc_exchange(scene, &self.plc.coils());
+            let (writes, errors) = self.cell.plc_exchange(scene, &self.plc.read());
             self.plc.warn(errors);
             self.plc.hand(self.cell.plc_reads(), writes);
             touched |= self.cell.take_changed();

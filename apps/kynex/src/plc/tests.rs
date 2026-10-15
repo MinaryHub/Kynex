@@ -81,9 +81,11 @@ impl FakePlc {
 
 fn settings(port: u16) -> Settings {
     Settings {
+        protocol: Protocol::Modbus,
         host: "127.0.0.1".into(),
         port,
         unit: 1,
+        path: String::new(),
         on: true,
     }
 }
@@ -141,11 +143,11 @@ fn a_plc_runs_a_machine_over_modbus_tcp() {
     ] {
         let a = cell.handle(
             &doc,
-            &json!({"op": "plc", "object": m, "key": key, "coil": coil}).to_string(),
+            &json!({"op": "plc", "object": m, "key": key, "address": coil}).to_string(),
         );
         assert!(a.contains("\"ok\":true"), "{a}");
     }
-    assert_eq!(cell.plc_reads(), [100, 101]);
+    assert_eq!(cell.plc_reads(), ["100", "101"]);
 
     let link = Plc::new(settings(plc.port));
     assert!(link.on());
@@ -153,7 +155,7 @@ fn a_plc_runs_a_machine_over_modbus_tcp() {
     // clock moved on.
     let started = Instant::now();
     let step = |cell: &mut Cell| {
-        let got = link.coils();
+        let got = link.read();
         let (writes, errors) = cell.plc_exchange(&doc, &got);
         assert!(errors.is_empty(), "{errors:?}");
         link.hand(cell.plc_reads(), writes);
@@ -205,4 +207,52 @@ fn a_plc_not_there_is_said_so() {
     assert!(until(3.0, || link.to_json()["error"].is_string()));
     assert_eq!(link.to_json()["connected"], false);
     drop(link);
+}
+
+/// Two lathes wired to the same PLC addresses: both take a command, and
+/// their door-open state is on only once both doors are open, with a
+/// warning that the address is shared.
+#[test]
+fn machines_on_one_address_each_take_its_command() {
+    let mut library = Library::default();
+    for x in [0.0, 3.0] {
+        library.handle(
+            &json!({"op": "place", "template": "cnc_lathe", "at": [x, 0.0, 0.0]}).to_string(),
+        );
+    }
+    let mut doc = Document::new();
+    library.apply(&mut doc);
+    let mut cell = Cell::default();
+    let machines: Vec<u64> = library
+        .roles()
+        .into_iter()
+        .map(|(u, n, k)| {
+            cell.ensure(u, n, k);
+            u
+        })
+        .collect();
+    for m in &machines {
+        for (key, address) in [("open", "ns=2;s=Open"), ("door_open", "ns=2;s=DoorOpen")] {
+            cell.handle(
+                &doc,
+                &json!({"op": "plc", "object": m.to_string(), "key": key, "address": address})
+                    .to_string(),
+            );
+        }
+    }
+    let read: BTreeMap<String, bool> = [("ns=2;s=Open".to_string(), true)].into();
+    let start = Instant::now();
+    let (_, errors) = cell.plc_exchange(&doc, &read);
+    assert!(errors.iter().any(|e| e.contains("함께")), "{errors:?}");
+    // Their 3 s doors.
+    let mut t = 0.0;
+    while t < 3.5 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+    }
+    for m in &machines {
+        assert!(cell.signal(&doc, *m, crate::cell::Signal::DoorOpen), "{m}");
+    }
+    let (writes, _) = cell.plc_exchange(&doc, &read);
+    assert_eq!(writes, [("ns=2;s=DoorOpen".to_string(), true)]);
 }

@@ -142,12 +142,8 @@ export class CellPanel {
     document.getElementById('cell-plc').addEventListener('change', (e) => {
       const key = e.target.dataset.plc;
       if (!key) return;
-      const v = e.target.value.trim();
-      const coil = v === '' ? null : Number(v);
-      if (coil != null && !(Number.isInteger(coil) && coil >= 0 && coil <= 65535)) {
-        return this.ctx.toast('코일 주소는 0–65535입니다');
-      }
-      this.send({ op: 'plc', object: this.ctx.selected(), key, coil });
+      // A coil's number or a node's id; the link says which it cannot use.
+      this.send({ op: 'plc', object: this.ctx.selected(), key, address: e.target.value.trim() });
     });
     // What the inspector last drew, so that a running machine's progress
     // does not redraw the fields under the pointer.
@@ -275,7 +271,7 @@ export class CellPanel {
       const row = (key, command) => {
         const n = c.plc?.[key];
         const label = IO_LABELS[`${c.kind}:${key}`] ?? IO_LABELS[key] ?? key;
-        return `<label class="insp-field">${command ? 'PLC →' : '→ PLC'} ${escapeHtml(label)}<input type="number" class="num" data-plc="${escapeHtml(key)}" value="${n ?? ''}" min="0" max="65535" placeholder="없음"></label>`;
+        return `<label class="insp-field">${command ? 'PLC →' : '→ PLC'} ${escapeHtml(label)}<input type="text" class="num plc-address" data-plc="${escapeHtml(key)}" value="${escapeHtml(n ?? '')}" placeholder="없음" spellcheck="false"></label>`;
       };
       document.getElementById('cell-plc').innerHTML =
         plcPoints.outputs.map((k) => row(k, true)).join('') + plcPoints.inputs.map((k) => row(k, false)).join('');

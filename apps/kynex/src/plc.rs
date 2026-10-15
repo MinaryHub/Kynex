@@ -1,17 +1,22 @@
-//! A PLC on the network, over Modbus TCP: virtual commissioning. KYNEX is
-//! the client, as Visual Components is to a PLC's server; the PLC's
-//! program runs the cell's machines as it would the real ones.
+//! A PLC on the network: virtual commissioning. KYNEX is the client, as
+//! Visual Components is to a PLC's server; the PLC's program runs the
+//! cell's machines as it would the real ones. Over Modbus TCP, or OPC UA
+//! (see [`opcua`]).
 //!
-//! The cell's machines are wired to the PLC's coils (see
+//! The cell's machines are wired to the PLC's addresses (see
 //! `Component::plc`): a command — a door to open, a cycle to start — is
-//! given as the PLC turns its coil on; a state — the door open, the cycle
-//! done — is written to its coil as it changes. Coils are addressed from
-//! 0, as Modbus addresses them (coil 00001 is address 0).
+//! given as the PLC turns its address on; a state — the door open, the
+//! cycle done — is written to its address as it changes. Over Modbus an
+//! address is a coil, counted from 0 as Modbus addresses them (coil 00001
+//! is address 0); over OPC UA it is a Boolean variable's node id
+//! (`ns=2;s=Lathe.Open`).
 //!
-//! The link runs on a thread of its own, exchanging every
-//! [`EVERY`]: it reads the command coils (function 1) and writes each
-//! state coil that changed (function 5), and every one again after it
+//! The link runs on a thread of its own, exchanging every [`EVERY`]: it
+//! reads the commands (Modbus function 1, OPC UA Read) and writes each
+//! state that changed (function 5, Write), and every one again after it
 //! connects. The page and the cell never wait on the network.
+
+pub mod opcua;
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -26,13 +31,33 @@ use serde_json::{json, Value};
 /// How often the link exchanges with the PLC.
 pub const EVERY: Duration = Duration::from_millis(50);
 
+/// How KYNEX talks to the PLC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Protocol {
+    Modbus,
+    OpcUa,
+}
+
+impl Protocol {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Protocol::Modbus => "modbus",
+            Protocol::OpcUa => "opcua",
+        }
+    }
+}
+
 /// Where the PLC is.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
+    pub protocol: Protocol,
     pub host: String,
     pub port: u16,
     /// The Modbus unit (slave) the PLC answers as.
     pub unit: u8,
+    /// The OPC UA server's path after its host and port, if its endpoint
+    /// has one (`/freeopcua/server/`).
+    pub path: String,
     /// Whether to connect.
     pub on: bool,
 }
@@ -40,9 +65,11 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            protocol: Protocol::Modbus,
             host: "127.0.0.1".into(),
             port: 502,
             unit: 1,
+            path: String::new(),
             on: false,
         }
     }
@@ -51,7 +78,15 @@ impl Default for Settings {
 impl Settings {
     pub fn of(v: &Value) -> Self {
         let d = Self::default();
+        let protocol = match v["protocol"].as_str() {
+            Some("opcua") => Protocol::OpcUa,
+            _ => Protocol::Modbus,
+        };
         Self {
+            protocol,
+            path: v["path"]
+                .as_str()
+                .map_or(d.path, |p| p.trim().chars().take(200).collect()),
             host: v["host"].as_str().map_or(d.host, |h| h.trim().to_string()),
             port: v["port"]
                 .as_u64()
@@ -66,7 +101,25 @@ impl Settings {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({ "host": self.host, "port": self.port, "unit": self.unit, "on": self.on })
+        json!({
+            "protocol": self.protocol.tag(),
+            "host": self.host,
+            "port": self.port,
+            "unit": self.unit,
+            "path": self.path,
+            "on": self.on,
+        })
+    }
+
+    /// The OPC UA endpoint's URL.
+    pub fn url(&self) -> String {
+        let path = self.path.trim();
+        let slash = if path.is_empty() || path.starts_with('/') {
+            ""
+        } else {
+            "/"
+        };
+        format!("opc.tcp://{}:{}{slash}{path}", self.host, self.port)
     }
 }
 
@@ -152,16 +205,23 @@ fn coils_of(body: &[u8], count: u16) -> Result<Vec<bool>, String> {
 /// What the link and the cell share.
 #[derive(Default)]
 struct Shared {
-    /// The command coils to read.
-    reads: Vec<u32>,
-    /// The state coils as they should be.
-    writes: BTreeMap<u32, bool>,
-    /// The command coils as last read.
-    got: BTreeMap<u32, bool>,
+    /// The commands' addresses to read.
+    reads: Vec<String>,
+    /// The states as they should be, by address.
+    writes: BTreeMap<String, bool>,
+    /// The commands as last read, by address.
+    got: BTreeMap<String, bool>,
     connected: bool,
     error: Option<String>,
+    /// Addresses the PLC would not read or write, last exchange: the link
+    /// goes on with the rest.
+    problems: Vec<String>,
     /// A command the cell could not take, last time one came.
     warning: Option<String>,
+    /// Why the link last dropped, kept after it connects again, and how
+    /// often it has.
+    dropped: Option<String>,
+    drops: u64,
     /// Exchanges done since connecting.
     exchanges: u64,
 }
@@ -200,6 +260,9 @@ impl Plc {
             s.exchanges = 0;
             s.got.clear();
             s.warning = None;
+            s.problems.clear();
+            s.drops = 0;
+            s.dropped = None;
         }
         if self.settings.on {
             let (shared, stop, settings) = (
@@ -224,13 +287,13 @@ impl Plc {
         self.thread.is_some()
     }
 
-    /// The command coils as last read.
-    pub fn coils(&self) -> BTreeMap<u32, bool> {
+    /// The commands as last read, by address.
+    pub fn read(&self) -> BTreeMap<String, bool> {
         self.shared.lock().unwrap().got.clone()
     }
 
-    /// Hands over the coils to read and the state coils as they should be.
-    pub fn hand(&self, reads: Vec<u32>, writes: Vec<(u32, bool)>) {
+    /// Hands over the addresses to read and the states as they should be.
+    pub fn hand(&self, reads: Vec<String>, writes: Vec<(String, bool)>) {
         let mut s = self.shared.lock().unwrap();
         s.reads = reads;
         s.writes = writes.into_iter().collect();
@@ -252,8 +315,11 @@ impl Plc {
             "connected": s.connected,
             "error": s.error,
             "warning": s.warning,
+            "problems": s.problems,
+            "dropped": s.dropped,
+            "drops": s.drops,
             "exchanges": s.exchanges,
-            "coils": s.got.iter().map(|(a, v)| json!([a, v])).chain(
+            "values": s.got.iter().map(|(a, v)| json!([a, v])).chain(
                 s.writes.iter().map(|(a, v)| json!([a, v]))).collect::<Vec<_>>(),
         })
     }
@@ -265,13 +331,137 @@ impl Drop for Plc {
     }
 }
 
+/// A connection to a PLC, by protocol.
+enum Conn {
+    Modbus {
+        stream: TcpStream,
+        tid: u16,
+        unit: u8,
+    },
+    OpcUa(opcua::Session),
+}
+
+impl Conn {
+    fn open(settings: &Settings) -> Result<Self, String> {
+        let stream = connect(settings)?;
+        Ok(match settings.protocol {
+            Protocol::Modbus => Conn::Modbus {
+                stream,
+                tid: 0,
+                unit: settings.unit,
+            },
+            Protocol::OpcUa => Conn::OpcUa(opcua::Session::open(stream, &settings.url())?),
+        })
+    }
+
+    /// The commands at `addresses`, and the addresses that could not be
+    /// read. An error is the connection's: it is made again.
+    fn read(
+        &mut self,
+        addresses: &[String],
+    ) -> Result<(BTreeMap<String, bool>, Vec<String>), String> {
+        let mut got = BTreeMap::new();
+        let mut problems = Vec::new();
+        match self {
+            Conn::Modbus { stream, tid, unit } => {
+                let mut coils: Vec<(u16, &String)> = Vec::new();
+                for a in addresses {
+                    match a.parse::<u16>() {
+                        Ok(n) => coils.push((n, a)),
+                        Err(_) => problems.push(format!("{a}: 코일 번호(0–65535)가 아닙니다")),
+                    }
+                }
+                coils.sort();
+                // In spans of at most 2000.
+                let mut at = 0;
+                while at < coils.len() {
+                    let start = coils[at].0;
+                    let end = coils[at..]
+                        .iter()
+                        .map(|c| c.0)
+                        .take_while(|n| (*n as u32) < start as u32 + 2000)
+                        .last()
+                        .unwrap();
+                    let count = end - start + 1;
+                    *tid = tid.wrapping_add(1);
+                    let body = exchange(stream, *tid, *unit, &read_coils_pdu(start, count))?;
+                    let bits = coils_of(&body, count)?;
+                    while at < coils.len() && coils[at].0 <= end {
+                        got.insert(coils[at].1.clone(), bits[(coils[at].0 - start) as usize]);
+                        at += 1;
+                    }
+                }
+            }
+            Conn::OpcUa(session) => {
+                let mut nodes = Vec::new();
+                let mut named = Vec::new();
+                for a in addresses {
+                    match opcua::NodeId::parse(a) {
+                        Ok(n) => {
+                            nodes.push(n);
+                            named.push(a);
+                        }
+                        Err(e) => problems.push(e),
+                    }
+                }
+                if !nodes.is_empty() {
+                    for (a, value) in named.into_iter().zip(session.read(&nodes)?) {
+                        match value {
+                            Ok(on) => {
+                                got.insert(a.clone(), on);
+                            }
+                            Err(e) => problems.push(e),
+                        }
+                    }
+                }
+            }
+        }
+        Ok((got, problems))
+    }
+
+    /// Writes `on` to the state at `address`: `Ok(Err(why))` when the PLC
+    /// would not take it, an error when the connection failed.
+    fn write(&mut self, address: &str, on: bool) -> Result<Result<(), String>, String> {
+        match self {
+            Conn::Modbus { stream, tid, unit } => {
+                let Ok(n) = address.parse::<u16>() else {
+                    return Ok(Err(format!("{address}: 코일 번호(0–65535)가 아닙니다")));
+                };
+                *tid = tid.wrapping_add(1);
+                match exchange(stream, *tid, *unit, &write_coil_pdu(n, on)) {
+                    Ok(_) => Ok(Ok(())),
+                    Err(e) if e.starts_with("Modbus 예외") => Ok(Err(format!("{address}: {e}"))),
+                    Err(e) => Err(e),
+                }
+            }
+            Conn::OpcUa(session) => {
+                let node = match opcua::NodeId::parse(address) {
+                    Ok(n) => n,
+                    Err(e) => return Ok(Err(e)),
+                };
+                match session.write(&node, on) {
+                    Ok(()) => Ok(Ok(())),
+                    // A status the server gave: the node's, not the link's.
+                    Err(e) if e.contains("OPC UA 0x") => Ok(Err(e)),
+                    Err(e) => Err(e),
+                }
+            }
+        }
+    }
+
+    fn close(self) {
+        if let Conn::OpcUa(session) = self {
+            session.close();
+        }
+    }
+}
+
 /// The link's thread: connects, and exchanges until told to stop; after a
 /// failure, connects again a second later.
 fn run(settings: &Settings, shared: &Mutex<Shared>, stop: &AtomicBool) {
-    let mut tid: u16 = 0;
     while !stop.load(Ordering::Relaxed) {
-        let mut stream = match connect(settings) {
-            Ok(s) => s,
+        let mut conn = match Conn::open(settings) {
+            Ok(c) => c,
             Err(e) => {
                 fail(shared, e);
                 pause(stop, Duration::from_secs(1));
@@ -283,60 +473,35 @@ fn run(settings: &Settings, shared: &Mutex<Shared>, stop: &AtomicBool) {
             s.connected = true;
             s.error = None;
         }
-        // Every state coil is written once on connecting.
-        let mut written: BTreeMap<u32, bool> = BTreeMap::new();
+        // Every state is written once on connecting.
+        let mut written: BTreeMap<String, bool> = BTreeMap::new();
         while !stop.load(Ordering::Relaxed) {
             let (reads, writes) = {
                 let s = shared.lock().unwrap();
                 (s.reads.clone(), s.writes.clone())
             };
-            let result = (|| -> Result<BTreeMap<u32, bool>, String> {
-                let mut got = BTreeMap::new();
-                // The command coils, in spans of at most 2000.
-                let mut at = 0;
-                while at < reads.len() {
-                    let start = reads[at];
-                    let end = reads[at..]
-                        .iter()
-                        .copied()
-                        .take_while(|a| *a < start + 2000)
-                        .last()
-                        .unwrap();
-                    let count = (end - start + 1) as u16;
-                    tid = tid.wrapping_add(1);
-                    let body = exchange(
-                        &mut stream,
-                        tid,
-                        settings.unit,
-                        &read_coils_pdu(start as u16, count),
-                    )?;
-                    let coils = coils_of(&body, count)?;
-                    while at < reads.len() && reads[at] <= end {
-                        got.insert(reads[at], coils[(reads[at] - start) as usize]);
-                        at += 1;
-                    }
-                }
+            let result = (|| -> Result<(BTreeMap<String, bool>, Vec<String>), String> {
+                let (got, mut problems) = conn.read(&reads)?;
                 for (address, on) in &writes {
                     if written.get(address) == Some(on) {
                         continue;
                     }
-                    tid = tid.wrapping_add(1);
-                    exchange(
-                        &mut stream,
-                        tid,
-                        settings.unit,
-                        &write_coil_pdu(*address as u16, *on),
-                    )?;
-                    written.insert(*address, *on);
+                    if let Err(why) = conn.write(address, *on)? {
+                        problems.push(why);
+                    }
+                    // Not tried again until it changes: a PLC that will not
+                    // take it is said so once, not hammered.
+                    written.insert(address.clone(), *on);
                 }
-                Ok(got)
+                Ok((got, problems))
             })();
             match result {
-                Ok(got) => {
+                Ok((got, problems)) => {
                     let mut s = shared.lock().unwrap();
                     s.got = got;
                     s.exchanges += 1;
                     s.error = None;
+                    s.problems = problems;
                 }
                 Err(e) => {
                     fail(shared, e);
@@ -345,6 +510,7 @@ fn run(settings: &Settings, shared: &Mutex<Shared>, stop: &AtomicBool) {
             }
             pause(stop, EVERY);
         }
+        conn.close();
         pause(stop, Duration::from_secs(1));
     }
     shared.lock().unwrap().connected = false;
@@ -367,6 +533,10 @@ fn connect(settings: &Settings) -> Result<TcpStream, String> {
 fn fail(shared: &Mutex<Shared>, error: String) {
     let mut s = shared.lock().unwrap();
     s.connected = false;
+    if s.connected {
+        s.drops += 1;
+        s.dropped = Some(error.clone());
+    }
     s.error = Some(error);
 }
 

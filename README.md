@@ -647,36 +647,56 @@ cargo run -p kynex -- view 127.0.0.1:7878 --key demo --open
 
 The cell's machines can be run by a PLC's program instead of the robot's,
 to try the PLC's logic before the machines exist (`apps/kynex/src/plc.rs`).
-KYNEX is a Modbus TCP client of the PLC, as Visual Components is:
+KYNEX is a client of the PLC, as Visual Components is, over **Modbus TCP**
+or **OPC UA**:
 
-- **PLC** in the toolbar: the PLC's address, port (502 by default) and
-  unit, and **연결**. Where the PLC is is kept in the project file, but
-  opening a project never connects: someone presses 연결 each time. The
-  dot on the button is green while KYNEX exchanges with the PLC, every
-  50 ms. The link and the coils are changed only from the computer KYNEX
-  runs on: a viewer shared with `--lan` refuses them from elsewhere.
-- **PLC 코일** in a machine's inspector: a coil address (from 0, as
-  Modbus addresses them) for each command and each state. A command — 문
-  열기, 척 물림, 시작 … — is given as the PLC turns its coil on; a state —
-  문 열림, 척 물림됨, 척 풀림됨, 완료 … — is written to its coil as it
-  changes. A command the machine cannot take (a door while machining) is
-  shown beside the link's state.
+- **PLC** in the toolbar: Modbus TCP or OPC UA, the PLC's address and
+  port (502 or 4840 by default), Modbus's unit or the OPC UA endpoint's
+  path (`/freeopcua/server/`), and **연결**. Where the PLC is is kept in
+  the project file, but opening a project never connects: someone presses
+  연결 each time. The dot on the button is green while KYNEX exchanges
+  with the PLC, every 50 ms; addresses the PLC would not read or write
+  are listed beside it, the link going on with the rest. The link and the
+  addresses are changed only from the computer KYNEX runs on: a viewer
+  shared with `--lan` refuses them from elsewhere.
+- **PLC 주소** in a machine's inspector, for each command and each state:
+  over Modbus a coil's number (from 0, as Modbus addresses them), over
+  OPC UA a Boolean variable's node id (`ns=2;s=Lathe.Open`, `ns=3;i=1001`;
+  a number read as a Boolean, on when it is not 0). A command — 문 열기,
+  척 물림, 시작 … — is given as the PLC turns it on; a state — 문 열림, 척
+  물림됨, 척 풀림됨, 완료 … — is written as it changes. Machines may share
+  a command's address (each takes it); a state's address shared by two is
+  on only when both say so, and is warned of. A command the machine
+  cannot take (a door while machining) is shown beside the link's state.
+- OPC UA: KYNEX's own client (`apps/kynex/src/plc/opcua.rs`), with no
+  message security (the `None` policy) and an anonymous user — a PLC's
+  server set up to allow that, as for commissioning on a bench. Signed or
+  encrypted channels and user names are not made.
 - The chuck closes and opens over the machine's **척 개폐** time: **척
   물림됨** comes on once it has closed, **척 풀림됨** once it is open
   again, and a cycle starts only clamped.
 
-Checked against a server that is not KYNEX's own, pymodbus (free), with
-a small PLC program in `tools/plc/check.py` running a lathe's door and
-chuck over and over:
+Checked against servers that are not KYNEX's own, free ones, with a small
+PLC program in `tools/plc/check.py` running a lathe's door and chuck over
+and over: pymodbus for Modbus, asyncua for OPC UA. asyncua 1.1.8 does not
+work on Python 3.14 (not even with itself), so it runs on Python 3.8 in a
+virtual environment of its own:
 
 ```
 pip install pymodbus
 cargo run -p kynex -- view --empty --port 8097 --project target/plc/kynex-project.json
 python tools/plc/check.py --cycles 3
+
+py -3.8 -m venv target/plc/venv38
+target/plc/venv38/Scripts/python -m pip install --upgrade pip
+target/plc/venv38/Scripts/python -m pip install --only-binary=:all: asyncua
+cargo run -p kynex -- view --empty --port 8098 --project target/plc/kynex-project-ua.json
+target/plc/venv38/Scripts/python tools/plc/check.py --protocol opcua --kynex http://127.0.0.1:8098 --cycles 3
 ```
 
-Every step took the lathe's own time to within 0.13 s (3 s doors, 1 s
-chuck), the rest being the 50 ms exchange.
+Every step took the lathe's own time to within 0.13 s over either (3 s
+doors, 1 s chuck), the rest being the 50 ms exchange and the program's
+scan; also with a second lathe wired to the same nodes.
 
 ## Benchmark
 

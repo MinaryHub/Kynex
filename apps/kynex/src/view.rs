@@ -95,7 +95,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         return offline(&server, &requests, stage, loaded.document, &path);
     }
     if empty {
-        return offline(&server, &requests, stage, Document::new(), "새 프로젝트");
+        return offline(&server, &requests, stage, Document::new(), "빈 장면");
     }
 
     let mut config = LinkConfig::new(address.unwrap_or_else(|| "127.0.0.1".into()));
@@ -174,7 +174,12 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             asked.extend(requests.recv_timeout(Duration::from_millis(3)).ok());
         }
         let any_asked = !asked.is_empty();
-        if stage.answer(link.document(), asked) && !replaced {
+        let touched = stage.answer(link.document(), asked);
+        // Another project opened: everything shown anew.
+        if stage.take_reset() {
+            replaced = true;
+            changes = None;
+        } else if touched && !replaced {
             changes.get_or_insert_with(Changes::default);
         }
         if replaced || changes.is_some() {
@@ -247,6 +252,11 @@ struct Stage {
     plc_changed: bool,
     /// The real machines the cell's follow, by machine (`crate::mtconnect`).
     mirrors: std::collections::BTreeMap<u64, crate::mtconnect::Mirror>,
+    /// The project file, and whether another was just opened in its place.
+    file: PathBuf,
+    reset: bool,
+    /// Where projects are made, opened and listed (`projects_dir`).
+    projects: PathBuf,
 }
 
 /// How often the timeline goes to the viewers while it grows.
@@ -305,6 +315,9 @@ impl Stage {
             }),
             plc_changed: false,
             mirrors: Default::default(),
+            file,
+            reset: false,
+            projects: projects_dir(),
         })
     }
 
@@ -388,6 +401,9 @@ impl Stage {
                 self.plc_changed = true;
                 touched = true;
                 serde_json::json!({ "ok": true }).to_string()
+            } else if op == "project" {
+                touched = true;
+                self.project_op(doc, &request.body)
             } else if op == "scenario" {
                 touched = true;
                 self.scenario_op(doc, &request.body)
@@ -801,21 +817,123 @@ impl Stage {
         let scenarios = std::mem::take(&mut self.scenarios_changed);
         let plc = std::mem::take(&mut self.plc_changed);
         server.state("plc", &self.plc.to_json().to_string());
+        server.state("project", &self.project_json().to_string());
         if programs || roles || items || scenarios || plc || replaced {
-            let rest = Project {
-                cell: self.cell.to_saved(),
-                library: self.library.to_saved(),
-                scenarios: self.scenarios.clone(),
-                plc: {
-                    let mut plc = self.plc.settings.to_json();
-                    plc["signals"] = self.cell.signals_saved();
-                    plc
-                },
-            };
-            if let Err(e) = self.posing.save(scene, rest) {
+            if let Err(e) = self.save(doc) {
                 println!("프로젝트를 저장하지 못했습니다: {e}");
             }
         }
+    }
+
+    /// Writes the project file as things stand.
+    fn save(&mut self, doc: &Document) -> Result<(), String> {
+        let scene = self.base.as_ref().unwrap_or(doc);
+        let rest = Project {
+            cell: self.cell.to_saved(),
+            library: self.library.to_saved(),
+            scenarios: self.scenarios.clone(),
+            plc: {
+                let mut plc = self.plc.settings.to_json();
+                plc["signals"] = self.cell.signals_saved();
+                plc
+            },
+        };
+        self.posing.save(scene, rest)
+    }
+
+    /// The `project` event: the project file open, and where projects are
+    /// kept.
+    fn project_json(&self) -> Value {
+        serde_json::json!({
+            "name": self.file.file_stem().map(|s| s.to_string_lossy().to_string()),
+            "path": self.file.display().to_string(),
+            "dir": self.projects.display().to_string(),
+        })
+    }
+
+    /// Makes a new project, opens one, or saves this one under another
+    /// name; or lists those in the projects folder. Only by name, in that
+    /// folder: no path from a page reaches the file system.
+    fn project_op(&mut self, doc: &Document, body: &str) -> String {
+        let req: Value = serde_json::from_str(body).unwrap_or_default();
+        let dir = self.projects.clone();
+        let named = || -> Result<PathBuf, String> {
+            let name = project_name(req["name"].as_str().unwrap_or(""))?;
+            Ok(dir.join(format!("{name}.json")))
+        };
+        let answer: Result<Value, String> = match req["action"].as_str().unwrap_or_default() {
+            "list" => {
+                let mut projects = list_projects(&dir);
+                // The one open, if it is one of these.
+                for p in &mut projects {
+                    let file = dir.join(format!("{}.json", p["name"].as_str().unwrap_or("")));
+                    p["current"] = (file == self.file).into();
+                }
+                Ok(serde_json::json!({ "projects": projects }))
+            }
+            "new" => named().and_then(|file| {
+                if file.exists() {
+                    return Err("같은 이름의 프로젝트가 이미 있습니다".into());
+                }
+                self.switch(doc, &file)
+            }),
+            "open" => named().and_then(|file| {
+                if !file.is_file() {
+                    return Err("그 이름의 프로젝트가 없습니다".into());
+                }
+                self.switch(doc, &file)
+            }),
+            "save_as" => named().and_then(|file| {
+                if file.exists() {
+                    return Err("같은 이름의 프로젝트가 이미 있습니다".into());
+                }
+                std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                let before = std::mem::replace(&mut self.file, file.clone());
+                self.posing.set_file(&file);
+                if let Err(e) = self.save(doc) {
+                    self.posing.set_file(&before);
+                    self.file = before;
+                    return Err(e);
+                }
+                println!("프로젝트를 다른 이름으로 저장했습니다: {}", file.display());
+                Ok(Value::Null)
+            }),
+            other => Err(format!("unknown action {other:?}")),
+        };
+        match answer {
+            Ok(Value::Null) => serde_json::json!({ "ok": true }),
+            Ok(mut v) => {
+                v["ok"] = true.into();
+                v
+            }
+            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+        }
+        .to_string()
+    }
+
+    /// Leaves this project, saved, for the one in `file` (made if it is not
+    /// there): what ran stops, the PLC and the real machines are let go,
+    /// and the viewers are shown the scene anew.
+    fn switch(&mut self, doc: &Document, file: &Path) -> Result<Value, String> {
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        // Read first: a file that cannot be read leaves this project open.
+        let mut next = Stage::open(Some(file.to_path_buf()))?;
+        next.projects = self.projects.clone();
+        if let Err(e) = self.save(doc) {
+            println!("프로젝트를 저장하지 못했습니다: {e}");
+        }
+        *self = next;
+        self.replaced(doc);
+        self.save(doc)?;
+        self.reset = true;
+        Ok(Value::Null)
+    }
+
+    /// Whether the project changed and the viewers must be shown all anew.
+    fn take_reset(&mut self) -> bool {
+        std::mem::take(&mut self.reset)
     }
 }
 
@@ -885,15 +1003,21 @@ fn offline(
         let any_asked = !asked.is_empty();
         // Asked, or moved on by the clock: a door sliding, a cycle running.
         let touched = stage.answer(&doc, asked);
-        if touched {
+        // Another project opened: everything shown anew.
+        let reset = stage.take_reset();
+        if touched || reset {
             let (posed, more) = stage.shown(&doc);
             let shown = posed.as_ref().unwrap_or(&doc);
-            server.update(shown, Some(&more));
+            if reset {
+                server.reset(shown);
+            } else {
+                server.update(shown, Some(&more));
+            }
             let contacts = stage.collider.contacts(shown, &stage.cell.held());
             server.state("contacts", &collide::contacts_json(shown, &contacts));
         }
-        if any_asked || touched || stage.ticking() {
-            stage.tell(server, &doc, false);
+        if any_asked || touched || reset || stage.ticking() {
+            stage.tell(server, &doc, reset);
         }
     }
 }
@@ -904,7 +1028,8 @@ fn offline(
 /// machines can change what goes to the PLC, so another computer only
 /// watches. Linked or not, so is what sets the PLC up for later: where it
 /// is and what is wired to it, a program step on its signals, and a
-/// scenario taken back, which brings programs and wiring with it. `None`
+/// scenario or a project taken back, which brings programs and wiring with
+/// it. `None`
 /// when it does not.
 fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
     if linked {
@@ -915,6 +1040,11 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
             "PLC·MTConnect 설정과 시나리오 불러오기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다",
         );
     }
+    // Opening a project brings its PLC wiring and machines followed; and
+    // its files are this computer's.
+    if op == "project" {
+        return Some("프로젝트 만들기·열기·저장은 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다");
+    }
     if matches!(op, "add" | "edit") {
         let req: Value = serde_json::from_str(body).unwrap_or_default();
         let kind = req["step"]["type"].as_str().unwrap_or("");
@@ -923,6 +1053,81 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Where projects are made, opened and listed: `KYNEX` in the user's
+/// documents, or `KYNEX_PROJECTS` if set.
+fn projects_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("KYNEX_PROJECTS") {
+        return PathBuf::from(dir);
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    home.join("Documents").join("KYNEX")
+}
+
+/// A project's name as a file's in the projects folder may be: no folder
+/// in it, nothing a file system takes for something else.
+fn project_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    let bad = |c: char| c.is_control() || r#"/\:*?"<>|"#.contains(c);
+    if name.is_empty() {
+        return Err("프로젝트 이름을 넣으세요".into());
+    }
+    if name.chars().count() > 60 {
+        return Err("프로젝트 이름은 60자까지입니다".into());
+    }
+    if name.chars().any(bad) || name.starts_with('.') || name.ends_with('.') {
+        return Err(r#"프로젝트 이름에는 / \ : * ? " < > | 를 쓸 수 없고, 점으로 시작하거나 끝날 수 없습니다"#.into());
+    }
+    // Names Windows keeps for devices, with any extension.
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit());
+    if device {
+        return Err("그 이름은 Windows가 장치 이름으로 씁니다".into());
+    }
+    Ok(name.to_string())
+}
+
+/// The projects in `dir`, the last changed first: name and when, in
+/// seconds since 1970.
+fn list_projects(dir: &Path) -> Vec<Value> {
+    let mut found: Vec<(String, u64)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension()? != "json" || !entry.file_type().ok()?.is_file() {
+                return None;
+            }
+            let name = path.file_stem()?.to_str()?.to_string();
+            project_name(&name).ok()?;
+            let modified = entry
+                .metadata()
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            Some((name, modified))
+        })
+        .collect();
+    found.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    found
+        .into_iter()
+        .take(500)
+        .map(|(name, modified)| serde_json::json!({ "name": name, "modified": modified }))
+        .collect()
 }
 
 fn names(peers: &[(u16, String)]) -> Vec<String> {
@@ -960,6 +1165,7 @@ pub(crate) fn open_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// From another computer: while linked, nothing; linked or not, the
     /// PLC's settings, a program step on its signals, a scenario taken back;
@@ -988,6 +1194,113 @@ mod tests {
         ] {
             assert!(reaches_plc(op, delay, true).is_some(), "{op}");
         }
+    }
+
+    /// A request to the stage as the page sends it, from `local` or not.
+    fn ask(stage: &mut Stage, doc: &Document, body: Value, local: bool) -> Value {
+        let (reply, answer) = std::sync::mpsc::channel();
+        stage.answer(
+            doc,
+            vec![RobotRequest {
+                body: body.to_string(),
+                reply,
+                local,
+            }],
+        );
+        serde_json::from_str(&answer.recv().unwrap()).unwrap()
+    }
+
+    /// Names a file may have in the projects folder, and those it may not.
+    #[test]
+    fn a_project_s_name_is_a_file_s_in_the_folder() {
+        assert_eq!(project_name("  셀 A-1 (시험)  ").unwrap(), "셀 A-1 (시험)");
+        for bad in [
+            "",
+            "   ",
+            "../x",
+            "a/b",
+            r"a",
+            "c:x",
+            "a*",
+            ".hidden",
+            "end.",
+            "CON",
+            "com1",
+            "LPT9.json",
+            &"가".repeat(61),
+        ] {
+            assert!(project_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(project_name("console").is_ok());
+    }
+
+    /// A project made (the one before saved), equipment placed in it, saved
+    /// under another name,
+    /// another made empty, and the first opened again with its equipment;
+    /// never from another computer.
+    #[test]
+    fn projects_are_made_saved_as_and_opened_by_name() {
+        let dir = std::env::temp_dir().join(format!("kynex-projects-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(dir.join("start.json"))).unwrap();
+        stage.projects = dir.clone();
+        stage.replaced(&doc);
+
+        let project =
+            |action: &str, name: &str| json!({"op": "project", "action": action, "name": name});
+        let remote = ask(&mut stage, &doc, project("list", ""), false);
+        assert_eq!(remote["ok"], false, "{remote}");
+
+        assert_eq!(
+            ask(&mut stage, &doc, project("new", "셀 A"), true)["ok"],
+            true
+        );
+        assert!(stage.take_reset());
+        assert!(dir.join("셀 A.json").is_file());
+        let placed = ask(
+            &mut stage,
+            &doc,
+            json!({"op": "place", "template": "cnc_lathe", "at": [0, 0, 0]}),
+            true,
+        );
+        assert_eq!(placed["ok"], true, "{placed}");
+        assert_eq!(
+            ask(&mut stage, &doc, project("save_as", "셀 B"), true)["ok"],
+            true
+        );
+        assert!(!stage.take_reset(), "saved as: the same project goes on");
+        let again = ask(&mut stage, &doc, project("new", "셀 B"), true);
+        assert_eq!(again["ok"], false, "{again}");
+
+        assert_eq!(
+            ask(&mut stage, &doc, project("new", "빈 셀"), true)["ok"],
+            true
+        );
+        assert!(stage.library.items().is_empty());
+        let missing = ask(&mut stage, &doc, project("open", "없는 셀"), true);
+        assert_eq!(missing["ok"], false, "{missing}");
+        let outside = ask(&mut stage, &doc, project("open", "../start"), true);
+        assert_eq!(outside["ok"], false, "{outside}");
+
+        assert_eq!(
+            ask(&mut stage, &doc, project("open", "셀 B"), true)["ok"],
+            true
+        );
+        assert_eq!(stage.library.items().len(), 1);
+        let list = ask(&mut stage, &doc, project("list", ""), true);
+        let names: Vec<(&str, bool)> = list["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["name"].as_str().unwrap(), p["current"] == true))
+            .collect();
+        // The one started with saved as it was left, too.
+        assert_eq!(names.len(), 4, "{list}");
+        assert!(names.contains(&("start", false)));
+        assert!(names.contains(&("셀 B", true)));
+        assert!(names.contains(&("셀 A", false)) && names.contains(&("빈 셀", false)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

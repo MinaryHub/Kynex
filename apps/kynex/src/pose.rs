@@ -129,6 +129,11 @@ impl Posing {
         Ok((posing, project))
     }
 
+    /// Saved from now on to `file` (a project saved under another name).
+    pub fn set_file(&mut self, file: &Path) {
+        self.file = Some(file.to_path_buf());
+    }
+
     /// Programs as saved, kept in no file: waiting for their robots.
     pub fn from_saved(saved: Vec<Value>) -> Self {
         Self {

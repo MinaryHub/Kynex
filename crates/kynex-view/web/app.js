@@ -10,6 +10,7 @@ import { Outline } from '/outline.js';
 import { RobotPanel } from '/robot.js';
 import { CellPanel } from '/cell.js';
 import { PlcPanel } from '/plc.js';
+import { ProjectPanel } from '/project.js';
 import { LibraryPanel } from '/library.js';
 import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
@@ -473,6 +474,7 @@ function connect() {
   source.addEventListener('timeline', (e) => timelinePanel.setTimeline(JSON.parse(e.data)));
   source.addEventListener('scenarios', (e) => timelinePanel.setScenarios(JSON.parse(e.data)));
   source.addEventListener('plc', (e) => plcPanel.setState(JSON.parse(e.data)));
+  source.addEventListener('project', (e) => projectPanel.setState(JSON.parse(e.data)));
   source.addEventListener('cell', (e) => {
     const cell = JSON.parse(e.data);
     cellPanel.setCell(cell);
@@ -662,6 +664,7 @@ function pick(x, y) {
 }
 
 const plcPanel = new PlcPanel({ toast, escapeHtml, robots: () => robotPanel.robots });
+const projectPanel = new ProjectPanel({ toast, escapeHtml });
 const timelinePanel = new TimelinePanel({ escapeHtml, toast, toggle: (on) => setToggle('timeline', on) });
 
 const libraryPanel = new LibraryPanel({
@@ -1016,7 +1019,15 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
   if (!b) return;
   if (b.dataset.action === 'record') record(b);
   if (b.dataset.action === 'report') report();
-  if (b.dataset.action === 'plc') plcPanel.toggle();
+  // One panel over the toolbar at a time.
+  if (b.dataset.action === 'plc') {
+    projectPanel.panel.hidden = true;
+    plcPanel.toggle();
+  }
+  if (b.dataset.action === 'project') {
+    plcPanel.panel.hidden = true;
+    projectPanel.toggle();
+  }
   if (b.dataset.action === 'frame') frame();
   if (b.dataset.view) frame(selected, b.dataset.view);
   if (b.dataset.toggle) setToggle(b.dataset.toggle, !view[b.dataset.toggle]);

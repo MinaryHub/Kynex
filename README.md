@@ -319,6 +319,20 @@ is written straight away. A program records its robot, joints and tool by
 identity and by name. When Kreate builds the scene again and numbers the
 objects anew, the program finds them again by name.
 
+**Projects.** The folder button at the left of the toolbar shows the
+project open; it opens the project panel. **새로 만들기** makes an empty
+project under the name typed and opens it. **다른 이름으로 저장** saves
+the project as it is under that name, and saves to it from then on. The
+list below holds the projects in the projects folder, the last changed
+first; one clicked is opened. That folder is `Documents/KYNEX` in the
+user's home (`KYNEX_PROJECTS` sets another). A project is a file there,
+`<name>.json`; names are only names, never paths. Before another
+project opens, the one open is saved; its programs stop, its PLC link
+and real machines followed are let go, and the viewers are shown the
+new one whole. The scene's geometry still comes from Kreate, or from
+`--file`; the project holds what KYNEX adds to it. As with the PLC, only
+the computer KYNEX runs on can make, open or save projects.
+
 **URScript** downloads the program as a `.script` file for a Universal
 Robots controller, **RAPID** as a `.mod` module for an ABB one, **DRL**
 as a `.drl` program for a Doosan Robotics one, and **TP** as an `.ls` file for a FANUC one. Only the button for the

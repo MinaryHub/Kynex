@@ -64,6 +64,8 @@
     </div>
 
     <div class="toolbar" role="toolbar" aria-label="보기">
+      <button data-action="project" class="project-btn" title="프로젝트: 새로 만들기, 열기, 다른 이름으로 저장"><svg viewBox="0 0 20 20"><path d="M2.5 5.5v10h15v-8h-7l-2-2z"/></svg><span id="project-name"></span></button>
+      <span class="sep"></span>
       <button data-action="frame" title="화면 맞춤 (F)"><svg viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/></svg></button>
       <span class="sep"></span>
       <button data-view="iso" title="등각 (0)">ISO</button>
@@ -86,6 +88,17 @@
     </div>
 
     <div class="measure-readout num" id="measure" hidden></div>
+
+    <div class="plc-panel project-panel" id="project-panel" hidden>
+      <div class="plc-head">프로젝트 <span class="muted" id="project-path"></span></div>
+      <div class="project-row">
+        <input id="project-new-name" type="text" placeholder="새 이름" spellcheck="false" maxlength="60">
+        <button class="text-btn" id="project-new" title="빈 프로젝트를 이 이름으로 만들고 엽니다">새로 만들기</button>
+        <button class="text-btn quiet" id="project-save-as" title="지금 프로젝트를 이 이름으로 저장하고, 이제부터 그 파일에 저장합니다">다른 이름으로 저장</button>
+      </div>
+      <ul class="project-list" id="project-list"></ul>
+      <div class="muted project-dir" id="project-dir"></div>
+    </div>
 
     <div class="plc-panel" id="plc-panel" hidden>
       <div class="plc-head">PLC 연결</div>

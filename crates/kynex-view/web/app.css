@@ -882,3 +882,18 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .plc-certs { margin-top: 8px; font-size: 11px; display: grid; gap: 3px; word-break: break-all; }
 .plc-certs[hidden] { display: none; }
 .plc-certs .num { font-size: 10px; }
+
+/* ---- projects: new, open, save as -------------------------------------- */
+.toolbar button.project-btn { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; }
+.project-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.project-btn span:empty { display: none; }
+.project-panel { width: min(440px, calc(100% - 32px)); }
+.project-panel .plc-head .muted { font-weight: 400; font-size: 11px; overflow-wrap: anywhere; }
+.project-row { display: flex; gap: 8px; align-items: center; }
+.project-row input { flex: 1; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg); color: var(--text); }
+.project-list { list-style: none; margin: 10px 0 6px; padding: 0; max-height: 260px; overflow-y: auto; }
+.project-list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.project-list li:hover { background: var(--panel-2); }
+.project-list li.current { color: var(--accent); cursor: default; }
+.project-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-dir { font-size: 11px; overflow-wrap: anywhere; }

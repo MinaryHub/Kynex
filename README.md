@@ -427,7 +427,16 @@ thumbnails: each drawn from the piece at its usual size
   같은 방향을 가리키고 `tool0`이 컨트롤러의 플랜지라서, 교정 자세의
   플랜지가 ABB와 같은 `[[815, 0, 1186.5], [0.707107, 0, 0.707107, 0]]`로
   나옵니다(시험으로 확인).
-- 공작기계: CNC 선반.
+- 툴: every robot carries the tool picked under **툴** in its inspector,
+  on its flange (`tool0`): 없음, 2지 그리퍼 (one grip point), 이중 그리퍼
+  (two), 진공 그리퍼 (a plate of four suction cups, one grip point),
+  디버링 스핀들 (its burr's tip, the `tcp` link, 250 mm out on the
+  flange's axis), 용접 토치 (the gooseneck bent 22°, the wire's tip the
+  `tcp` link). Grip points come as grippers; a process tool's `tcp` is the
+  robot's TCP. The tending robots carry the dual gripper unless told,
+  the bare URs nothing. Changing a tool drops the roles of grip points it
+  no longer has.
+- 공작기계: CNC 선반, CNC 머시닝센터 (수직형).
 - 성형기: 사출 성형기 (a 150 t class machine: clamp and mould behind a
   guard, injection unit with its hopper; length, width, height).
 - 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대.

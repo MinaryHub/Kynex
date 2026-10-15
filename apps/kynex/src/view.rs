@@ -387,6 +387,7 @@ impl Stage {
                 // with it, and take those on removed equipment away.
                 let before = self.base.clone().unwrap_or_else(|| doc.clone());
                 let (reply, roles) = self.library.handle(&request.body);
+                self.cell.forget(&roles.stale);
                 for (uid, name, kind) in roles.added {
                     self.cell.ensure(uid, name, kind);
                 }

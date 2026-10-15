@@ -779,3 +779,79 @@ fn a_connector_on_the_user_s_equipment_takes_a_robot() {
     let robot = library.items.last().unwrap();
     assert!((robot.at - point).length() < 1e-9, "{}", robot.at);
 }
+
+/// Each tool of the catalogue on a UR5e's flange: grippers come with their
+/// grip points as grippers, process tools with their working point as the
+/// robot's tool — the torch's bent 22° off the flange's axis, its wire's
+/// tip 295 mm out along it from the neck.
+#[test]
+fn a_robot_carries_the_tool_it_is_given() {
+    for (n, grips, tcp) in [
+        (0, 0, "tool0"),
+        (1, 1, "tool0"),
+        (2, 2, "tool0"),
+        (3, 1, "tool0"),
+        (4, 0, "tcp"),
+        (5, 0, "tcp"),
+    ] {
+        let mut library = Library::default();
+        let (a, roles) = ask(
+            &mut library,
+            json!({"op": "place", "template": "ur5e", "params": {"tool": n}}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        let grippers = roles.added.iter().filter(|r| r.2 == Kind::Gripper).count();
+        assert_eq!(grippers, grips, "{}", TOOLS[n]);
+        let (doc, _) = shown(&mut library);
+        let robot = &kynex_model::robots(&doc)[0];
+        let tool = doc
+            .object_by_uid(Uid::from_raw(robot.tool.unwrap()))
+            .unwrap();
+        assert_eq!(doc.object(tool).unwrap().name, tcp, "{}", TOOLS[n]);
+        if TOOLS[n] == "용접 토치" {
+            let flange = doc.world_transform(named(&doc, "tool0"));
+            let tip = doc.world_transform(tool);
+            let (fz, tz) = (flange.matrix3.z_axis, tip.matrix3.z_axis);
+            assert!((fz.angle_between(tz).to_degrees() - 22.0).abs() < 0.05);
+            let neck = flange.transform_point3(DVec3::new(0.0, 0.0, 0.12));
+            assert!(((tip.translation - neck).length() - 0.295).abs() < 1e-3);
+        }
+    }
+    // Changed on a robot placed: made again with the other.
+    let mut library = Library::default();
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "ur10e_tending"}),
+    );
+    assert_eq!(library.roles().len(), 2);
+    ask(
+        &mut library,
+        json!({"op": "resize", "item": 1, "params": {"tool": 1}}),
+    );
+    assert_eq!(library.roles().len(), 1);
+}
+
+/// A tool changed, the grip point it had is no longer there: its identity,
+/// now another object's, is said to have lost its role.
+#[test]
+fn a_tool_changed_says_which_roles_went_stale() {
+    let mut library = Library::default();
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "ur10e_tending"}),
+    );
+    let grips: Vec<u64> = library.roles().iter().map(|r| r.0).collect();
+    let (_, roles) = ask(
+        &mut library,
+        json!({"op": "resize", "item": 1, "params": {"tool": 4}}),
+    );
+    for g in &grips {
+        assert!(roles.stale.contains(g), "{g} {:?}", roles.stale);
+    }
+    // Sized again with nothing changed: nothing stale.
+    let (_, roles) = ask(
+        &mut library,
+        json!({"op": "resize", "item": 1, "params": {"tool": 4}}),
+    );
+    assert!(roles.stale.is_empty());
+}

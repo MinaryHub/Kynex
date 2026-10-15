@@ -64,7 +64,7 @@ export function openReport(ctx) {
   const equipment = ctx.library.items
     .map((i) => {
       const t = templates.get(i.template);
-      const params = (t?.params ?? []).map((p) => `${esc(p.label)} ${mm(i.params[p.key] ?? p.default)}`).join(', ');
+      const params = (t?.params ?? []).map((p) => `${esc(p.label)} ${p.choices?.length ? esc(p.choices[Math.round(i.params[p.key] ?? p.default)] ?? '') : mm(i.params[p.key] ?? p.default)}`).join(', ');
       return `<tr><td>${esc(i.name)}</td><td>${esc(t?.name ?? i.template)}</td><td class="n">${mm(i.at[0])}, ${mm(i.at[1])}, ${mm(i.at[2])}</td><td class="n">${deg(i.yaw)}</td><td>${params || '—'}</td></tr>`;
     })
     .join('');

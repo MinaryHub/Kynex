@@ -43,6 +43,8 @@ pub struct Param {
     pub default: f64,
     pub min: f64,
     pub max: f64,
+    /// A choice rather than a size: what each number names.
+    pub choices: &'static [&'static str],
 }
 
 /// A kind of equipment.
@@ -60,6 +62,30 @@ const fn p(key: &'static str, label: &'static str, default: f64, min: f64, max: 
         default,
         min,
         max,
+        choices: &[],
+    }
+}
+
+/// The tools a robot can carry on its flange, by number (see [`tool_urdf`]).
+pub const TOOLS: &[&str] = &[
+    "없음",
+    "2지 그리퍼",
+    "이중 그리퍼",
+    "진공 그리퍼",
+    "디버링 스핀들",
+    "용접 토치",
+];
+
+/// The tool on a robot's flange: none for a bare arm, the dual gripper for
+/// one made for tending.
+const fn tool(default: usize) -> Param {
+    Param {
+        key: "tool",
+        label: "툴",
+        default: default as f64,
+        min: 0.0,
+        max: (TOOLS.len() - 1) as f64,
+        choices: TOOLS,
     }
 }
 
@@ -70,43 +96,43 @@ pub const TEMPLATES: &[Template] = &[
         key: "ur10e_tending",
         name: "UR10e + 이중 그리퍼",
         group: "로봇",
-        params: &[],
+        params: &[tool(2)],
     },
     Template {
         key: "ur5e",
         name: "UR5e",
         group: "로봇",
-        params: &[],
+        params: &[tool(0)],
     },
     Template {
         key: "ur3e",
         name: "UR3e",
         group: "로봇",
-        params: &[],
+        params: &[tool(0)],
     },
     Template {
         key: "ur16e",
         name: "UR16e",
         group: "로봇",
-        params: &[],
+        params: &[tool(0)],
     },
     Template {
         key: "irb1600_tending",
         name: "ABB IRB 1600 + 이중 그리퍼",
         group: "로봇",
-        params: &[],
+        params: &[tool(2)],
     },
     Template {
         key: "irb1600_track",
         name: "ABB IRB 1600 + 주행 트랙",
         group: "로봇",
-        params: &[],
+        params: &[tool(2)],
     },
     Template {
         key: "m1013_tending",
         name: "Doosan M1013 + 이중 그리퍼",
         group: "로봇",
-        params: &[],
+        params: &[tool(2)],
     },
     Template {
         key: "cnc_lathe",
@@ -558,6 +584,9 @@ struct Built {
 pub struct RoleChanges {
     pub added: Vec<(u64, String, Kind)>,
     pub removed: Vec<u64>,
+    /// Objects of equipment made again that are other objects now: their
+    /// roles go before the equipment's own are given again.
+    pub stale: Vec<u64>,
     /// The settings roles added come with, where they have their own.
     pub props: Vec<(u64, Value)>,
 }
@@ -764,9 +793,23 @@ impl Library {
                 return Ok(json!({ "ok": true, "snapped": snapped }));
             }
             "resize" => {
-                let item = &mut self.items[at];
+                let mut item = self.items[at].clone();
+                let before = self.made(&item).map(|b| named_uids(&item, b));
                 for (k, v) in params(&req["params"]) {
                     item.params.insert(k, v);
+                }
+                self.items[at] = item.clone();
+                // Made again, an identity may name another object now: a
+                // grip point where a tool's working point is. Its role goes.
+                if let (Ok(before), Ok(after)) =
+                    (before, self.made(&item).map(|b| named_uids(&item, b)))
+                {
+                    roles.stale.extend(
+                        before
+                            .into_iter()
+                            .filter(|old| !after.contains(old))
+                            .map(|(uid, _)| uid),
+                    );
                 }
             }
             "remove" => {
@@ -996,7 +1039,7 @@ impl Library {
                 "name": t.name,
                 "group": t.group,
                 "params": t.params.iter().map(|p| json!({
-                    "key": p.key, "label": p.label, "default": p.default, "min": p.min, "max": p.max,
+                    "key": p.key, "label": p.label, "default": p.default, "min": p.min, "max": p.max, "choices": p.choices,
                 })).collect::<Vec<_>>(),
             })).chain(self.customs.iter().map(|c| json!({
                 "key": c.key,
@@ -1083,6 +1126,22 @@ fn role_uids(item: &Item, built: &Built) -> Vec<(u64, String, Kind)> {
         .collect()
 }
 
+/// Each object of `item` as made, by the identity it has in the scene, with
+/// its name.
+fn named_uids(item: &Item, built: &Built) -> Vec<(u64, String)> {
+    built
+        .order
+        .iter()
+        .enumerate()
+        .filter_map(|(k, id)| {
+            Some((
+                item.root_uid() + 1 + k as u64,
+                built.doc.object(*id)?.name.clone(),
+            ))
+        })
+        .collect()
+}
+
 /// Copies `built` into `doc` as `item`, under its own identities: the
 /// item's root (an empty, where it stands), then every object of it.
 fn graft(item: &Item, built: &Built, doc: &mut Document) -> Vec<u64> {
@@ -1160,6 +1219,96 @@ const UR_REST: &[(&str, f64)] = &[
     ("wrist_2_joint", -1.571),
 ];
 
+/// Tool `n` of [`TOOLS`] as URDF, hung from the flange `tool0`, in plain
+/// shapes at industry-typical sizes. A gripper's grip points are links
+/// named `grip_a` (and `grip_b`), where a part is held; a process tool's
+/// working point is a link named `tcp`, its Z the way it points.
+fn tool_urdf(n: usize) -> String {
+    let body = r#"<material name="tool_body"><color rgba="0.40 0.42 0.46 1"/></material>
+  <material name="tool_jaw"><color rgba="0.88 0.55 0.15 1"/></material>
+  <material name="tool_cup"><color rgba="0.15 0.16 0.18 1"/></material>"#;
+    let shapes = match TOOLS.get(n).copied() {
+        // A parallel two-finger gripper, some 100 mm long, 85 mm stroke.
+        Some("2지 그리퍼") => {
+            r#"
+  <joint name="tool0-gripper" type="fixed"><parent link="tool0"/><child link="gripper"/></joint>
+  <link name="gripper">
+    <visual><origin xyz="0 0 0.045"/><geometry><box size="0.08 0.12 0.09"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0 0.035 0.115"/><geometry><box size="0.03 0.015 0.05"/></geometry><material name="tool_jaw"/></visual>
+    <visual><origin xyz="0 -0.035 0.115"/><geometry><box size="0.03 0.015 0.05"/></geometry><material name="tool_jaw"/></visual>
+  </link>
+  <joint name="gripper-grip_a" type="fixed"><parent link="gripper"/><child link="grip_a"/><origin xyz="0 0 0.125"/></joint>
+  <link name="grip_a"/>"#
+        }
+        // Two grippers side by side: a raw part in, a finished one out, in
+        // one visit to the machine.
+        Some("이중 그리퍼") => {
+            r#"
+  <joint name="tool0-gripper" type="fixed"><parent link="tool0"/><child link="gripper"/></joint>
+  <link name="gripper">
+    <visual><origin xyz="0 0 0.04"/><geometry><box size="0.09 0.24 0.08"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0 0.07 0.105"/><geometry><box size="0.07 0.07 0.05"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0 -0.07 0.105"/><geometry><box size="0.07 0.07 0.05"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0.045 0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="tool_jaw"/></visual>
+    <visual><origin xyz="-0.045 0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="tool_jaw"/></visual>
+    <visual><origin xyz="0.045 -0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="tool_jaw"/></visual>
+    <visual><origin xyz="-0.045 -0.07 0.165"/><geometry><box size="0.015 0.03 0.07"/></geometry><material name="tool_jaw"/></visual>
+  </link>
+  <joint name="gripper-grip_a" type="fixed"><parent link="gripper"/><child link="grip_a"/><origin xyz="0 0.07 0.17"/></joint>
+  <link name="grip_a"/>
+  <joint name="gripper-grip_b" type="fixed"><parent link="gripper"/><child link="grip_b"/><origin xyz="0 -0.07 0.17"/></joint>
+  <link name="grip_b"/>"#
+        }
+        // A plate with four suction cups, for flat parts and boxes.
+        Some("진공 그리퍼") => {
+            r#"
+  <joint name="tool0-gripper" type="fixed"><parent link="tool0"/><child link="gripper"/></joint>
+  <link name="gripper">
+    <visual><origin xyz="0 0 0.03"/><geometry><cylinder radius="0.03" length="0.06"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0 0 0.0675"/><geometry><box size="0.2 0.15 0.015"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0.07 0.05 0.09"/><geometry><cylinder radius="0.02" length="0.03"/></geometry><material name="tool_cup"/></visual>
+    <visual><origin xyz="-0.07 0.05 0.09"/><geometry><cylinder radius="0.02" length="0.03"/></geometry><material name="tool_cup"/></visual>
+    <visual><origin xyz="0.07 -0.05 0.09"/><geometry><cylinder radius="0.02" length="0.03"/></geometry><material name="tool_cup"/></visual>
+    <visual><origin xyz="-0.07 -0.05 0.09"/><geometry><cylinder radius="0.02" length="0.03"/></geometry><material name="tool_cup"/></visual>
+  </link>
+  <joint name="gripper-grip_a" type="fixed"><parent link="gripper"/><child link="grip_a"/><origin xyz="0 0 0.105"/></joint>
+  <link name="grip_a"/>"#
+        }
+        // A compliant deburring spindle on the flange's axis, its burr's
+        // tip 250 mm out.
+        Some("디버링 스핀들") => {
+            r#"
+  <joint name="tool0-spindle" type="fixed"><parent link="tool0"/><child link="spindle"/></joint>
+  <link name="spindle">
+    <visual><origin xyz="0 0 0.01"/><geometry><cylinder radius="0.045" length="0.02"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0 0 0.12"/><geometry><cylinder radius="0.035" length="0.2"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0 0 0.235"/><geometry><cylinder radius="0.004" length="0.03"/></geometry><material name="tool_jaw"/></visual>
+  </link>
+  <joint name="spindle-tcp" type="fixed"><parent link="spindle"/><child link="tcp"/><origin xyz="0 0 0.25"/></joint>
+  <link name="tcp"/>"#
+        }
+        // An arc welding torch: a neck on the flange, the gooseneck bent
+        // 22° off it, 15 mm wire stick-out past the nozzle.
+        Some("용접 토치") => {
+            r#"
+  <joint name="tool0-torch" type="fixed"><parent link="tool0"/><child link="torch"/></joint>
+  <link name="torch">
+    <visual><origin xyz="0 0 0.06"/><geometry><cylinder radius="0.025" length="0.12"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0.0468 0 0.2359" rpy="0 0.384 0"/><geometry><cylinder radius="0.015" length="0.25"/></geometry><material name="tool_body"/></visual>
+    <visual><origin xyz="0.0993 0 0.3657" rpy="0 0.384 0"/><geometry><cylinder radius="0.009" length="0.03"/></geometry><material name="tool_jaw"/></visual>
+  </link>
+  <joint name="torch-tcp" type="fixed"><parent link="torch"/><child link="tcp"/><origin xyz="0.1105 0 0.3935" rpy="0 0.384 0"/></joint>
+  <link name="tcp"/>"#
+        }
+        _ => "",
+    };
+    if shapes.is_empty() {
+        String::new()
+    } else {
+        format!("  {body}{shapes}\n")
+    }
+}
+
 fn build(item: &Item) -> Result<Built, String> {
     let mut doc = Document::new();
     let mut roles = Vec::new();
@@ -1190,6 +1339,10 @@ fn build(item: &Item) -> Result<Built, String> {
                 ),
                 _ => (include_str!("../library/ur10e_tending.urdf"), UR_REST),
             };
+            // Its tool on its flange, `tool0`.
+            let tool = tool_urdf(item.param("tool").round() as usize);
+            let urdf = urdf.replacen("</robot>", &format!("{tool}</robot>"), 1);
+            let urdf = urdf.as_str();
             let none = |_: &Path| -> Result<ImportScene, String> {
                 Ok(ImportScene::new(SourceMetadata::new("none")))
             };

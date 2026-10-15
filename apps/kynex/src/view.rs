@@ -22,10 +22,6 @@ use crate::timeline::{Now, Timeline};
 
 const PORT: u16 = 8090;
 
-/// Where the project — programs, the cell's roles and placed equipment —
-/// is kept between runs, unless `--project` says.
-const PROJECT: &str = "kynex-project.json";
-
 /// Where programs were kept before the project file held more: read once,
 /// if the project file is not there yet.
 const OLD_PROGRAMS: &str = "kynex-programs.json";
@@ -38,7 +34,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     let mut lan = false;
     let mut open = false;
     let mut file = None;
-    let mut empty = false;
+    let mut kreate = false;
     let mut project: Option<PathBuf> = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -54,8 +50,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             "--lan" => lan = true,
             "--open" => open = true,
             "--file" => file = Some(it.next().ok_or("--file needs a path")?),
-            // No Kreate: a cell laid out from the library alone.
-            "--empty" => empty = true,
+            // No Kreate: a cell laid out from the library alone. What
+            // KYNEX does anyway unless asked to join a Kreate session.
+            "--empty" => {}
+            // Kreate's session on this machine, at its usual port.
+            "--kreate" => kreate = true,
             // `--programs` is the old name, from before the file held more.
             "--project" | "--programs" => {
                 project = Some(it.next().ok_or("--project needs a path")?.into())
@@ -92,10 +91,19 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         let file = std::fs::File::open(&path).map_err(|e| format!("{path}: {e}"))?;
         let loaded = kreate_io::container::read(std::io::BufReader::new(file))
             .map_err(|e| format!("{path}: {e}"))?;
-        return offline(&server, &requests, stage, loaded.document, &path);
+        let status = Status::File { path: path.clone() };
+        return offline(&server, &requests, stage, loaded.document, &path, status);
     }
-    if empty {
-        return offline(&server, &requests, stage, Document::new(), "빈 장면");
+    // KYNEX on its own, unless a Kreate session is named.
+    if address.is_none() && !kreate {
+        return offline(
+            &server,
+            &requests,
+            stage,
+            Document::new(),
+            "단독 실행",
+            Status::Alone,
+        );
     }
 
     let mut config = LinkConfig::new(address.unwrap_or_else(|| "127.0.0.1".into()));
@@ -259,6 +267,13 @@ struct Stage {
     projects: PathBuf,
     /// Edits to undo and to redo.
     history: History,
+    /// The project file held for this KYNEX while it is open.
+    _lock: Option<std::fs::File>,
+    /// Models being read, each with where its answer goes.
+    importing: Vec<(
+        Receiver<Result<crate::import::Model, String>>,
+        std::sync::mpsc::Sender<String>,
+    )>,
 }
 
 /// The project as it was before each edit, to go back to, and as it was
@@ -283,7 +298,14 @@ const TIMELINE_EVERY: std::time::Duration = std::time::Duration::from_millis(500
 impl Stage {
     /// From the project file `project`, or the default one.
     fn open(project: Option<PathBuf>) -> Result<Self, String> {
-        let file = project.clone().unwrap_or_else(|| PathBuf::from(PROJECT));
+        let file = project
+            .clone()
+            .unwrap_or_else(crate::paths::default_project);
+        if let Some(dir) = file.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        let lock = crate::paths::hold(&file)?;
+        crate::paths::remember(&file);
         // The project file's forerunner, read once into it.
         let from = if project.is_none() && !file.exists() && Path::new(OLD_PROGRAMS).exists() {
             PathBuf::from(OLD_PROGRAMS)
@@ -335,8 +357,10 @@ impl Stage {
             mirrors: Default::default(),
             file,
             reset: false,
-            projects: projects_dir(),
+            projects: crate::paths::projects_dir(),
             history: History::default(),
+            importing: Vec::new(),
+            _lock: lock,
         })
     }
 
@@ -458,30 +482,19 @@ impl Stage {
                 };
                 touched = true;
                 answer.to_string()
+            } else if op == "import" {
+                // A model file: read away from the loop, placed when read.
+                match request.file {
+                    Some(bytes) => {
+                        self.import(&request.body, bytes, request.reply);
+                        touched = true;
+                        continue;
+                    }
+                    None => serde_json::json!({ "ok": false, "error": "no file" }).to_string(),
+                }
             } else if library::is_op(&op) {
-                // The scene before, to carry the parts on moved equipment
-                // with it, and take those on removed equipment away.
-                let before = self.base.clone().unwrap_or_else(|| doc.clone());
-                let (reply, roles) = self.library.handle(&request.body);
-                self.cell.forget(&roles.stale);
-                for (uid, name, kind) in roles.added {
-                    self.cell.ensure(uid, name, kind);
-                }
-                for (uid, props) in &roles.props {
-                    self.cell.set_props(*uid, props);
-                }
-                for (from, to) in &roles.copied {
-                    self.cell.copy_props(*from, *to);
-                }
-                for (uid, name) in &roles.renamed {
-                    self.cell.rename(*uid, name);
-                }
-                self.rebase(doc);
-                let after = self.base.as_ref().unwrap_or(doc);
-                self.cell.carry(&before, after);
-                self.cell.forget(&roles.removed);
                 touched = true;
-                reply
+                self.library_op(doc, &request.body)
             } else if cell::is_op(&op) {
                 // Against the scene as shown: a grip is where the posed
                 // robot's gripper is.
@@ -510,6 +523,8 @@ impl Stage {
             // A page that gave up waiting has nobody to answer.
             let _ = request.reply.send(reply);
         }
+        // Models read meanwhile, placed.
+        touched |= self.imported(doc);
         // The clock: the program running moves on, the machines run.
         let now = Instant::now();
         let time = self.clock.advance(now);
@@ -655,6 +670,7 @@ impl Stage {
             || self.plc.on()
             || !self.mirrors.is_empty()
             || self.comparing.is_some()
+            || !self.importing.is_empty()
     }
 
     /// Starts robot `root`'s program, from its start. The other robots'
@@ -922,6 +938,8 @@ impl Stage {
                     return Err("같은 이름의 프로젝트가 이미 있습니다".into());
                 }
                 std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                // Held from now on in place of the old one.
+                let lock = crate::paths::hold(&file)?;
                 let before = std::mem::replace(&mut self.file, file.clone());
                 self.posing.set_file(&file);
                 if let Err(e) = self.save(doc) {
@@ -929,6 +947,8 @@ impl Stage {
                     self.file = before;
                     return Err(e);
                 }
+                self._lock = lock;
+                crate::paths::remember(&file);
                 println!("프로젝트를 다른 이름으로 저장했습니다: {}", file.display());
                 Ok(Value::Null)
             }),
@@ -963,6 +983,89 @@ impl Stage {
         self.save(doc)?;
         self.reset = true;
         Ok(Value::Null)
+    }
+
+    /// A request to the placed equipment (`library`), and the cell's roles
+    /// it brings, moves or takes away.
+    fn library_op(&mut self, doc: &Document, body: &str) -> String {
+        // The scene before, to carry the parts on moved equipment with it,
+        // and take those on removed equipment away.
+        let before = self.base.clone().unwrap_or_else(|| doc.clone());
+        let (reply, roles) = self.library.handle(body);
+        self.cell.forget(&roles.stale);
+        for (uid, name, kind) in roles.added {
+            self.cell.ensure(uid, name, kind);
+        }
+        for (uid, props) in &roles.props {
+            self.cell.set_props(*uid, props);
+        }
+        for (from, to) in &roles.copied {
+            self.cell.copy_props(*from, *to);
+        }
+        for (uid, name) in &roles.renamed {
+            self.cell.rename(*uid, name);
+        }
+        self.rebase(doc);
+        let after = self.base.as_ref().unwrap_or(doc);
+        self.cell.carry(&before, after);
+        self.cell.forget(&roles.removed);
+        reply
+    }
+
+    /// Reads model file `bytes` (named, and its unit, in `body`) on a thread
+    /// of its own; [`Self::imported`] places it when read and answers
+    /// `reply`.
+    fn import(&mut self, body: &str, bytes: Vec<u8>, reply: std::sync::mpsc::Sender<String>) {
+        let req: Value = serde_json::from_str(body).unwrap_or_default();
+        let name = req["name"].as_str().unwrap_or("").to_string();
+        let unit = req["unit"].as_f64();
+        let (send, read) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(crate::import::read(&name, &bytes, unit));
+        });
+        self.importing.push((read, reply));
+    }
+
+    /// Models read since last asked: each kept as the user's own equipment
+    /// and placed at the origin, one edit to undo. Whether any was.
+    fn imported(&mut self, doc: &Document) -> bool {
+        let mut any = false;
+        let mut waiting = Vec::new();
+        for (read, reply) in std::mem::take(&mut self.importing) {
+            let model = match read.try_recv() {
+                Ok(model) => model,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    waiting.push((read, reply));
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err("모델을 읽다가 멈췄습니다".to_string())
+                }
+            };
+            let answer = model.and_then(|m| {
+                let before = self.snapshot(doc);
+                let key = self.library.save_custom(&m.doc, m.root, &m.name, &[])?;
+                let placed = self.library_op(
+                    doc,
+                    &serde_json::json!({"op": "place", "template": key, "at": [0, 0, 0]})
+                        .to_string(),
+                );
+                let placed: Value = serde_json::from_str(&placed).unwrap_or_default();
+                self.remember(doc, before, "import", "");
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "key": key,
+                    "name": m.name,
+                    "item": placed["item"],
+                    "notes": m.notes,
+                }))
+            });
+            any = true;
+            let answer = answer.unwrap_or_else(|e| serde_json::json!({ "ok": false, "error": e }));
+            let _ = reply.send(answer.to_string());
+        }
+        self.importing = waiting;
+        any
     }
 
     /// What undoing and redoing go back and forward to: the equipment, the
@@ -1095,12 +1198,13 @@ fn offline(
     mut stage: Stage,
     doc: Document,
     label: &str,
+    status: Status,
 ) -> Result<(), String> {
     stage.replaced(&doc);
     let (posed, _) = stage.shown(&doc);
     let shown = posed.as_ref().unwrap_or(&doc);
     server.reset(shown);
-    server.status(&Status::File { path: label.into() });
+    server.status(&status);
     let model = Model::from_document(shown);
     println!(
         "{label}: 물체 {}개, 로봇 {}대. Ctrl+C로 끝냅니다.",
@@ -1200,6 +1304,7 @@ fn undoable(op: &str) -> bool {
             | "redo"
             | "project"
             | "plc_link"
+            | "import"
     )
 }
 
@@ -1231,6 +1336,7 @@ fn edit_label(op: &str) -> &'static str {
         "place" => "장비 놓기",
         "move" | "move_many" => "장비 이동",
         "duplicate" => "장비 복제",
+        "import" => "모델 가져오기",
         "lock" => "장비 잠금",
         "rename" => "장비 이름",
         "resize" => "장비 크기·설정",
@@ -1253,18 +1359,6 @@ fn edit_label(op: &str) -> &'static str {
         "scenario" => "시나리오 불러오기",
         _ => "편집",
     }
-}
-
-/// Where projects are made, opened and listed: `KYNEX` in the user's
-/// documents, or `KYNEX_PROJECTS` if set.
-fn projects_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("KYNEX_PROJECTS") {
-        return PathBuf::from(dir);
-    }
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(|| PathBuf::from("."), PathBuf::from);
-    home.join("Documents").join("KYNEX")
 }
 
 /// A project's name as a file's in the projects folder may be: no folder
@@ -1405,6 +1499,7 @@ mod tests {
                 body: body.to_string(),
                 reply,
                 local,
+                file: None,
             }],
         );
         serde_json::from_str(&answer.recv().unwrap()).unwrap()

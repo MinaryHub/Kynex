@@ -1,7 +1,9 @@
 //! KYNEX from the command line.
 //!
 //! ```text
-//! kynex view [ADDRESS] [--key KEY] [--port 8090] [--lan] [--open]
+//! kynex                       (as `kynex view --open`: KYNEX on its own)
+//! kynex view [--project FILE] [--port 8090] [--lan] [--open]
+//! kynex view ADDRESS|--kreate [--key KEY] [--port 8090] [--lan] [--open]
 //! kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 //! kynex inspect FILE.kreate [--json]
 //! kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--json]
@@ -14,9 +16,12 @@
 //!
 //! `--json` writes one JSON object per line instead, for a program to read.
 //!
-//! `view` does what `link` does and draws it: it serves the 3D viewer at
-//! `http://localhost:8090`, for any browser on any system. `--lan` lets other
-//! machines on the network open it too.
+//! `view` serves the 3D viewer at `http://localhost:8090`, for any browser
+//! on any system: KYNEX on its own, its cell laid out from its library and
+//! the models it imports, in the project last opened. Given a Kreate
+//! session's address (or `--kreate` for this machine's), it does what
+//! `link` does and draws that scene as well. `--lan` lets other machines on
+//! the network open it too.
 //!
 //! `compare` runs the scenarios saved in the project file for some hours on
 //! the simulation's clock and prints how each did (see `scenario`).
@@ -34,8 +39,10 @@ mod bench;
 mod cell;
 mod collide;
 mod edges;
+mod import;
 mod library;
 mod mtconnect;
+mod paths;
 mod plc;
 mod pose;
 mod program;
@@ -46,9 +53,10 @@ mod umati;
 mod view;
 
 const USAGE: &str = "\
-kynex view [ADDRESS] [--key KEY] [--name NAME] [--port 8090] [--lan] [--open] [--project FILE]
+kynex                                   (KYNEX on its own, in the browser)
+kynex view [--port 8090] [--lan] [--open] [--project FILE]
+kynex view ADDRESS|--kreate [--key KEY] [--name NAME] [--port 8090] [--lan] [--open] [--project FILE]
 kynex view --file FILE.kreate [--port 8090] [--lan] [--open] [--project FILE]
-kynex view --empty [--port 8090] [--lan] [--open] [--project FILE]
 kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--json]
 kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 kynex inspect FILE.kreate [--json]
@@ -62,7 +70,10 @@ fn main() {
         Some("compare") => scenario::run(args.collect()),
         Some("link") => link(args.collect()),
         Some("inspect") => inspect(args.collect()),
-        Some("-h" | "--help") | None => {
+        // Started with nothing, as an installed program is: on its own,
+        // in the browser.
+        None => view::run(vec!["--open".into()]),
+        Some("-h" | "--help") => {
             println!("{USAGE}");
             Ok(())
         }

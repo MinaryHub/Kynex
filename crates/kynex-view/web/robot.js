@@ -315,7 +315,7 @@ export class RobotPanel {
     document.getElementById('robot-count').textContent = this.robots.length;
     if (!this.robots.length) {
       host.dataset.shape = '';
-      host.innerHTML = '<p class="muted pad">장면에 로봇이 없습니다. Kreate에서 URDF를 불러오면 관절이 여기에 나타납니다.</p>';
+      host.innerHTML = '<p class="muted pad">장면에 로봇이 없습니다. 라이브러리에서 로봇을 놓으면 관절과 프로그램이 여기에 나타납니다.</p>';
       return;
     }
     // Same robots and joints as drawn: update the numbers in place, so a pose

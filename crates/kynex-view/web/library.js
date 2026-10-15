@@ -167,7 +167,23 @@ export class LibraryPanel {
     ctx.canvas.addEventListener('dragover', (e) => {
       if (e.dataTransfer.types.includes('text/kynex-template')) e.preventDefault();
     });
+    // A model file: picked, or dropped on the scene.
+    const picker = document.getElementById('import-file');
+    document.getElementById('import-model').addEventListener('click', () => picker.click());
+    picker.addEventListener('change', () => {
+      const file = picker.files?.[0];
+      picker.value = '';
+      if (file) this.importModel(file);
+    });
+    ctx.canvas.addEventListener('dragover', (e) => {
+      if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+    });
     ctx.canvas.addEventListener('drop', (e) => {
+      const file = e.dataTransfer.files?.[0];
+      if (file) {
+        e.preventDefault();
+        return this.importModel(file);
+      }
       const key = e.dataTransfer.getData('text/kynex-template');
       if (!key) return;
       e.preventDefault();
@@ -256,6 +272,36 @@ export class LibraryPanel {
       return { item: i.id, at: [at[0] + c * dx - s * dy, at[1] + s * dx + c * dy, at[2] + dz], yaw: i.yaw + turn };
     });
     this.move(null, null, null, { op: 'move_many', moves });
+  }
+
+  // A CAD or mesh file sent to KYNEX: kept as equipment of the user's own
+  // and placed at the origin, then selected.
+  async importModel(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['step', 'stp', 'stl', 'obj', 'glb', 'gltf', '3mf', 'ply'].includes(ext)) {
+      return this.ctx.toast('읽을 수 있는 파일: STEP, STL, OBJ, glTF·GLB, 3MF, PLY');
+    }
+    if (file.size > 256 * 1024 * 1024) return this.ctx.toast('파일이 너무 큽니다 (256 MB까지)');
+    const unit = document.getElementById('import-unit').value;
+    const query = new URLSearchParams({ name: file.name, ...(unit ? { unit } : {}) });
+    this.ctx.toast(`${file.name}을(를) 읽는 중…`);
+    try {
+      const response = await fetch(`/import?${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${await response.text()}`);
+      const a = await response.json();
+      if (!a.ok) return this.ctx.toast(`가져오지 못했습니다: ${a.error}`);
+      this.ctx.toast(`"${a.name}"을(를) 내 장비로 가져와 원점에 놓았습니다${a.notes?.length ? ` (참고 ${a.notes.length}건)` : ''}`);
+      const item = a.item;
+      const root = () => this.itemById(item)?.root;
+      const pick = (tries = 40) => (root() && this.ctx.records.has(root()) ? this.ctx.select(root(), { frame: true }) : tries > 0 && setTimeout(() => pick(tries - 1), 50));
+      pick();
+    } catch (err) {
+      this.ctx.toast(`가져오지 못했습니다: ${err.message}`);
+    }
   }
 
   // The handle's steps: the grid it moves on, the angle it turns by. Kept

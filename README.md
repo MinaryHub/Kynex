@@ -28,9 +28,32 @@ the scene is there. It never seeds the session with an empty scene.
 ## 3D viewer
 
 ```
-cargo run -p kynex -- view 127.0.0.1:7878 --key <session key> --open
-cargo run -p kynex -- view 127.0.0.1:7878 --programs cell-a.json   # programs kept elsewhere
+kynex                                    # on its own, in the browser: the last project
+cargo run -p kynex -- view --open        # the same, from the source
+cargo run -p kynex -- view --project 셀.json
+cargo run -p kynex -- view 127.0.0.1:7878 --key <session key> --open   # with a Kreate session
+cargo run -p kynex -- view --kreate      # Kreate's session on this machine
 ```
+
+KYNEX runs on its own: no Kreate is needed for anything but showing a
+Kreate scene. Started with nothing (`kynex`, as an installed program is
+started), it serves the viewer and opens it in the browser, with the
+project last opened; the first time, a new one, `Documents\KYNEX\새
+프로젝트.json`. Its own settings and the list of recent projects are kept in
+`%APPDATA%\kynex`; nothing is written beside the program. A project open in
+one KYNEX is not opened by another (a `<project>.lock` held beside it while
+open, on Windows). A Kreate session is joined only when its address, or
+`--kreate`, is given.
+
+**Importing models.** **모델 가져오기** in the library (or a file dropped on
+the scene) reads a CAD or mesh file with Kreate's readers, without Kreate:
+STEP, STL, OBJ, glTF/GLB, 3MF and PLY. The model is kept as equipment of the
+user's own, standing on the floor at its middle, placed at the origin and
+selected; one edit to undo. STEP, glTF and 3MF name their units; for STL,
+OBJ and PLY the unit is chosen (자동: mm for STL, m for the others). A model
+over 2 million triangles, or over a kilometre, is refused. It is read on a
+thread of its own, so the viewer goes on meanwhile. Files go to `POST
+/import` as bytes, from this computer only, at most 256 MB.
 
 This opens `http://localhost:8090` in a browser. The viewer is a web page
 that KYNEX serves itself. It works on Windows, macOS, Linux and tablets, in
@@ -311,9 +334,10 @@ cargo run -p kynex -- compare --project kynex-project.json --hours 8
 cargo run -p kynex -- compare --file cell.kreate --json   # the session's scene from a file
 ```
 
-Programs, and the cell's roles (below), are saved to the project file
-`kynex-project.json` in the directory `kynex view` runs in. Use
-`--project FILE` to keep them somewhere else. An older
+Programs, and the cell's roles (below), are saved to the project file:
+the one last opened, or one named with `--project FILE` (a
+`kynex-project.json` left by an older KYNEX in the folder it is started in
+is still opened, when no project has been opened yet). An older
 `kynex-programs.json` is read once if no project file exists yet. Every change
 is written straight away. A program records its robot, joints and tool by
 identity and by name. When Kreate builds the scene again and numbers the
@@ -551,8 +575,8 @@ Equipment comes with its roles. A CNC machine is a CNC to the cell, a
 pallet table's plate is a pallet, and a tending robot's grip points are
 grippers. Placed equipment is KYNEX's own: it is added to the scene KYNEX
 shows, under identities Kreate never issues (`0xFFFE << 48` on), and kept
-in the project file. `kynex view --empty` lays out a cell with no Kreate
-session at all.
+in the project file. With no Kreate session, as KYNEX runs by default,
+the cell is laid out from the library alone.
 
 ### The cell: machines, pallets, grippers, parts
 

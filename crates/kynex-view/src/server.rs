@@ -46,6 +46,16 @@ const ROBOT_DEADLINE: Duration = Duration::from_secs(5);
 /// The most bytes a robot request may carry.
 const ROBOT_LIMIT: usize = 64 * 1024;
 
+/// The most bytes a model imported may have.
+pub const IMPORT_LIMIT: usize = 256 << 20;
+
+/// How long a model's import may take to answer: a large STEP file is read
+/// for a while.
+const IMPORT_DEADLINE: Duration = Duration::from_secs(180);
+
+/// How long a model's bytes may take to arrive.
+const UPLOAD_DEADLINE: Duration = Duration::from_secs(120);
+
 /// Something the page asked of the robots — a joint moved, a tool sent
 /// somewhere: the JSON it posted, and where the answer goes. The answer is
 /// JSON too, and goes back to the page as it is.
@@ -56,6 +66,8 @@ pub struct RobotRequest {
     /// viewer shared with `--lan`): what reaches beyond the viewer, as a
     /// link to a PLC does, is only for this computer's page to change.
     pub local: bool,
+    /// A file the page sent with it (`POST /import`): a model to import.
+    pub file: Option<Vec<u8>>,
 }
 
 /// Where the scene the viewer shows comes from, and how that is going.
@@ -69,6 +81,8 @@ pub enum Status {
     Offline { address: String, reason: String },
     /// A saved file, not a session.
     File { path: String },
+    /// KYNEX on its own: no Kreate, the cell laid out from its library.
+    Alone,
 }
 
 impl Status {
@@ -82,6 +96,7 @@ impl Status {
                 json!({"state": "offline", "address": address, "reason": reason})
             }
             Status::File { path } => json!({"state": "file", "address": path}),
+            Status::Alone => json!({"state": "alone"}),
         }
         .to_string()
     }
@@ -305,6 +320,30 @@ impl Gate {
 }
 
 /// One connection: a file, or the stream.
+/// `%XX` and `+` in a query's value made the text they stand for.
+fn percent_decode(v: &str) -> String {
+    let b = v.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = b
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(x)) => {
+                out.push(x);
+                i += 3;
+                continue;
+            }
+            (b'+', _) => out.push(b' '),
+            (c, _) => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let local = stream.peer_addr().is_ok_and(|a| a.ip().is_loopback());
     // A peer that stops reading is let go after this long, and its thread
@@ -322,6 +361,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let mut length = 0usize;
     let mut host = None;
     let mut json_body = false;
+    let mut octet_body = false;
     {
         let mut head = (&mut reader).take(HEAD_LIMIT);
         head.read_line(&mut request)?;
@@ -339,10 +379,9 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
                 } else if name.eq_ignore_ascii_case("host") {
                     host = Some(value.trim().to_string());
                 } else if name.eq_ignore_ascii_case("content-type") {
-                    json_body = value
-                        .trim()
-                        .to_ascii_lowercase()
-                        .starts_with("application/json");
+                    let kind = value.trim().to_ascii_lowercase();
+                    json_body = kind.starts_with("application/json");
+                    octet_body = kind == "application/octet-stream";
                 }
             }
         }
@@ -350,7 +389,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let mut parts = request.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/");
-    let path = path.split('?').next().unwrap_or("/");
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
     let mut out = stream;
     if !host_allowed(host.as_deref()) {
         return respond(&mut out, "403 Forbidden", "text/plain", b"unknown host");
@@ -402,10 +441,77 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             body: String::from_utf8_lossy(&body).into_owned(),
             reply: tx,
             local,
+            file: None,
         });
         return match asked
             .ok()
             .and_then(|_| rx.recv_timeout(ROBOT_DEADLINE).ok())
+        {
+            Some(answer) => respond(&mut out, "200 OK", "application/json", answer.as_bytes()),
+            None => respond(
+                &mut out,
+                "503 Service Unavailable",
+                "text/plain",
+                b"no answer",
+            ),
+        };
+    }
+    // A model file, as raw bytes, its name and unit in the query: from this
+    // computer only, and as octet-stream, which a page elsewhere cannot
+    // send without first asking this server — which never says yes.
+    if method == "POST" && path == "/import" {
+        if !local {
+            return respond(
+                &mut out,
+                "403 Forbidden",
+                "text/plain",
+                b"this computer only",
+            );
+        }
+        if !octet_body {
+            return respond(
+                &mut out,
+                "415 Unsupported Media Type",
+                "text/plain",
+                b"octet-stream only",
+            );
+        }
+        if length == 0 || length > IMPORT_LIMIT {
+            return respond(
+                &mut out,
+                "413 Payload Too Large",
+                "text/plain",
+                b"0 or too large",
+            );
+        }
+        let Some(robot) = hub.lock().expect("viewer hub").robot.clone() else {
+            return respond(&mut out, "404 Not Found", "text/plain", b"no robots here");
+        };
+        reader.get_mut().until = Instant::now() + UPLOAD_DEADLINE;
+        let mut file = vec![0u8; length];
+        reader.read_exact(&mut file)?;
+        let query = |key: &str| {
+            query
+                .split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| percent_decode(v))
+        };
+        let body = json!({
+            "op": "import",
+            "name": query("name").unwrap_or_default(),
+            "unit": query("unit").and_then(|u| u.parse::<f64>().ok()),
+        });
+        let (tx, rx) = mpsc::channel();
+        let asked = robot.send(RobotRequest {
+            body: body.to_string(),
+            reply: tx,
+            local,
+            file: Some(file),
+        });
+        return match asked
+            .ok()
+            .and_then(|_| rx.recv_timeout(IMPORT_DEADLINE).ok())
         {
             Some(answer) => respond(&mut out, "200 OK", "application/json", answer.as_bytes()),
             None => respond(
@@ -576,6 +682,42 @@ mod tests {
         // A form, which any page may send here unasked, is not taken.
         let form = "application/x-www-form-urlencoded";
         assert!(post(addr, "/robot", form, "op=jog").starts_with("HTTP/1.1 415"));
+    }
+
+    /// A model's bytes reach whatever takes requests, with its name and
+    /// unit from the query; not as a form or as text, not empty.
+    #[test]
+    fn a_model_file_is_handed_on_with_its_name() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let requests = server.robot_requests();
+        let answering = thread::spawn(move || {
+            let r = requests.recv().unwrap();
+            let file = r.file.clone().unwrap();
+            r.reply
+                .send(format!("{{\"got\":{},\"bytes\":{}}}", r.body, file.len()))
+                .unwrap();
+        });
+        let octet = "application/octet-stream";
+        let out = post(
+            addr,
+            "/import?name=%EB%B8%94%EB%A1%9D+1.stl&unit=0.001",
+            octet,
+            "solid x",
+        );
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        assert!(out.contains("\"name\":\"블록 1.stl\""), "{out}");
+        assert!(out.contains("\"unit\":0.001"), "{out}");
+        assert!(out.ends_with("\"bytes\":7}"), "{out}");
+        answering.join().unwrap();
+        for mime in ["text/plain", "multipart/form-data", "application/json"] {
+            assert!(
+                post(addr, "/import?name=a.stl", mime, "x").starts_with("HTTP/1.1 415"),
+                "{mime}"
+            );
+        }
+        assert!(post(addr, "/import?name=a.stl", octet, "").starts_with("HTTP/1.1 413"));
+        assert_eq!(percent_decode("a%2Fb+c%zz%4"), "a/b c%zz%4");
     }
 
     #[test]

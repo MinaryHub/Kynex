@@ -149,7 +149,7 @@ pub fn simulate(session: &Document, saved: &Value, seconds: f64) -> Value {
 /// each did, side by side. The scene is the `.kreate` file `--file`, or
 /// none: a cell laid out from the library alone.
 pub fn run(args: Vec<String>) -> Result<(), String> {
-    let mut project = std::path::PathBuf::from("kynex-project.json");
+    let mut project = crate::paths::default_project();
     let mut file = None;
     let mut hours = 1.0;
     let mut as_json = false;

@@ -417,6 +417,7 @@ const STATUS_TEXT = {
   waiting: (s) => `세션에 장면이 아직 없습니다 · ${s.address}`,
   offline: (s) => `Kreate 연결 안 됨 · ${s.address} · 다시 시도 중`,
   file: (s) => `파일 · ${s.address}`,
+  alone: () => 'KYNEX 단독 실행',
 };
 
 // A scene shown while nothing keeps it in step says so, and how old it is.
@@ -431,7 +432,7 @@ function setStale(stale, why) {
 }
 
 function onStatus(s) {
-  if (s.state === 'live' || s.state === 'file') setStale(false);
+  if (s.state === 'live' || s.state === 'file' || s.state === 'alone') setStale(false);
   else if (s.state === 'offline') setStale(true, 'Kreate와 연결이 끊겼습니다 · 마지막으로 받은 장면입니다');
   else if (s.state === 'waiting') setStale(true, 'Kreate 세션에 장면이 없습니다 · 마지막으로 받은 장면입니다');
   const el = document.getElementById('status');
@@ -901,10 +902,15 @@ function boxUnder(root) {
 function bounds(uid) {
   const box = new THREE.Box3();
   if (uid != null && records.has(uid)) {
+    // No geometry of its own: what is below it, as placed equipment's root
+    // has; nothing there either (a joint, a link, an empty), a small box
+    // where it is.
     if (!batch.boxOf(uid, box)) {
-      // No geometry: a joint, a link, an empty — a small box where it is.
-      const p = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(records.get(uid).matrix));
-      box.setFromCenterAndSize(p, new THREE.Vector3(0.3, 0.3, 0.3));
+      box.copy(boxUnder(uid));
+      if (box.isEmpty()) {
+        const p = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(records.get(uid).matrix));
+        box.setFromCenterAndSize(p, new THREE.Vector3(0.3, 0.3, 0.3));
+      }
     }
   } else {
     batch.boxAll(box);

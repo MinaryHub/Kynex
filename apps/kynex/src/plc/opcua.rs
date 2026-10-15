@@ -496,6 +496,8 @@ pub struct Session {
     request: u32,
     auth: NodeId,
     secure: Option<Channel>,
+    /// The server's last sequence number taken.
+    server_sequence: Option<u32>,
     /// Each node's value type, as last read (OPC 10000-6 built-in type ids).
     types: std::collections::HashMap<NodeId, u8>,
 }
@@ -510,6 +512,7 @@ impl Session {
             request: 0,
             auth: NodeId::Numeric(0, 0),
             secure: None,
+            server_sequence: None,
             types: Default::default(),
         }
     }
@@ -675,11 +678,11 @@ impl Session {
         body.string(None) // server URI
             .string(Some(url))
             .string(Some("KYNEX"));
+        let client_nonce = super::secure::nonce();
         match &self.secure {
             Some(c) => {
-                let nonce = super::secure::nonce();
                 body.i32(32);
-                body.0.extend(nonce);
+                body.0.extend(client_nonce);
                 body.i32(c.identity.der.len() as i32);
                 body.0.extend(&c.identity.der);
             }
@@ -700,6 +703,28 @@ impl Session {
         let mut endpoints = Vec::new();
         for _ in 0..r.count()? {
             endpoints.push(r.endpoint()?);
+        }
+        for _ in 0..r.count()? {
+            r.bytes()?; // software certificate
+            r.bytes()?; // its signature
+        }
+        r.string()?; // the server's signature: its algorithm
+        let signature = r.bytes()?.unwrap_or_default().to_vec();
+        // On a kept channel, the server proves it holds the key of the
+        // certificate the channel was opened with, signing KYNEX's
+        // certificate and this session's nonce: no session replayed.
+        if let Some(c) = &self.secure {
+            if certificate != c.server.der {
+                return Err("OPC UA: 세션의 서버 인증서가 채널의 것과 다릅니다".into());
+            }
+            let mut signed = c.identity.der.clone();
+            signed.extend(client_nonce);
+            if !c.server.verify(&signed, &signature) {
+                return Err("OPC UA: 서버의 세션 서명이 맞지 않습니다".into());
+            }
+            if nonce.len() < 32 {
+                return Err("OPC UA: 서버 nonce가 짧습니다".into());
+            }
         }
         Ok((endpoints, nonce, certificate))
     }
@@ -746,6 +771,18 @@ impl Session {
                 };
                 t.string(Some(&token.0)).string(Some(&name));
                 if policy == POLICY_NONE {
+                    // Unencrypted by its policy: sent only inside an
+                    // encrypted channel, never in the clear.
+                    let encrypted = self
+                        .secure
+                        .as_ref()
+                        .is_some_and(|c| c.mode == Mode::SignAndEncrypt);
+                    if !encrypted {
+                        return Err(
+                            "OPC UA: 서버가 비밀번호를 암호화하지 않고 받으려 합니다. 보안을 '서명·암호화'로 하세요"
+                                .into(),
+                        );
+                    }
                     t.i32(password.len() as i32);
                     t.0.extend(password.as_bytes());
                     t.string(None);
@@ -974,6 +1011,31 @@ impl Session {
         Ok((kind, rest))
     }
 
+    /// Checks an answer's channel, token and sequence header, `head` (the
+    /// 8 bytes of channel and token, and the 8 of sequence number and
+    /// request id): this channel's, its token's, its sequence number after
+    /// the last one taken — so no message is taken twice — and an answer to
+    /// the request last sent.
+    fn check_sequence(&mut self, ids: &[u8], sequence: &[u8]) -> Result<(), String> {
+        let word = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        if word(ids, 0) != self.channel || word(ids, 4) != self.token_id {
+            return Err("OPC UA: 다른 채널의 메시지입니다".into());
+        }
+        let (number, request) = (word(sequence, 0), word(sequence, 4));
+        if let Some(last) = self.server_sequence {
+            // On from the last, or round past the top (OPC 10000-6 6.7.2.4).
+            let wrapped = last > u32::MAX - 1024 && number < 1024;
+            if number <= last && !wrapped {
+                return Err("OPC UA: 이미 받은 메시지가 다시 왔습니다".into());
+            }
+        }
+        self.server_sequence = Some(number);
+        if request != self.request {
+            return Err("OPC UA: 다른 요청의 응답입니다".into());
+        }
+        Ok(())
+    }
+
     /// A service's answer: its chunks unsealed, their bodies joined.
     fn read_service(&mut self) -> Result<Vec<u8>, String> {
         let mut body: Vec<u8> = Vec::new();
@@ -982,7 +1044,8 @@ impl Session {
             if &kind != b"MSG" {
                 return Err(self.error_of(&kind, &rest, "요청"));
             }
-            let part = self.unseal_symmetric(&kind, flag, &rest)?;
+            let (sequence, part) = self.unseal_symmetric(&kind, flag, &rest)?;
+            self.check_sequence(&rest[..8], &sequence)?;
             if body.len() + part.len() > MAX_MESSAGE as usize {
                 return Err("OPC UA: 메시지가 너무 깁니다".into());
             }
@@ -1063,7 +1126,8 @@ impl Session {
         r.bytes()?; // receiver thumbprint
         let at = r.at;
         let Some(c) = &self.secure else {
-            r.skip(8)?; // sequence header
+            self.server_sequence = Some(r.u32()?);
+            r.u32()?; // request id
             return Ok(reply[r.at..].to_vec());
         };
         if policy != c.mode.policy() {
@@ -1100,6 +1164,8 @@ impl Session {
             .checked_sub(1 + usize::from(extra) + padding)
             .filter(|e| *e >= 8)
             .ok_or("OPC UA: 응답의 채움 길이가 맞지 않습니다")?;
+        let first = u32::from_le_bytes(content[..4].try_into().unwrap());
+        self.server_sequence = Some(first);
         Ok(content[8..end].to_vec())
     }
 
@@ -1150,7 +1216,13 @@ impl Session {
     /// A chunk on the channel after its first eight bytes: its service
     /// body, decrypted and checked with the server's keys as the channel
     /// keeps it.
-    fn unseal_symmetric(&self, kind: &[u8; 3], flag: u8, rest: &[u8]) -> Result<Vec<u8>, String> {
+    /// Returns its sequence header too.
+    fn unseal_symmetric(
+        &self,
+        kind: &[u8; 3],
+        flag: u8,
+        rest: &[u8],
+    ) -> Result<([u8; 8], Vec<u8>), String> {
         if rest.len() < 16 {
             return Err("OPC UA: 응답이 짧습니다".into());
         }
@@ -1159,7 +1231,8 @@ impl Session {
             .as_ref()
             .and_then(|c| c.server_keys.as_ref().map(|k| (c.mode, k)));
         let Some((mode, keys)) = keys else {
-            return Ok(rest[16..].to_vec());
+            let sequence: [u8; 8] = rest[8..16].try_into().unwrap();
+            return Ok((sequence, rest[16..].to_vec()));
         };
         let mut content = rest[8..].to_vec();
         let encrypt = mode == Mode::SignAndEncrypt;
@@ -1188,7 +1261,8 @@ impl Session {
         } else {
             data.len()
         };
-        Ok(data[8..end].to_vec())
+        let sequence: [u8; 8] = data[..8].try_into().unwrap();
+        Ok((sequence, data[8..end].to_vec()))
     }
 }
 
@@ -1255,6 +1329,27 @@ mod tests {
             println!("write {k}: {:?}", t.elapsed());
         }
         s.close();
+    }
+
+    /// Answers are taken once, in order, on this channel, for the request
+    /// asked: one sent again, another channel's, an answer to another
+    /// request are refused; a sequence number round past the top is not.
+    #[test]
+    fn an_answer_is_taken_once_in_order() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut s = Session::new(stream);
+        (s.channel, s.token_id, s.request) = (5, 9, 3);
+        let ids = |channel: u32, token: u32| [channel.to_le_bytes(), token.to_le_bytes()].concat();
+        let seq = |n: u32, request: u32| [n.to_le_bytes(), request.to_le_bytes()].concat();
+        s.server_sequence = Some(100);
+        assert!(s.check_sequence(&ids(5, 9), &seq(101, 3)).is_ok());
+        assert!(s.check_sequence(&ids(5, 9), &seq(101, 3)).is_err(), "again");
+        assert!(s.check_sequence(&ids(5, 9), &seq(50, 3)).is_err(), "older");
+        assert!(s.check_sequence(&ids(6, 9), &seq(102, 3)).is_err(), "another channel");
+        assert!(s.check_sequence(&ids(5, 9), &seq(103, 4)).is_err(), "another request");
+        s.server_sequence = Some(u32::MAX - 3);
+        assert!(s.check_sequence(&ids(5, 9), &seq(2, 3)).is_ok(), "round past the top");
     }
 
     /// Diagnostic information nested a few deep reads; nested past the

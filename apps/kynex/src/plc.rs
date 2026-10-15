@@ -329,7 +329,14 @@ impl Plc {
 
     /// Connects to where `settings` say, or lets go, as they say.
     pub fn set(&mut self, mut settings: Settings) {
-        if settings.password.is_empty() && settings.user == self.settings.user {
+        // A password left out keeps the one held — only for the very same
+        // server and user, never sent on to another.
+        let same_server = settings.protocol == self.settings.protocol
+            && settings.host == self.settings.host
+            && settings.port == self.settings.port
+            && settings.path == self.settings.path
+            && settings.user == self.settings.user;
+        if settings.password.is_empty() && same_server {
             settings.password = self.settings.password.clone();
         }
         if settings == self.settings && (self.thread.is_some() == settings.on) {

@@ -683,7 +683,11 @@ or **OPC UA**:
   kept in the project, a server with another refused, and **다시 믿기**
   forgets it. **사용자** and **비밀번호** log in as a user (anonymous when
   empty); the password, encrypted for the server as its policy says, is
-  held in memory only, never saved.
+  held in memory only, never saved, and kept only for the same server and
+  user. A server that would take it unencrypted is refused unless the
+  channel itself is encrypted. On a kept channel, the server's session
+  signature is checked, and every answer must be this channel's, newer
+  than the last and for the request sent: none is taken twice.
 - **신호** in the PLC panel: signals besides the machines', each a name,
   a direction (PLC → KYNEX, or KYNEX → PLC), a bit or a number, an
   address (over Modbus a bit is a coil, a number a holding register,

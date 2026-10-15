@@ -350,6 +350,17 @@ their boxes: to a side or the middle of the one selected, its floor
 height, one against the next along X or Y, or evenly spaced between the
 outermost two.
 
+**Program steps.** A step clicked, and another Shift-clicked, picks the
+steps between. The bar under the add buttons then copies them (⧉,
+Ctrl+C while the program was last clicked in) and pastes what was copied
+after the step picked (⎘, Ctrl+V), into this robot's program or another
+robot's of as many joints: by its joints' names, else in their order.
+A robot of other joints refuses them. With several picked, **J**, **L**
+and **R** set their MoveJ speed (%), MoveL and MoveC speed (mm/s) or
+blend radius (mm) at once. Steps are dragged in the list to another
+place, the span picked with them if the step dragged is in it. Each is
+one edit to undo.
+
 **Projects.** The folder button at the left of the toolbar shows the
 project open; it opens the project panel. **새로 만들기** makes an empty
 project under the name typed and opens it. **다른 이름으로 저장** saves

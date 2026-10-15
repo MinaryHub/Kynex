@@ -158,6 +158,11 @@ export class RobotPanel {
     this.host.addEventListener('pointerdown', (e) => this.pointerDown(e));
     this.host.addEventListener('click', (e) => this.clicked(e));
     this.host.addEventListener('change', (e) => this.optionChanged(e));
+    // Anywhere else clicked: the keys are not the program's.
+    document.addEventListener('pointerdown', (e) => {
+      if (!this.host.contains(e.target)) this.keysFor = null;
+    });
+    this.wireDrag();
   }
 
   // Whether the pointer is the handle's: a click on it picks nothing.
@@ -533,7 +538,7 @@ export class RobotPanel {
         // unless the program comes back round to it.
         const into = i > firstMove || program.close;
         return `
-          <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}">
+          <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}" draggable="true">
             <span class="pidx num">${i + 1}</span>
             <span class="pname">${escapeHtml(p.name)}${p.blend ? ` <span class="pblend" title="블렌드 반경: 멈추지 않고 지나감">◠${Math.round(p.blend * 1000)}</span>` : ''}</span>
             <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${circular ? '원호 이동 (MoveC) · 눌러서 직선 이동으로' : linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${circular ? 'C' : linear ? 'L' : 'J'}</button>
@@ -639,7 +644,7 @@ export class RobotPanel {
         break;
     }
     return `
-          <li class="point action${cursor ? ' cursor' : ''}${inrange ? ' inrange' : ''}" data-index="${i}" data-type="${step.type}">
+          <li class="point action${cursor ? ' cursor' : ''}${inrange ? ' inrange' : ''}" data-index="${i}" data-type="${step.type}" draggable="true">
             <span class="pidx num">${i + 1}</span>
             <span class="act-icon act-${step.type}">${icon}</span>
             <span class="act-body">${body}</span>
@@ -690,11 +695,67 @@ export class RobotPanel {
         ? `<select data-opt="copyto" aria-label="복제할 CNC"><option value="">CNC 골라 복제…</option>${machines
             .map(([u, n]) => `<option value="${escapeHtml(u)}">${escapeHtml(n)}용으로 복제</option>`)
             .join('')}</select>`
-        : '<span class="muted">Shift+클릭으로 구간 선택</span>';
+        : span[1] > span[0]
+          ? ''
+          : '<span class="muted">Shift+클릭으로 구간 선택</span>';
+    // Several at once: their moves' speed and blend, set together.
+    const many =
+      span[1] > span[0]
+        ? `<span class="many-edit">
+            <label title="구간의 MoveJ 속도를 한꺼번에">J<input type="number" class="num" data-many="joint" min="1" max="100" step="5" placeholder="%"></label>
+            <label title="구간의 MoveL·MoveC 속도를 한꺼번에">L<input type="number" class="num" data-many="linear" min="1" max="5000" step="10" placeholder="mm/s"></label>
+            <label title="구간 이동의 블렌드 반경을 한꺼번에">R<input type="number" class="num" data-many="blend" min="0" max="200" step="5" placeholder="mm"></label>
+          </span>`
+        : '';
     bar.innerHTML = `<span>${span[0] === span[1] ? `${span[0] + 1}단계` : `${span[0] + 1}–${span[1] + 1}단계`}</span>
-      <button class="icon-mini" data-act="shift-up" title="한 칸 위로">↑</button>
+      <button class="icon-mini" data-act="shift-up" title="한 칸 위로 (끌어서 옮길 수도 있습니다)">↑</button>
       <button class="icon-mini" data-act="shift-down" title="한 칸 아래로">↓</button>
-      ${copy}`;
+      <button class="icon-mini" data-act="steps-copy" title="복사 (Ctrl+C)">⧉</button>
+      <button class="icon-mini" data-act="steps-paste" title="뒤에 붙여넣기 (Ctrl+V). 다른 로봇의 프로그램에도 붙일 수 있습니다">⎘</button>
+      ${copy}${many}`;
+  }
+
+  // The span picked in robot `r`'s program: [first, last], or null.
+  spanOf(r) {
+    const ui = this.uiOf(r);
+    if (ui.cursor == null) return null;
+    return ui.anchor != null ? [Math.min(ui.anchor, ui.cursor), Math.max(ui.anchor, ui.cursor)] : [ui.cursor, ui.cursor];
+  }
+
+  // The picked steps kept to paste, here or into another robot's program.
+  copySteps(r) {
+    const span = this.spanOf(r);
+    if (!span) return false;
+    this.programOp(r, { op: 'steps_copy', index: span[0], to: span[1] }, (a) =>
+      this.ctx.toast(`${a.copied}단계를 복사했습니다 (Ctrl+V로 붙여넣기)`),
+    );
+    return true;
+  }
+
+  // What was copied, after the step picked (or at the end), then picked.
+  pasteSteps(r) {
+    const ui = this.uiOf(r);
+    const span = this.spanOf(r);
+    const after = span ? span[1] : undefined;
+    this.programOp(r, { op: 'steps_paste', after }, (a) => {
+      const first = after == null ? (this.programs[r.root]?.steps.length ?? 0) : after + 1;
+      ui.cursor = first + a.pasted - 1;
+      ui.anchor = a.pasted > 1 ? first : null;
+      this.ctx.toast(`${a.pasted}단계를 붙여 넣었습니다`);
+      this.renderPrograms();
+    });
+  }
+
+  // Keys for the program last clicked in: Ctrl+C, Ctrl+V. Whether taken.
+  stepKey(k) {
+    const r = this.robots.find((r) => r.root === this.keysFor);
+    if (!r) return false;
+    if (k === 'c') return this.copySteps(r);
+    if (k === 'v') {
+      this.pasteSteps(r);
+      return true;
+    }
+    return false;
   }
 
   // The cell's components of one kind, by identity and name.
@@ -1112,7 +1173,60 @@ export class RobotPanel {
 
   // ---- joints ---------------------------------------------------------------
 
+  // Steps dragged in the list to another place: the span picked, if the
+  // step taken is in it, else that step alone. Dropped on the upper half of
+  // a step, before it; on the lower half, after it.
+  wireDrag() {
+    const rowOf = (e) => e.target.closest?.('.point[data-index]');
+    this.host.addEventListener('dragstart', (e) => {
+      const row = rowOf(e);
+      const r = row && this.robotOf(row);
+      if (!r) return;
+      const i = Number(row.dataset.index);
+      const span = this.spanOf(r);
+      this.dragSteps = { root: r.root, span: span && i >= span[0] && i <= span[1] ? span : [i, i] };
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/kynex-steps', String(i));
+    });
+    this.host.addEventListener('dragend', () => {
+      this.dragSteps = null;
+      this.host.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+    });
+    const place = (e) => {
+      const row = rowOf(e);
+      const r = row && this.robotOf(row);
+      if (!this.dragSteps || !r || r.root !== this.dragSteps.root) return null;
+      const box = row.getBoundingClientRect();
+      const after = e.clientY > box.top + box.height / 2;
+      return { row, r, before: Number(row.dataset.index) + (after ? 1 : 0), after };
+    };
+    this.host.addEventListener('dragover', (e) => {
+      const at = place(e);
+      this.host.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+      if (!at) return;
+      e.preventDefault();
+      at.row.classList.add(at.after ? 'drop-after' : 'drop-before');
+    });
+    this.host.addEventListener('drop', (e) => {
+      const at = place(e);
+      if (!at) return;
+      e.preventDefault();
+      const [from, to] = this.dragSteps.span;
+      if (at.before >= from && at.before <= to + 1) return;
+      const ui = this.uiOf(at.r);
+      this.programOp(at.r, { op: 'steps_move', index: from, to, before: at.before }, () => {
+        // The steps where they went, still picked.
+        const first = at.before > to ? at.before - (to - from + 1) : at.before;
+        ui.cursor = first + (to - from);
+        ui.anchor = to > from ? first : null;
+        this.renderPrograms();
+      });
+    });
+  }
+
   pointerDown(e) {
+    // Ctrl+C and Ctrl+V are the program's while it was last clicked in.
+    this.keysFor = e.target.closest('.points, .copy-bar') ? this.robotOf(e.target)?.root ?? null : null;
     const track = e.target.closest('.track');
     if (track) return this.dragJoint(e, track);
     const jog = e.target.closest('[data-jog]');
@@ -1324,6 +1438,10 @@ export class RobotPanel {
         ui.anchor = null;
         this.programOp(r, { op: 'routine_delete' });
       }
+    } else if (act === 'steps-copy') {
+      this.copySteps(r);
+    } else if (act === 'steps-paste') {
+      this.pasteSteps(r);
     } else if (act === 'shift-up' || act === 'shift-down') {
       const up = act === 'shift-up';
       const from = Math.min(ui.anchor ?? ui.cursor, ui.cursor);
@@ -1423,6 +1541,19 @@ export class RobotPanel {
       const index = Number(e.target.closest('.point').dataset.index);
       const [kind, uid] = e.target.value.split(':');
       this.programOp(r, kind === 'p' ? { op: 'edit', index, pallet: uid } : { op: 'edit', index, frame: uid || null });
+    }
+    // Several steps' speed or blend, set together.
+    const many = e.target.dataset.many;
+    if (many) {
+      const span = this.spanOf(r);
+      const v = Number(e.target.value);
+      if (!span || !Number.isFinite(v) || v < 0 || e.target.value === '') return;
+      const request =
+        many === 'blend'
+          ? { op: 'edit', index: span[0], to: span[1], blend: v / 1000 }
+          : { op: 'edit', index: span[0], to: span[1], only: many, speed: many === 'joint' ? v / 100 : v / 1000 };
+      this.programOp(r, request, (a) => this.ctx.toast(`${a.edited}개 이동을 바꿨습니다`));
+      return;
     }
     if (opt === 'copyto' && e.target.value) {
       const [from, to] = [Math.min(ui.anchor, ui.cursor), Math.max(ui.anchor, ui.cursor)];

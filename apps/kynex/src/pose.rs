@@ -38,6 +38,9 @@ pub struct Posing {
     /// By robot root: the via point of a circular move being taught, until
     /// its end is.
     via: BTreeMap<u64, BTreeMap<u64, f64>>,
+    /// Program steps copied, as a program is saved: pasted into this
+    /// robot's program or another's of the same joints.
+    clipboard: Option<Value>,
     /// How the cell is wired, for a program's export: set before it is
     /// asked for (see `crate::view`).
     pub cell_io: program::CellIo,
@@ -749,67 +752,111 @@ impl Posing {
                 };
                 *action = program::action_of(&req["step"])?;
             }
+            // Several moves at once, `index` to `to`: their kind, speed and
+            // blend; the other steps among them as they are.
+            "edit" if req["to"].is_u64() => {
+                let (from, to) = (index()?, range_end(req, count)?);
+                if req["kind"] == "circular" {
+                    return Err("원호 이동은 한 단계씩 바꾸세요".into());
+                }
+                let mut each = req.clone();
+                for key in ["name", "frame", "pallet"] {
+                    each.as_object_mut().map(|o| o.remove(key));
+                }
+                each.as_object_mut().map(|o| o.remove("to"));
+                // Joint moves' speed is a fraction, the others' m/s: one
+                // kind at a time, if `only` says.
+                let only = match req["only"].as_str() {
+                    Some(k) => Some(program::kind_of(k).ok_or("only is joint or linear")?),
+                    None => None,
+                };
+                each.as_object_mut().map(|o| o.remove("only"));
+                let moves: Vec<usize> = (from..=to)
+                    .filter(|i| match &program.steps[*i] {
+                        Step::Move(p) => only.is_none_or(|k| {
+                            k == p.kind || (k == MoveKind::Linear && p.kind == MoveKind::Circular)
+                        }),
+                        Step::Do(_) => false,
+                    })
+                    .collect();
+                if moves.is_empty() {
+                    return Err(not_a_move());
+                }
+                for i in &moves {
+                    let point = program.point_mut(*i).expect("a move");
+                    edit_point(point, &each, doc)?;
+                }
+                self.programs_changed = true;
+                return Ok(json!({ "ok": true, "edited": moves.len() }));
+            }
+            // Steps kept to paste, here or into another robot's program.
+            "steps_copy" => {
+                let (from, to) = (index()?, range_end(req, count)?);
+                let mut slice = program.clone();
+                slice.steps = program.steps[from..=to].to_vec();
+                self.clipboard = Some(slice.to_saved(root, doc, kin));
+                return Ok(json!({ "ok": true, "copied": to - from + 1 }));
+            }
+            "steps_paste" => {
+                let mut saved = self.clipboard.clone().ok_or("복사한 단계가 없습니다")?;
+                // For this robot: its joints found by name.
+                saved["robot"] = json!(root.to_string());
+                saved["robot_name"] = Value::Null;
+                // Another robot of as many joints: its joints in the same
+                // order (names in one scene differ, `shoulder.001`). Both
+                // lists go by identity, as a robot's parts are numbered.
+                let mut mine: Vec<(u64, &str)> =
+                    kin.vars.iter().map(|v| (v.uid, v.name.as_str())).collect();
+                mine.sort_by_key(|(u, _)| *u);
+                for step in saved["steps"].as_array_mut().into_iter().flatten() {
+                    for key in ["joints", "via"] {
+                        let Some(list) = step[key].as_array_mut() else {
+                            continue;
+                        };
+                        if list.len() != mine.len() {
+                            continue;
+                        }
+                        for (j, (uid, name)) in list.iter_mut().zip(&mine) {
+                            j["uid"] = json!(uid.to_string());
+                            j["name"] = json!(name);
+                        }
+                    }
+                }
+                let (_, pasted) =
+                    Program::from_saved(&saved, doc).ok_or("복사한 단계를 붙여 넣지 못했습니다")?;
+                let whole = pasted.steps.iter().all(|s| match s {
+                    Step::Move(p) => {
+                        p.positions.len() == kin.vars.len()
+                            && p.via.as_ref().is_none_or(|v| v.len() == kin.vars.len())
+                    }
+                    Step::Do(_) => true,
+                });
+                if !whole {
+                    return Err("관절이 다른 로봇에서 복사한 지점이라 붙여 넣을 수 없습니다".into());
+                }
+                let n = pasted.steps.len();
+                let mut at = req["after"].as_u64().map_or(program.steps.len(), |i| {
+                    (i as usize + 1).min(program.steps.len())
+                });
+                for step in pasted.steps {
+                    program.steps.insert(at, step);
+                    at += 1;
+                }
+                self.programs_changed = true;
+                return Ok(json!({ "ok": true, "pasted": n }));
+            }
+            // Steps `index` to `to` put before step `before` (as numbered
+            // now): dragged in the list.
+            "steps_move" => {
+                let (from, to) = (index()?, range_end(req, count)?);
+                let before = req["before"].as_u64().ok_or("no before")? as usize;
+                if !program.move_range(from, to, before) {
+                    return Err("그 자리로는 옮길 수 없습니다".into());
+                }
+            }
             "edit" => {
                 let point = program.point_mut(index()?).ok_or_else(not_a_move)?;
-                if let Some(kind) = req["kind"].as_str() {
-                    let kind = program::kind_of(kind).ok_or("kind is joint or linear")?;
-                    if kind != point.kind {
-                        if kind == MoveKind::Circular && point.via.is_none() {
-                            return Err("원호 이동은 + MoveC로 경유점과 함께 티칭하세요".into());
-                        }
-                        if point.kind == MoveKind::Joint || kind == MoveKind::Joint {
-                            point.speed = match kind {
-                                MoveKind::Joint => program::JOINT_SPEED,
-                                _ => program::LINEAR_SPEED,
-                            };
-                        }
-                        point.kind = kind;
-                        if kind != MoveKind::Circular {
-                            point.via = None;
-                        }
-                    }
-                }
-                if let Some(speed) = req["speed"].as_f64() {
-                    point.speed = match point.kind {
-                        MoveKind::Joint => speed.clamp(0.01, 1.0),
-                        MoveKind::Linear | MoveKind::Circular => speed.clamp(0.001, 5.0),
-                    };
-                }
-                if let Some(name) = req["name"].as_str() {
-                    let name = name.trim();
-                    if !name.is_empty() {
-                        point.name = name.chars().take(32).collect();
-                    }
-                }
-                if let Some(blend) = req["blend"].as_f64() {
-                    point.blend = blend.clamp(0.0, program::MAX_BLEND);
-                }
-                // The equipment it is taught in, or none (`null`, ""): where
-                // that stands now is where the point was taught in it.
-                let frame_of = |object: u64| {
-                    let id = doc.object_by_uid(Uid::from_raw(object))?;
-                    Some(program::Frame {
-                        object,
-                        taught_in: doc.world_transform(id),
-                    })
-                };
-                if let Some(frame) = req.get("frame") {
-                    point.frame = match uid(frame) {
-                        Some(object) => Some(frame_of(object).ok_or("no such equipment")?),
-                        None => None,
-                    };
-                    if point.frame.is_none_or(|f| Some(f.object) != point.pallet) {
-                        point.pallet = None;
-                    }
-                }
-                // The pallet it stands on, or none: a pallet is its frame.
-                if let Some(pallet) = req.get("pallet") {
-                    point.pallet = uid(pallet);
-                    point.frame = match point.pallet {
-                        Some(object) => Some(frame_of(object).ok_or("no such pallet")?),
-                        None => None,
-                    };
-                }
+                edit_point(point, req, doc)?;
             }
             "delete" => {
                 program.steps.remove(index()?);
@@ -865,6 +912,82 @@ impl Posing {
             .entry(root)
             .or_insert_with(|| kin.vars.iter().zip(now).map(|(v, q)| (v.uid, *q)).collect())
     }
+}
+
+/// A move's kind, speed, name, blend and the equipment it is taught in,
+/// as request `req` gives them.
+fn edit_point(point: &mut program::Point, req: &Value, doc: &Document) -> Result<(), String> {
+    if let Some(kind) = req["kind"].as_str() {
+        let kind = program::kind_of(kind).ok_or("kind is joint or linear")?;
+        if kind != point.kind {
+            if kind == MoveKind::Circular && point.via.is_none() {
+                return Err("원호 이동은 + MoveC로 경유점과 함께 티칭하세요".into());
+            }
+            if point.kind == MoveKind::Joint || kind == MoveKind::Joint {
+                point.speed = match kind {
+                    MoveKind::Joint => program::JOINT_SPEED,
+                    _ => program::LINEAR_SPEED,
+                };
+            }
+            point.kind = kind;
+            if kind != MoveKind::Circular {
+                point.via = None;
+            }
+        }
+    }
+    if let Some(speed) = req["speed"].as_f64() {
+        point.speed = match point.kind {
+            MoveKind::Joint => speed.clamp(0.01, 1.0),
+            MoveKind::Linear | MoveKind::Circular => speed.clamp(0.001, 5.0),
+        };
+    }
+    if let Some(name) = req["name"].as_str() {
+        let name = name.trim();
+        if !name.is_empty() {
+            point.name = name.chars().take(32).collect();
+        }
+    }
+    if let Some(blend) = req["blend"].as_f64() {
+        point.blend = blend.clamp(0.0, program::MAX_BLEND);
+    }
+    // The equipment it is taught in, or none (`null`, ""): where
+    // that stands now is where the point was taught in it.
+    let frame_of = |object: u64| {
+        let id = doc.object_by_uid(Uid::from_raw(object))?;
+        Some(program::Frame {
+            object,
+            taught_in: doc.world_transform(id),
+        })
+    };
+    if let Some(frame) = req.get("frame") {
+        point.frame = match uid(frame) {
+            Some(object) => Some(frame_of(object).ok_or("no such equipment")?),
+            None => None,
+        };
+        if point.frame.is_none_or(|f| Some(f.object) != point.pallet) {
+            point.pallet = None;
+        }
+    }
+    // The pallet it stands on, or none: a pallet is its frame.
+    if let Some(pallet) = req.get("pallet") {
+        point.pallet = uid(pallet);
+        point.frame = match point.pallet {
+            Some(object) => Some(frame_of(object).ok_or("no such pallet")?),
+            None => None,
+        };
+    }
+    Ok(())
+}
+
+/// The last step of a range from `index` to `to` in `req` (`index` alone
+/// if no `to`): not before its first, within the `count` steps there are.
+fn range_end(req: &Value, count: usize) -> Result<usize, String> {
+    let from = req["index"].as_u64().ok_or("no index")? as usize;
+    let to = req["to"].as_u64().map_or(from, |t| t as usize);
+    if to < from || to >= count {
+        return Err(format!("no steps {from}–{to}"));
+    }
+    Ok(to)
 }
 
 /// Every joint of the robot, for the viewers to look at again: what a
@@ -1017,6 +1140,91 @@ mod tests {
         );
         assert_eq!(answer["reached"], false);
         assert!(answer["position_error"].as_f64().unwrap() > 0.5);
+    }
+
+    /// Points taught at three angles; two copied and pasted after the
+    /// third, and into a second arm of the same joints; one dragged to
+    /// the end; the speed of several set at once.
+    #[test]
+    fn steps_are_copied_pasted_moved_and_edited_together() {
+        let (doc, base, joint, _) = arm();
+        let (doc, base2, joint2, _) = arm_in(doc);
+        let mut p = Posing::default();
+        let robot = base.to_string();
+        for angle in [0.1, 0.2, 0.3] {
+            ask(
+                &mut p,
+                &doc,
+                json!({"op": "jog", "robot": robot, "joint": joint.to_string(), "position": angle}),
+            );
+            let (a, _) = ask(&mut p, &doc, json!({"op": "teach", "robot": robot}));
+            assert_eq!(a["ok"], true, "{a}");
+        }
+        let angles = |p: &Posing, root: u64, joint: u64| -> Vec<f64> {
+            p.program(root)
+                .unwrap()
+                .moves()
+                .map(|(_, pt)| (pt.positions[&joint] * 10.0).round() / 10.0)
+                .collect()
+        };
+        let (c, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "steps_copy", "robot": robot, "index": 0, "to": 1}),
+        );
+        assert_eq!(c["copied"], 2, "{c}");
+        let (v, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "steps_paste", "robot": robot, "after": 2}),
+        );
+        assert_eq!(v["pasted"], 2, "{v}");
+        assert_eq!(angles(&p, base, joint), vec![0.1, 0.2, 0.3, 0.1, 0.2]);
+
+        // Into the other arm, its joint found by name.
+        let (v, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "steps_paste", "robot": base2.to_string()}),
+        );
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(angles(&p, base2, joint2), vec![0.1, 0.2]);
+
+        // The first dragged to the end; not into itself.
+        let (m, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "steps_move", "robot": robot, "index": 0, "to": 0, "before": 5}),
+        );
+        assert_eq!(m["ok"], true, "{m}");
+        assert_eq!(angles(&p, base, joint), vec![0.2, 0.3, 0.1, 0.2, 0.1]);
+        let (bad, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "steps_move", "robot": robot, "index": 1, "to": 2, "before": 2}),
+        );
+        assert_eq!(bad["ok"], false);
+
+        let (e, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "edit", "robot": robot, "index": 1, "to": 3, "speed": 0.25}),
+        );
+        assert_eq!(e["edited"], 3, "{e}");
+        let speeds: Vec<f64> = p
+            .program(base)
+            .unwrap()
+            .moves()
+            .map(|(_, pt)| pt.speed)
+            .collect();
+        assert_eq!(speeds[1..4], [0.25, 0.25, 0.25]);
+        assert_ne!(speeds[0], 0.25);
+        let (circ, _) = ask(
+            &mut p,
+            &doc,
+            json!({"op": "edit", "robot": robot, "index": 0, "to": 1, "kind": "circular"}),
+        );
+        assert_eq!(circ["ok"], false);
     }
 
     #[test]

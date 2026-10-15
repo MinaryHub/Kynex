@@ -1125,8 +1125,11 @@ window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (k === 'z' && !e.shiftKey) history('undo');
   else if (k === 'y' || (k === 'z' && e.shiftKey)) history('redo');
-  // The selected equipment copied beside itself, kept to paste, pasted.
-  else if (k === 'd') libraryPanel.duplicate();
+  // Program steps, while the program was last clicked in; else the
+  // selected equipment: copied beside itself, kept to paste, pasted.
+  else if ((k === 'c' || k === 'v') && robotPanel.stepKey(k)) {
+    // Taken by the program.
+  } else if (k === 'd') libraryPanel.duplicate();
   else if (k === 'c') {
     if (!libraryPanel.copy()) return;
   } else if (k === 'v') libraryPanel.paste();

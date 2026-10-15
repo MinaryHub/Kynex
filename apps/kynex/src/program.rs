@@ -332,6 +332,26 @@ impl Program {
     /// Moves steps `from` to `to` one place earlier (`up`) or later, past
     /// the step beside them. Returns whether they moved: not past either
     /// end.
+    /// Steps `from` to `to` put before step `before`, as the steps are
+    /// numbered now (the end for one past the last). Whether they could be:
+    /// not into themselves.
+    pub fn move_range(&mut self, from: usize, to: usize, before: usize) -> bool {
+        let n = self.steps.len();
+        if from > to || to >= n || before > n || (from..=to + 1).contains(&before) {
+            return false;
+        }
+        let moved: Vec<Step> = self.steps.drain(from..=to).collect();
+        let at = if before > to {
+            before - moved.len()
+        } else {
+            before
+        };
+        for (k, step) in moved.into_iter().enumerate() {
+            self.steps.insert(at + k, step);
+        }
+        true
+    }
+
     pub fn shift(&mut self, from: usize, to: usize, up: bool) -> bool {
         if from > to || to >= self.steps.len() {
             return false;
@@ -1100,6 +1120,9 @@ pub fn is_op(op: &str) -> bool {
             | "export"
             | "copy"
             | "shift"
+            | "steps_copy"
+            | "steps_paste"
+            | "steps_move"
             | "routine_new"
             | "routine_select"
             | "routine_rename"

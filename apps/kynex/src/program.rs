@@ -153,6 +153,10 @@ pub enum Action {
     /// Turn positioner `positioner` to `angle` radians from where it was
     /// placed; the robot waits until it is there.
     Turn { positioner: u64, angle: f64 },
+    /// Set the PLC signal `name` (one the cell writes) to `value`.
+    SetSignal { name: String, value: i64 },
+    /// Wait until the PLC signal `name` reads `value`.
+    WaitSignal { name: String, value: i64 },
 }
 
 /// One line of a program: a move to a point, or an action.
@@ -604,6 +608,7 @@ impl Program {
                     routine: text(&s["routine"])?,
                     times: s["times"].as_u64().unwrap_or(1).clamp(1, MAX_TIMES as u64) as u32,
                 }),
+                "signal_set" | "signal_wait" => Step::Do(action_of(s).ok()?),
                 _ => continue,
             };
             steps.push(step);
@@ -1071,6 +1076,10 @@ fn action_ops(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) -> 
         }],
         // Calls are gone by the time a program is exported (see `flatten`).
         Action::Call { routine, times } => note(format!("call {routine} {times} times")),
+        // A PLC's signals are the cell's, not the robot controller's: to be
+        // wired to the controller's I/O there.
+        Action::SetSignal { name, value } => note(format!("set PLC signal {name} to {value}")),
+        Action::WaitSignal { name, value } => note(format!("wait for PLC signal {name} = {value}")),
     }
 }
 
@@ -1122,6 +1131,12 @@ fn action_json(a: &Action, name: &dyn Fn(u64) -> String) -> Value {
             "signal": signal.tag(),
         }),
         Action::Delay { seconds } => json!({ "type": "delay", "seconds": seconds }),
+        Action::SetSignal { name, value } => {
+            json!({ "type": "signal_set", "name": name, "value": value })
+        }
+        Action::WaitSignal { name, value } => {
+            json!({ "type": "signal_wait", "name": name, "value": value })
+        }
         Action::Next { pallet } => json!({
             "type": "next",
             "pallet": pallet.to_string(),
@@ -1204,6 +1219,22 @@ pub fn action_of(v: &Value) -> Result<Action, String> {
                 .to_string(),
             times: v["times"].as_u64().unwrap_or(1).clamp(1, MAX_TIMES as u64) as u32,
         },
+        "signal_set" | "signal_wait" => {
+            let name = v["name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .ok_or("no signal")?
+                .chars()
+                .take(40)
+                .collect();
+            let value = v["value"].as_i64().unwrap_or(1);
+            if v["type"] == "signal_set" {
+                Action::SetSignal { name, value }
+            } else {
+                Action::WaitSignal { name, value }
+            }
+        }
         other => return Err(format!("unknown step {other:?}")),
     })
 }

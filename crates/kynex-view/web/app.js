@@ -477,6 +477,7 @@ function connect() {
     const cell = JSON.parse(e.data);
     cellPanel.setCell(cell);
     robotPanel.setCell(cell);
+    plcPanel.setCell(cell);
   });
   // A page served by one KYNEX that reconnects to a newer one would read
   // its stream wrongly: it reloads instead.
@@ -660,7 +661,7 @@ function pick(x, y) {
   return at.ray.intersectPlane(_floor, new THREE.Vector3());
 }
 
-const plcPanel = new PlcPanel({ toast });
+const plcPanel = new PlcPanel({ toast, escapeHtml, robots: () => robotPanel.robots });
 const timelinePanel = new TimelinePanel({ escapeHtml, toast, toggle: (on) => setToggle('timeline', on) });
 
 const libraryPanel = new LibraryPanel({

@@ -672,6 +672,23 @@ or **OPC UA**:
   message security (the `None` policy) and an anonymous user — a PLC's
   server set up to allow that, as for commissioning on a bench. Signed or
   encrypted channels and user names are not made.
+- **신호** in the PLC panel: signals besides the machines', each a name,
+  a direction (PLC → KYNEX, or KYNEX → PLC), a bit or a number, an
+  address (over Modbus a bit is a coil, a number a holding register,
+  signed 16-bit; over OPC UA a number is written in the variable's own
+  type, read once to learn it), and what it is tied to. PLC → KYNEX: a
+  robot's program started, or stopped, as it comes on; or nothing, for
+  programs to wait on. KYNEX → PLC: on while a robot's program runs, on
+  once it has run to its end, a machine's count of cycles; or nothing,
+  for programs to set. The table is applied whole (**적용**), kept with
+  the PLC's settings in the project file, and shows each signal's value.
+- Robot programs: **+ 동작 → PLC 신호 쓰기** sets a signal of the cell's
+  to a value; **PLC 신호 대기** holds the robot until a signal of the
+  PLC's reads a value. A signal no longer in the table stops the run with
+  an alarm. Exported to a robot controller, they are comments: the PLC's
+  signals are the cell's, to be wired to the controller's own I/O there.
+- Robot programs run side by side, each on its own: started from the page
+  or by the PLC, a program goes on beside those running.
 - The chuck closes and opens over the machine's **척 개폐** time: **척
   물림됨** comes on once it has closed, **척 풀림됨** once it is open
   again, and a cycle starts only clamped.
@@ -697,6 +714,12 @@ target/plc/venv38/Scripts/python tools/plc/check.py --protocol opcua --kynex htt
 Every step took the lathe's own time to within 0.13 s over either (3 s
 doors, 1 s chuck), the rest being the 50 ms exchange and the program's
 scan; also with a second lathe wired to the same nodes.
+
+A PLC starting a robot: with a UR5e's program (MoveJ, **PLC 신호 쓰기**
+준비 = 1, MoveL) and the table tying coil 10 to its start, coil 110 to it
+running and coil 111 to 준비, `tools/plc/robot_check.py` on pymodbus
+turned coil 10 on: the program ran 0.05 s later, set 준비 at 0.42 s, and
+was done at 1.05 s.
 
 ## Benchmark
 

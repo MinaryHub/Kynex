@@ -1814,3 +1814,69 @@ fn m2_a_tending_and_deburring_cell_from_the_catalogue() {
     )
     .unwrap();
 }
+
+/// A robot program that tells the PLC it is ready and waits for the PLC's
+/// go: the signal is set as the step comes, the robot holds at the wait
+/// until the PLC's input reads 1, then moves on to its end. A signal not in
+/// the table stops the run with an alarm.
+#[test]
+fn a_program_sets_and_waits_for_plc_signals() {
+    let mut c = cell1();
+    c.cell
+        .set_signals(&json!([
+            {"name": "ready", "address": "11"},
+            {"name": "go", "input": true, "address": "10"},
+        ]))
+        .unwrap();
+    let raw = c.slot(c.infeed, 0);
+    let up = DVec3::Z * 0.15;
+    c.teach(raw + up, "joint");
+    c.act(json!({"type": "signal_set", "name": "ready", "value": 1}));
+    c.act(json!({"type": "signal_wait", "name": "go", "value": 1}));
+    c.teach(raw + up * 2.0, "linear");
+
+    let program = c.posing.program(c.robot).unwrap().clone();
+    let mut runner = Runner::new(c.robot, program, &c.doc, 0.0).unwrap();
+    let start = Instant::now();
+    let mut t = 0.0;
+    let tick = |runner: &mut Runner, c: &mut Cell1, t: f64| {
+        runner.tick(
+            t,
+            start + Duration::from_secs_f64(t),
+            &mut c.posing,
+            &mut c.cell,
+            &c.doc,
+        );
+    };
+    while t < 5.0 {
+        tick(&mut runner, &mut c, t);
+        t += 0.05;
+    }
+    assert_eq!(c.cell.signal_value("ready"), Some(1));
+    assert_eq!(runner.activity(), "wait", "held for the PLC's go");
+    assert!(!runner.stopped());
+    // The PLC says go.
+    let read: std::collections::BTreeMap<String, i64> = [("10".to_string(), 1)].into();
+    c.cell.plc_exchange(&c.doc, &read, &|_| (false, false));
+    while t < 10.0 && !runner.stopped() {
+        tick(&mut runner, &mut c, t);
+        t += 0.05;
+    }
+    assert!(runner.finished(), "{}", runner.to_json(t));
+
+    // A signal the table has not got.
+    c.cell.set_signals(&json!([])).unwrap();
+    let program = c.posing.program(c.robot).unwrap().clone();
+    let mut runner = Runner::new(c.robot, program, &c.doc, 0.0).unwrap();
+    let mut t = 0.0;
+    while t < 5.0 && !runner.stopped() {
+        tick(&mut runner, &mut c, t);
+        t += 0.05;
+    }
+    assert!(runner.stopped() && !runner.finished());
+    assert!(
+        runner.to_json(t).to_string().contains("ready"),
+        "{}",
+        runner.to_json(t)
+    );
+}

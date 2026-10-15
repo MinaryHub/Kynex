@@ -478,6 +478,8 @@ pub struct Machine {
     pub chuck: f64,
     /// Seconds into the cycle, while machining.
     pub machining: Option<f64>,
+    /// Cycles finished since the cell started.
+    pub cycles: u64,
 }
 
 impl Machine {
@@ -613,6 +615,138 @@ pub struct Cell {
     /// Each PLC command as last read, by address: a command is given as
     /// its address comes on.
     plc_last: BTreeMap<(u64, String), bool>,
+    /// The signals shared with the PLC besides the machines', each one's
+    /// value now, and each input's as last read (for its edges).
+    signals: Vec<PlcSignal>,
+    signal_values: BTreeMap<String, i64>,
+    signal_last: BTreeMap<String, i64>,
+}
+
+/// A signal the cell shares with a PLC besides its machines' commands and
+/// states: one the PLC writes and the cell reads (an input), or the other
+/// way round, a bit or a number, at an address on the PLC. What it is tied
+/// to in the cell, if anything, is its link; a signal tied to nothing is
+/// the robot programs' to write or wait on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlcSignal {
+    pub name: String,
+    pub input: bool,
+    pub number: bool,
+    pub address: String,
+    pub link: Link,
+}
+
+/// What a PLC signal is tied to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Link {
+    None,
+    /// An input: robot `root`'s program starts as it comes on.
+    Start(u64),
+    /// An input: robot `root`'s program stops as it comes on.
+    Stop(u64),
+    /// An output: on while robot `root`'s program runs.
+    Running(u64),
+    /// An output: on once robot `root`'s program has run to its end.
+    Done(u64),
+    /// An output: how many cycles machine `object` has finished.
+    Cycles(u64),
+}
+
+impl Link {
+    fn tag(self) -> String {
+        match self {
+            Link::None => String::new(),
+            Link::Start(u) => format!("start:{u}"),
+            Link::Stop(u) => format!("stop:{u}"),
+            Link::Running(u) => format!("running:{u}"),
+            Link::Done(u) => format!("done:{u}"),
+            Link::Cycles(u) => format!("cycles:{u}"),
+        }
+    }
+
+    fn of(tag: &str) -> Option<Link> {
+        if tag.is_empty() {
+            return Some(Link::None);
+        }
+        let (what, uid) = tag.split_once(':')?;
+        let uid: u64 = uid.parse().ok()?;
+        Some(match what {
+            "start" => Link::Start(uid),
+            "stop" => Link::Stop(uid),
+            "running" => Link::Running(uid),
+            "done" => Link::Done(uid),
+            "cycles" => Link::Cycles(uid),
+            _ => return None,
+        })
+    }
+
+    /// Whether it is tied to what the PLC reads, rather than writes.
+    fn output(self) -> bool {
+        matches!(self, Link::Running(_) | Link::Done(_) | Link::Cycles(_))
+    }
+}
+
+/// How many signals a cell keeps, at most.
+pub const MOST_SIGNALS: usize = 256;
+
+impl PlcSignal {
+    fn of(v: &Value) -> Result<Self, String> {
+        let name: String = v["name"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(40)
+            .collect();
+        if name.is_empty() {
+            return Err("신호 이름이 없습니다".into());
+        }
+        let address: String = v["address"].as_str().unwrap_or("").trim().to_string();
+        if address.len() > LONGEST_ADDRESS {
+            return Err(format!("{name}: 주소는 {LONGEST_ADDRESS}자까지입니다"));
+        }
+        let input = v["input"].as_bool().unwrap_or(false);
+        let link = Link::of(v["link"].as_str().unwrap_or(""))
+            .ok_or_else(|| format!("{name}: 연결을 알 수 없습니다"))?;
+        if link != Link::None && link.output() == input {
+            return Err(format!("{name}: 방향과 연결이 맞지 않습니다"));
+        }
+        Ok(Self {
+            name,
+            input,
+            number: v["number"].as_bool().unwrap_or(false),
+            address,
+            link,
+        })
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "name": self.name,
+            "input": self.input,
+            "number": self.number,
+            "address": self.address,
+            "link": self.link.tag(),
+        })
+    }
+
+    fn kind(&self) -> crate::plc::Kind {
+        if self.number {
+            crate::plc::Kind::Number
+        } else {
+            crate::plc::Kind::Bit
+        }
+    }
+}
+
+/// What an exchange with a PLC asks of the robots, and what it writes.
+#[derive(Debug, Default, PartialEq)]
+pub struct Exchange {
+    pub writes: Vec<(String, crate::plc::Kind, i64)>,
+    pub errors: Vec<String>,
+    /// Robots whose programs are to start, and to stop.
+    pub start: Vec<u64>,
+    pub stop: Vec<u64>,
 }
 
 /// An AMR on its way: where its centre is on the floor and which way it
@@ -916,7 +1050,10 @@ impl Cell {
         let mut removed = std::mem::take(&mut self.removed);
         removed.extend(self.parts.iter().map(|p| p.uid));
         let next = self.next;
+        // The PLC's signals are the project's, not the scenario's.
+        let signals = std::mem::take(&mut self.signals);
         *self = Self::from_saved(saved);
+        self.signals = signals;
         self.removed = removed;
         // Parts made from here on are new to the viewers.
         self.next = next;
@@ -1491,6 +1628,8 @@ impl Cell {
                 self.roles_changed = true;
                 self.changed = true;
             }
+            // The PLC signal table, whole.
+            "signals" => self.set_signals(&req["signals"])?,
             "grip" => self.grip(doc, uid("gripper")?)?,
             "release" => self.release(doc, uid("gripper")?)?,
             "machine" => {
@@ -1706,9 +1845,10 @@ impl Cell {
         }
     }
 
-    /// The PLC addresses the cell reads: its machines' commands.
-    pub fn plc_reads(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
+    /// The PLC addresses the cell reads, and what each holds: its machines'
+    /// commands, and the signals the PLC writes.
+    pub fn plc_reads(&self) -> Vec<(String, crate::plc::Kind)> {
+        let mut out: Vec<(String, crate::plc::Kind)> = self
             .components
             .iter()
             .flat_map(|c| {
@@ -1716,34 +1856,43 @@ impl Cell {
                 c.plc
                     .iter()
                     .filter(move |(k, _)| outs.contains(&k.as_str()))
-                    .map(|(_, a)| a.clone())
+                    .map(|(_, a)| (a.clone(), crate::plc::Kind::Bit))
             })
+            .chain(
+                self.signals
+                    .iter()
+                    .filter(|s| s.input && !s.address.is_empty())
+                    .map(|s| (s.address.clone(), s.kind())),
+            )
             .collect();
-        out.sort_unstable();
+        out.sort();
         out.dedup();
         out
     }
 
-    /// One exchange with a PLC: `read` its commands as read, by address. A
-    /// command whose address has come on since last read is given; an
-    /// error a command meets (a door opened while machining) is returned,
-    /// with the machine's name. Returns the states to write, by address,
-    /// and what went wrong.
+    /// One exchange with a PLC: `read` what it holds, by address, and
+    /// `robot(root)` whether a robot's program runs, and whether it has run
+    /// to its end. A command whose address has come on since last read is
+    /// given; an error a command meets (a door opened while machining) is
+    /// said, with the machine's name. Returns what to write, the robots to
+    /// start and stop, and what went wrong.
     pub fn plc_exchange(
         &mut self,
         doc: &Document,
-        read: &BTreeMap<String, bool>,
-    ) -> (Vec<(String, bool)>, Vec<String>) {
-        let mut errors = Vec::new();
+        read: &BTreeMap<String, i64>,
+        robot: &dyn Fn(u64) -> (bool, bool),
+    ) -> Exchange {
+        let mut out = Exchange::default();
         for c in self.components.clone() {
             let (outs, _) = io_points(c.kind);
             for (key, address) in &c.plc {
                 if !outs.contains(&key.as_str()) {
                     continue;
                 }
-                let Some(&on) = read.get(address) else {
+                let Some(&value) = read.get(address) else {
                     continue;
                 };
+                let on = value != 0;
                 // Each machine its own: two on one address both take it.
                 let was = self
                     .plc_last
@@ -1752,7 +1901,7 @@ impl Cell {
                 if on && !was {
                     if let Some(command) = Command::of(key) {
                         if let Err(e) = self.command(doc, c.object, command) {
-                            errors.push(format!("{}: {e}", c.name));
+                            out.errors.push(format!("{}: {e}", c.name));
                         }
                     }
                 }
@@ -1776,18 +1925,115 @@ impl Cell {
                 }
             }
         }
-        let mut writes = Vec::new();
         for (address, said) in states {
             if said.len() > 1 {
                 let names: Vec<&str> = said.iter().map(|(n, _)| *n).collect();
-                errors.push(format!(
+                out.errors.push(format!(
                     "{address}: 상태 주소를 {}가 함께 씁니다",
                     names.join(", ")
                 ));
             }
-            writes.push((address, said.iter().all(|(_, on)| *on)));
+            let on = said.iter().all(|(_, on)| *on);
+            out.writes
+                .push((address, crate::plc::Kind::Bit, i64::from(on)));
         }
-        (writes, errors)
+        // The signals: inputs taken in, a robot started or stopped as its
+        // input comes on; outputs as what they are tied to says, or as the
+        // programs set them.
+        for s in self.signals.clone() {
+            if s.address.is_empty() {
+                continue;
+            }
+            if s.input {
+                let Some(&value) = read.get(&s.address) else {
+                    continue;
+                };
+                let was = self.signal_last.insert(s.name.clone(), value).unwrap_or(0);
+                self.signal_values.insert(s.name.clone(), value);
+                if value != 0 && was == 0 {
+                    match s.link {
+                        Link::Start(root) => out.start.push(root),
+                        Link::Stop(root) => out.stop.push(root),
+                        _ => {}
+                    }
+                }
+            } else {
+                let value = match s.link {
+                    Link::Running(root) => i64::from(robot(root).0),
+                    Link::Done(root) => i64::from(robot(root).1),
+                    Link::Cycles(machine) => self
+                        .machines
+                        .get(&machine)
+                        .map_or(0, |m| m.cycles.min(i64::MAX as u64) as i64),
+                    _ => self.signal_values.get(&s.name).copied().unwrap_or(0),
+                };
+                self.signal_values.insert(s.name.clone(), value);
+                out.writes.push((s.address.clone(), s.kind(), value));
+            }
+        }
+        out
+    }
+
+    /// The signals shared with a PLC, as saved.
+    pub fn signals_saved(&self) -> Value {
+        Value::Array(self.signals.iter().map(PlcSignal::to_json).collect())
+    }
+
+    /// Takes on the signals `v` lists: all of them, or none if any is
+    /// amiss (two of one name among them).
+    pub fn set_signals(&mut self, v: &Value) -> Result<(), String> {
+        let list = v.as_array().map(Vec::as_slice).unwrap_or_default();
+        if list.len() > MOST_SIGNALS {
+            return Err(format!("신호는 {MOST_SIGNALS}개까지입니다"));
+        }
+        let signals = list
+            .iter()
+            .map(PlcSignal::of)
+            .collect::<Result<Vec<_>, _>>()?;
+        for (i, s) in signals.iter().enumerate() {
+            if signals[..i].iter().any(|t| t.name == s.name) {
+                return Err(format!("{}: 같은 이름의 신호가 둘입니다", s.name));
+            }
+        }
+        // Values of signals no longer there go with them.
+        self.signal_values
+            .retain(|name, _| signals.iter().any(|s| &s.name == name));
+        self.signal_last
+            .retain(|name, _| signals.iter().any(|s| &s.name == name));
+        self.signals = signals;
+        self.roles_changed = true;
+        self.changed = true;
+        Ok(())
+    }
+
+    /// Sets the signal named `name`, one the cell writes and nothing else
+    /// is tied to, to `value`: a robot program's doing.
+    pub fn set_signal(&mut self, name: &str, value: i64) -> Result<(), String> {
+        let s = self
+            .signals
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| format!("{name}: PLC 신호가 없습니다"))?;
+        if s.input || s.link != Link::None {
+            return Err(format!("{name}: 프로그램이 쓰는 신호가 아닙니다"));
+        }
+        let value = if s.number {
+            value
+        } else {
+            i64::from(value != 0)
+        };
+        if self.signal_values.insert(name.to_string(), value) != Some(value) {
+            self.changed = true;
+        }
+        Ok(())
+    }
+
+    /// The value of the signal named `name`, if there is one.
+    pub fn signal_value(&self, name: &str) -> Option<i64> {
+        self.signals
+            .iter()
+            .any(|s| s.name == name)
+            .then(|| self.signal_values.get(name).copied().unwrap_or(0))
     }
 
     /// Moves the machines on to `sim`, the simulation's clock in seconds:
@@ -1874,6 +2120,7 @@ impl Cell {
                 let t = t + dt;
                 if t >= c.props.cycle {
                     m.machining = None;
+                    m.cycles += 1;
                     finished = true;
                     if let Some(seat) = self.seat(doc, c) {
                         if c.kind == Kind::Molder {
@@ -2534,6 +2781,11 @@ impl Cell {
             .collect();
         json!({
             "components": components,
+            "signals": self.signals.iter().map(|s| {
+                let mut v = s.to_json();
+                v["value"] = json!(self.signal_values.get(&s.name).copied().unwrap_or(0));
+                v
+            }).collect::<Vec<_>>(),
             "parts": self.parts.iter().map(|p| json!({
                 "uid": p.uid.to_string(),
                 "finished": p.finished,
@@ -2570,6 +2822,7 @@ pub fn is_op(op: &str) -> bool {
             | "io"
             | "point"
             | "plc"
+            | "signals"
     )
 }
 
@@ -2919,6 +3172,15 @@ mod tests {
         assert!(part.finished);
         let json: Value = serde_json::from_str(&cell.to_json(&doc)).unwrap();
         assert_eq!(json["components"][1]["machine"]["part"], "finished");
+        // Its cycles, as a PLC signal tied to them reads them.
+        cell.set_signals(&json!([
+            {"name": "cycles", "number": true, "address": "30", "link": format!("cycles:{machine}")},
+        ]))
+        .unwrap();
+        let x = cell.plc_exchange(&doc, &BTreeMap::new(), &|_| (false, false));
+        assert!(x
+            .writes
+            .contains(&("30".to_string(), crate::plc::Kind::Number, 1)));
     }
 
     #[test]

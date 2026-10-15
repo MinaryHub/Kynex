@@ -100,6 +100,14 @@
         <button class="text-btn" id="plc-connect">연결</button>
         <span class="plc-status muted" id="plc-status">연결 안 됨</span>
       </div>
+      <div class="plc-signals">
+        <div class="plc-head">신호 <span class="muted">장비 밖의 신호: 로봇 시작·정지, 상태, 숫자</span></div>
+        <div class="plc-table" id="plc-signals"></div>
+        <div class="plc-actions">
+          <button class="text-btn quiet" id="plc-signal-add">+ 신호</button>
+          <button class="text-btn" id="plc-signal-apply" disabled>적용</button>
+        </div>
+      </div>
       <p class="muted plc-help">장비의 셀 역할 아래 "PLC 주소"에서 명령·상태마다 주소를 정하세요. Modbus는 코일 번호(0부터), OPC UA는 Boolean 변수의 노드 ID(ns=2;s=Lathe.Open)입니다. PLC가 명령을 켜면 장비가 움직이고, 장비 상태는 상태 주소로 PLC에 갑니다.</p>
     </div>
 

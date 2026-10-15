@@ -152,6 +152,38 @@ fn write_coil_pdu(address: u16, on: bool) -> Vec<u8> {
     pdu
 }
 
+/// Read `count` holding registers from `start` (function 3).
+fn read_registers_pdu(start: u16, count: u16) -> Vec<u8> {
+    let mut pdu = vec![0x03];
+    pdu.extend_from_slice(&start.to_be_bytes());
+    pdu.extend_from_slice(&count.to_be_bytes());
+    pdu
+}
+
+/// Write holding register `address` (function 6): a 16-bit word, a
+/// negative number as its two's complement.
+fn write_register_pdu(address: u16, value: i64) -> Vec<u8> {
+    let mut pdu = vec![0x06];
+    pdu.extend_from_slice(&address.to_be_bytes());
+    pdu.extend_from_slice(&(value.clamp(-32768, 65535) as u16).to_be_bytes());
+    pdu
+}
+
+/// The registers `start`… as a read answer `body` has them, as signed
+/// 16-bit numbers.
+fn registers_of(body: &[u8], count: u16) -> Result<Vec<i64>, String> {
+    let bytes = *body.get(1).ok_or("짧은 응답")? as usize;
+    let words = body.get(2..2 + bytes).ok_or("짧은 응답")?;
+    if bytes < 2 * count as usize {
+        return Err("짧은 응답".into());
+    }
+    Ok(words
+        .chunks(2)
+        .take(count as usize)
+        .map(|w| i64::from(i16::from_be_bytes([w[0], w[1]])))
+        .collect())
+}
+
 /// What a Modbus exception code says.
 fn exception(code: u8) -> String {
     let what = match code {
@@ -202,15 +234,24 @@ fn coils_of(body: &[u8], count: u16) -> Result<Vec<bool>, String> {
 
 // --- the link -----------------------------------------------------------------
 
+/// What an address holds: a bit (a Modbus coil, an OPC UA Boolean) or a
+/// number (a Modbus holding register, an OPC UA numeric variable). Values
+/// are whole numbers either way, a bit's 0 or 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Kind {
+    Bit,
+    Number,
+}
+
 /// What the link and the cell share.
 #[derive(Default)]
 struct Shared {
-    /// The commands' addresses to read.
-    reads: Vec<String>,
-    /// The states as they should be, by address.
-    writes: BTreeMap<String, bool>,
-    /// The commands as last read, by address.
-    got: BTreeMap<String, bool>,
+    /// The addresses to read, and what each holds.
+    reads: Vec<(String, Kind)>,
+    /// What to write, by address, as it should be.
+    writes: BTreeMap<String, (Kind, i64)>,
+    /// What was last read, by address.
+    got: BTreeMap<String, i64>,
     connected: bool,
     error: Option<String>,
     /// Addresses the PLC would not read or write, last exchange: the link
@@ -287,16 +328,17 @@ impl Plc {
         self.thread.is_some()
     }
 
-    /// The commands as last read, by address.
-    pub fn read(&self) -> BTreeMap<String, bool> {
+    /// What was last read, by address.
+    pub fn read(&self) -> BTreeMap<String, i64> {
         self.shared.lock().unwrap().got.clone()
     }
 
-    /// Hands over the addresses to read and the states as they should be.
-    pub fn hand(&self, reads: Vec<String>, writes: Vec<(String, bool)>) {
+    /// Hands over the addresses to read and what to write, as it should
+    /// be.
+    pub fn hand(&self, reads: Vec<(String, Kind)>, writes: Vec<(String, Kind, i64)>) {
         let mut s = self.shared.lock().unwrap();
         s.reads = reads;
-        s.writes = writes.into_iter().collect();
+        s.writes = writes.into_iter().map(|(a, k, v)| (a, (k, v))).collect();
     }
 
     /// What went wrong giving the cell the PLC's commands, last time
@@ -320,7 +362,7 @@ impl Plc {
             "drops": s.drops,
             "exchanges": s.exchanges,
             "values": s.got.iter().map(|(a, v)| json!([a, v])).chain(
-                s.writes.iter().map(|(a, v)| json!([a, v]))).collect::<Vec<_>>(),
+                s.writes.iter().map(|(a, (_, v))| json!([a, v]))).collect::<Vec<_>>(),
         })
     }
 }
@@ -341,6 +383,36 @@ enum Conn {
     OpcUa(opcua::Session),
 }
 
+/// Modbus addresses of one kind, read in spans of at most `most`: each
+/// span's values by `read(start, count)`, put back by address.
+fn spans(
+    addresses: &[(u16, &String)],
+    most: u16,
+    mut read: impl FnMut(u16, u16) -> Result<Vec<i64>, String>,
+    got: &mut BTreeMap<String, i64>,
+) -> Result<(), String> {
+    let mut at = 0;
+    while at < addresses.len() {
+        let start = addresses[at].0;
+        let end = addresses[at..]
+            .iter()
+            .map(|c| c.0)
+            .take_while(|n| (*n as u32) < start as u32 + most as u32)
+            .last()
+            .unwrap();
+        let count = end - start + 1;
+        let values = read(start, count)?;
+        while at < addresses.len() && addresses[at].0 <= end {
+            got.insert(
+                addresses[at].1.clone(),
+                values[(addresses[at].0 - start) as usize],
+            );
+            at += 1;
+        }
+    }
+    Ok(())
+}
+
 impl Conn {
     fn open(settings: &Settings) -> Result<Self, String> {
         let stream = connect(settings)?;
@@ -354,61 +426,71 @@ impl Conn {
         })
     }
 
-    /// The commands at `addresses`, and the addresses that could not be
-    /// read. An error is the connection's: it is made again.
+    /// What is at `addresses`, and the addresses that could not be read.
+    /// An error is the connection's: it is made again.
     fn read(
         &mut self,
-        addresses: &[String],
-    ) -> Result<(BTreeMap<String, bool>, Vec<String>), String> {
+        addresses: &[(String, Kind)],
+    ) -> Result<(BTreeMap<String, i64>, Vec<String>), String> {
         let mut got = BTreeMap::new();
         let mut problems = Vec::new();
         match self {
             Conn::Modbus { stream, tid, unit } => {
                 let mut coils: Vec<(u16, &String)> = Vec::new();
-                for a in addresses {
-                    match a.parse::<u16>() {
-                        Ok(n) => coils.push((n, a)),
-                        Err(_) => problems.push(format!("{a}: 코일 번호(0–65535)가 아닙니다")),
+                let mut registers: Vec<(u16, &String)> = Vec::new();
+                for (a, kind) in addresses {
+                    match (a.parse::<u16>(), kind) {
+                        (Ok(n), Kind::Bit) => coils.push((n, a)),
+                        (Ok(n), Kind::Number) => registers.push((n, a)),
+                        (Err(_), _) => problems.push(format!("{a}: 주소 번호(0–65535)가 아닙니다")),
                     }
                 }
                 coils.sort();
-                // In spans of at most 2000.
-                let mut at = 0;
-                while at < coils.len() {
-                    let start = coils[at].0;
-                    let end = coils[at..]
-                        .iter()
-                        .map(|c| c.0)
-                        .take_while(|n| (*n as u32) < start as u32 + 2000)
-                        .last()
-                        .unwrap();
-                    let count = end - start + 1;
-                    *tid = tid.wrapping_add(1);
-                    let body = exchange(stream, *tid, *unit, &read_coils_pdu(start, count))?;
-                    let bits = coils_of(&body, count)?;
-                    while at < coils.len() && coils[at].0 <= end {
-                        got.insert(coils[at].1.clone(), bits[(coils[at].0 - start) as usize]);
-                        at += 1;
-                    }
-                }
+                registers.sort();
+                spans(
+                    &coils,
+                    2000,
+                    |start, count| {
+                        *tid = tid.wrapping_add(1);
+                        let body = exchange(stream, *tid, *unit, &read_coils_pdu(start, count))?;
+                        Ok(coils_of(&body, count)?.into_iter().map(i64::from).collect())
+                    },
+                    &mut got,
+                )?;
+                spans(
+                    &registers,
+                    125,
+                    |start, count| {
+                        *tid = tid.wrapping_add(1);
+                        let body =
+                            exchange(stream, *tid, *unit, &read_registers_pdu(start, count))?;
+                        registers_of(&body, count)
+                    },
+                    &mut got,
+                )?;
             }
             Conn::OpcUa(session) => {
                 let mut nodes = Vec::new();
                 let mut named = Vec::new();
-                for a in addresses {
+                for (a, kind) in addresses {
                     match opcua::NodeId::parse(a) {
                         Ok(n) => {
                             nodes.push(n);
-                            named.push(a);
+                            named.push((a, kind));
                         }
                         Err(e) => problems.push(e),
                     }
                 }
                 if !nodes.is_empty() {
-                    for (a, value) in named.into_iter().zip(session.read(&nodes)?) {
+                    for ((a, kind), value) in named.into_iter().zip(session.read(&nodes)?) {
                         match value {
-                            Ok(on) => {
-                                got.insert(a.clone(), on);
+                            Ok(v) => {
+                                let v = if *kind == Kind::Bit {
+                                    i64::from(v != 0)
+                                } else {
+                                    v
+                                };
+                                got.insert(a.clone(), v);
                             }
                             Err(e) => problems.push(e),
                         }
@@ -419,16 +501,25 @@ impl Conn {
         Ok((got, problems))
     }
 
-    /// Writes `on` to the state at `address`: `Ok(Err(why))` when the PLC
-    /// would not take it, an error when the connection failed.
-    fn write(&mut self, address: &str, on: bool) -> Result<Result<(), String>, String> {
+    /// Writes `value` to `address`: `Ok(Err(why))` when the PLC would not
+    /// take it, an error when the connection failed.
+    fn write(
+        &mut self,
+        address: &str,
+        kind: Kind,
+        value: i64,
+    ) -> Result<Result<(), String>, String> {
         match self {
             Conn::Modbus { stream, tid, unit } => {
                 let Ok(n) = address.parse::<u16>() else {
-                    return Ok(Err(format!("{address}: 코일 번호(0–65535)가 아닙니다")));
+                    return Ok(Err(format!("{address}: 주소 번호(0–65535)가 아닙니다")));
                 };
                 *tid = tid.wrapping_add(1);
-                match exchange(stream, *tid, *unit, &write_coil_pdu(n, on)) {
+                let pdu = match kind {
+                    Kind::Bit => write_coil_pdu(n, value != 0),
+                    Kind::Number => write_register_pdu(n, value),
+                };
+                match exchange(stream, *tid, *unit, &pdu) {
                     Ok(_) => Ok(Ok(())),
                     Err(e) if e.starts_with("Modbus 예외") => Ok(Err(format!("{address}: {e}"))),
                     Err(e) => Err(e),
@@ -439,10 +530,10 @@ impl Conn {
                     Ok(n) => n,
                     Err(e) => return Ok(Err(e)),
                 };
-                match session.write(&node, on) {
+                match session.write(&node, value, kind == Kind::Number) {
                     Ok(()) => Ok(Ok(())),
                     // A status the server gave: the node's, not the link's.
-                    Err(e) if e.contains("OPC UA 0x") => Ok(Err(e)),
+                    Err(e) if e.contains("OPC UA 0x") || e.contains("형식") => Ok(Err(e)),
                     Err(e) => Err(e),
                 }
             }
@@ -474,24 +565,24 @@ fn run(settings: &Settings, shared: &Mutex<Shared>, stop: &AtomicBool) {
             s.error = None;
         }
         // Every state is written once on connecting.
-        let mut written: BTreeMap<String, bool> = BTreeMap::new();
+        let mut written: BTreeMap<String, i64> = BTreeMap::new();
         while !stop.load(Ordering::Relaxed) {
             let (reads, writes) = {
                 let s = shared.lock().unwrap();
                 (s.reads.clone(), s.writes.clone())
             };
-            let result = (|| -> Result<(BTreeMap<String, bool>, Vec<String>), String> {
+            let result = (|| -> Result<(BTreeMap<String, i64>, Vec<String>), String> {
                 let (got, mut problems) = conn.read(&reads)?;
-                for (address, on) in &writes {
-                    if written.get(address) == Some(on) {
+                for (address, (kind, value)) in &writes {
+                    if written.get(address) == Some(value) {
                         continue;
                     }
-                    if let Err(why) = conn.write(address, *on)? {
+                    if let Err(why) = conn.write(address, *kind, *value)? {
                         problems.push(why);
                     }
                     // Not tried again until it changes: a PLC that will not
                     // take it is said so once, not hammered.
-                    written.insert(address.clone(), *on);
+                    written.insert(address.clone(), *value);
                 }
                 Ok((got, problems))
             })();

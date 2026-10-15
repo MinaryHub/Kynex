@@ -867,3 +867,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 }
 .insp-field .plc-address { flex: 1; min-width: 0; width: auto; text-align: left; }
 .plc-fields [hidden] { display: none; }
+.plc-panel { max-height: calc(100% - 80px); overflow-y: auto; width: min(560px, calc(100% - 32px)); }
+.plc-signals { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line-2); }
+.plc-table { display: grid; gap: 4px; }
+.plc-row { display: grid; grid-template-columns: 1.2fr 0.9fr 0.7fr 1.3fr 1.5fr 0.5fr auto; gap: 4px; align-items: center; }
+.plc-row input, .plc-row select { min-width: 0; width: 100%; font-size: 11px; }
+.plc-row .plc-value { font: 11px var(--mono); text-align: right; color: var(--muted, #9aa3ad); }
+.plc-row.head { font-size: 10px; color: var(--muted, #9aa3ad); }
+@media (max-width: 640px) { .plc-row { grid-template-columns: 1fr 1fr; } }

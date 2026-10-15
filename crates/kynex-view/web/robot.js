@@ -446,6 +446,8 @@ export class RobotPanel {
               <option value="drive">AMR 주행</option>
               <option value="turn">포지셔너 회전</option>
               <option value="call">서브루틴 호출</option>
+              <option value="signal_set">PLC 신호 쓰기</option>
+              <option value="signal_wait">PLC 신호 대기</option>
             </select>
           </div>
           <div class="copy-bar" hidden></div>
@@ -619,6 +621,16 @@ export class RobotPanel {
           '<span class="unit">→</span>' +
           pick('stop', keep(this.ofKind('amr_stop'), step.stop, step.stop_name), step.stop);
         break;
+      case 'signal_set':
+      case 'signal_wait': {
+        icon = 'PLC';
+        const list = this.plcSignals(step.type === 'signal_wait');
+        body =
+          `<span class="unit">${step.type === 'signal_set' ? '쓰기' : '대기'}</span>` +
+          pick('name', keep(list, step.name, step.name), step.name) +
+          `<span class="unit">=</span><input class="pspeed num" type="number" data-field="value" value="${step.value}" step="1" aria-label="값">`;
+        break;
+      }
       case 'turn':
         icon = '회전';
         body =
@@ -639,7 +651,7 @@ export class RobotPanel {
   actionOf(row) {
     const step = { type: row.dataset.type };
     for (const field of row.querySelectorAll('[data-field]')) {
-      step[field.dataset.field] = ['seconds', 'times', 'degrees'].includes(field.dataset.field) ? Number(field.value) : field.value;
+      step[field.dataset.field] = ['seconds', 'times', 'degrees', 'value'].includes(field.dataset.field) ? Number(field.value) : field.value;
     }
     // Another machine picked: what it takes and says, if the old does not fit.
     const kind = this.cell.components.find((c) => c.object === step.machine)?.kind;
@@ -762,8 +774,19 @@ export class RobotPanel {
         const positioner = this.ofKind('positioner')[0]?.[0];
         return positioner ? { type, positioner, degrees: 180 } : null;
       }
+      case 'signal_set':
+      case 'signal_wait': {
+        const name = this.plcSignals(type === 'signal_wait')[0]?.[0];
+        return name ? { type, name, value: 1 } : null;
+      }
     }
     return null;
+  }
+
+  // The PLC signals a program can wait on (the PLC's, tied to nothing),
+  // or set (the cell's, tied to nothing), as [name, name].
+  plcSignals(input) {
+    return (this.cell.signals ?? []).filter((s) => s.input === input && !s.link).map((s) => [s.name, s.name]);
   }
 
   // Each program's tool path, and its taught points, over the scene.
@@ -1374,7 +1397,9 @@ export class RobotPanel {
         return this.ctx.toast(
           type === 'call'
             ? '부를 서브루틴이 없습니다. 프로그램 옆 + 로 서브루틴을 만드세요'
-            : '이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요',
+            : type.startsWith('signal')
+              ? `${type === 'signal_set' ? 'KYNEX → PLC' : 'PLC → KYNEX'} 방향의 연결 없는 신호가 없습니다. 툴바의 PLC에서 신호를 만드세요`
+              : '이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요',
         );
       }
       this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });

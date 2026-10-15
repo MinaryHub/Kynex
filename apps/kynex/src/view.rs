@@ -275,7 +275,13 @@ impl Stage {
         Ok(Self {
             posing,
             library: Library::from_saved(&saved.library),
-            cell: Cell::from_saved(saved.cell),
+            cell: {
+                let mut cell = Cell::from_saved(saved.cell);
+                if let Err(e) = cell.set_signals(&saved.plc["signals"]) {
+                    println!("PLC 신호를 읽지 못했습니다: {e}");
+                }
+                cell
+            },
             collider: Collider::default(),
             base: None,
             placed: Changes::default(),
@@ -361,7 +367,7 @@ impl Stage {
                     .retain(|r| robot.is_some_and(|robot| robot != r.root));
                 touched |= self.runners.len() != before;
             }
-            let reply = if matches!(op.as_str(), "plc_link" | "plc") && !request.local {
+            let reply = if matches!(op.as_str(), "plc_link" | "plc" | "signals") && !request.local {
                 // A viewer shared on the network does not let others point
                 // KYNEX at a PLC, nor rewire what it writes there.
                 serde_json::json!({ "ok": false, "error": "PLC 설정은 KYNEX를 실행한 컴퓨터에서만 바꿀 수 있습니다" })
@@ -459,10 +465,26 @@ impl Stage {
         }
         touched |= self.cell.tick(scene, time, now);
         // A PLC's commands given, the machines' states handed back.
+        let mut starts: Vec<u64> = Vec::new();
         if self.plc.on() {
-            let (writes, errors) = self.cell.plc_exchange(scene, &self.plc.read());
+            let runners = &self.runners;
+            let robot = |root: u64| {
+                runners
+                    .iter()
+                    .find(|r| r.root == root)
+                    .map_or((false, false), |r| (!r.stopped(), r.finished()))
+            };
+            let exchange = self.cell.plc_exchange(scene, &self.plc.read(), &robot);
+            let errors = exchange.errors;
+            // Robots the PLC starts and stops.
+            for root in exchange.stop {
+                self.runners.retain(|r| r.root != root);
+                touched = true;
+            }
+            // Started once the scene is let go of, below.
+            starts = exchange.start;
             self.plc.warn(errors);
-            self.plc.hand(self.cell.plc_reads(), writes);
+            self.plc.hand(self.cell.plc_reads(), exchange.writes);
             touched |= self.cell.take_changed();
         }
         // A program going round is kept supplied, as an operator would:
@@ -515,6 +537,14 @@ impl Stage {
                 }
             }
         }
+        // Robots the PLC started.
+        for root in starts {
+            let name = crate::collide::label(self.base.as_ref().unwrap_or(doc), root);
+            if let Err(e) = self.play(doc, root) {
+                self.plc.warn(vec![format!("{name}: {e}")]);
+            }
+            touched = true;
+        }
         touched
     }
 
@@ -541,6 +571,27 @@ impl Stage {
             || self.comparing.is_some()
     }
 
+    /// Starts robot `root`'s program, from its start. The other robots'
+    /// programs go on: a cell runs together. With none going on, the run
+    /// is a new one, with a new record.
+    fn play(&mut self, doc: &Document, root: u64) -> Result<(), String> {
+        // Its calls replaced by what they call.
+        let (program, origin) = self.posing.runnable(root)?;
+        let scene = self.base.as_ref().unwrap_or(doc);
+        let mut runner = Runner::new(root, program, scene, self.clock.time)?;
+        runner.origin = origin;
+        let alone = !self.runners.iter().any(|r| r.root != root && !r.stopped());
+        self.runners.retain(|r| r.root != root && !r.stopped());
+        self.runners.push(runner);
+        // Parts to take: the infeed stocked as the run starts.
+        self.cell.stock(scene);
+        if alone {
+            self.timeline = Some(Timeline::new(self.clock.time));
+            self.timeline_told = None;
+        }
+        Ok(())
+    }
+
     /// Runs a program, stops it, or sets the clock's speed.
     fn run_op(&mut self, doc: &Document, op: &str, body: &str) -> String {
         let req: Value = serde_json::from_str(body).unwrap_or_default();
@@ -560,29 +611,11 @@ impl Stage {
                 }
                 Ok(())
             }
-            _ => (|| {
-                let root = req["robot"]
-                    .as_str()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .ok_or("no robot")?;
-                // Its calls replaced by what they call.
-                let (program, origin) = self.posing.runnable(root)?;
-                let scene = self.base.as_ref().unwrap_or(doc);
-                let mut runner = Runner::new(root, program, scene, self.clock.time)?;
-                runner.origin = origin;
-                // The other robots' programs go on: a cell runs together.
-                // With none going on, a new run and a new record.
-                let alone = !self.runners.iter().any(|r| r.root != root && !r.stopped());
-                self.runners.retain(|r| r.root != root && !r.stopped());
-                self.runners.push(runner);
-                // Parts to take: the infeed stocked as the run starts.
-                self.cell.stock(scene);
-                if alone {
-                    self.timeline = Some(Timeline::new(self.clock.time));
-                    self.timeline_told = None;
-                }
-                Ok(())
-            })(),
+            _ => req["robot"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or_else(|| "no robot".to_string())
+                .and_then(|root| self.play(doc, root)),
         };
         match answer {
             Ok(()) => serde_json::json!({ "ok": true }),
@@ -736,7 +769,11 @@ impl Stage {
                 cell: self.cell.to_saved(),
                 library: self.library.to_saved(),
                 scenarios: self.scenarios.clone(),
-                plc: self.plc.settings.to_json(),
+                plc: {
+                    let mut plc = self.plc.settings.to_json();
+                    plc["signals"] = self.cell.signals_saved();
+                    plc
+                },
             };
             if let Err(e) = self.posing.save(scene, rest) {
                 println!("프로젝트를 저장하지 못했습니다: {e}");

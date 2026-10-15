@@ -46,7 +46,7 @@ const MAX_CHUNKS: u32 = 128;
 const MAX_DIAGNOSTIC_DEPTH: usize = 16;
 
 /// A node's identity: its namespace, and a number or a name in it.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeId {
     Numeric(u16, u32),
     String(u16, String),
@@ -320,22 +320,34 @@ impl<'a> In<'a> {
         }
         Ok(())
     }
-    /// A Variant: a Boolean, or a number read as on when it is not 0.
-    fn variant_bool(&mut self) -> Result<Option<bool>, String> {
+    /// A Variant holding a Boolean or a number: its type, and its value
+    /// as a whole number (a Boolean 0 or 1, a real rounded).
+    fn variant(&mut self) -> Result<Option<(u8, i64)>, String> {
         let kind = self.u8()?;
         if kind & 0xC0 != 0 {
             return Err("OPC UA: 배열 값은 읽지 않습니다".into());
         }
-        Ok(match kind & 0x3F {
-            0 => None,
-            1 | 2 | 3 => Some(self.u8()? != 0),
-            4 | 5 => Some(self.u16()? != 0),
-            6 | 7 => Some(self.u32()? != 0),
-            8 | 9 => Some(u64::from_le_bytes(self.take(8)?.try_into().unwrap()) != 0),
-            10 => Some(f32::from_le_bytes(self.take(4)?.try_into().unwrap()) != 0.0),
-            11 => Some(f64::from_le_bytes(self.take(8)?.try_into().unwrap()) != 0.0),
-            k => return Err(format!("OPC UA: Boolean으로 읽을 수 없는 값 형식 {k}")),
-        })
+        let t = kind & 0x3F;
+        let take8 =
+            |r: &mut Self| -> Result<[u8; 8], String> { Ok(r.take(8)?.try_into().unwrap()) };
+        Ok(Some((
+            t,
+            match t {
+                0 => return Ok(None),
+                1 => i64::from(self.u8()? != 0),
+                2 => i64::from(self.u8()? as i8),
+                3 => i64::from(self.u8()?),
+                4 => i64::from(self.u16()? as i16),
+                5 => i64::from(self.u16()?),
+                6 => i64::from(self.i32()?),
+                7 => i64::from(self.u32()?),
+                8 => i64::from_le_bytes(take8(self)?),
+                9 => u64::from_le_bytes(take8(self)?).min(i64::MAX as u64) as i64,
+                10 => f32::from_le_bytes(self.take(4)?.try_into().unwrap()).round() as i64,
+                11 => f64::from_le_bytes(take8(self)?).round() as i64,
+                k => return Err(format!("OPC UA: 숫자로 읽을 수 없는 값 형식 {k}")),
+            },
+        )))
     }
 }
 
@@ -369,6 +381,8 @@ pub struct Session {
     sequence: u32,
     request: u32,
     auth: NodeId,
+    /// Each node's value type, as last read (OPC 10000-6 built-in type ids).
+    types: std::collections::HashMap<NodeId, u8>,
 }
 
 impl Session {
@@ -382,6 +396,7 @@ impl Session {
             sequence: 0,
             request: 0,
             auth: NodeId::Numeric(0, 0),
+            types: Default::default(),
         };
         s.hello(url)?;
         s.open_channel()?;
@@ -531,8 +546,10 @@ impl Session {
         In::new(&reply).header()
     }
 
-    /// The Boolean values of `nodes`, each or why it could not be read.
-    pub fn read(&mut self, nodes: &[NodeId]) -> Result<Vec<Result<bool, String>>, String> {
+    /// The values of `nodes` — a Boolean as 0 or 1, a number as a whole
+    /// number — each or why it could not be read. Each node's type is
+    /// kept, to write it in.
+    pub fn read(&mut self, nodes: &[NodeId]) -> Result<Vec<Result<i64, String>>, String> {
         let mut body = Out::default();
         body.type_id(id::READ_REQUEST);
         let handle = self.next_request();
@@ -556,11 +573,11 @@ impl Session {
         let mut out = Vec::with_capacity(n.min(nodes.len()));
         for node in nodes.iter().take(n) {
             let mask = r.u8()?;
-            let value = if mask & 0x01 != 0 {
-                r.variant_bool()?
-            } else {
-                None
-            };
+            let value = if mask & 0x01 != 0 { r.variant()? } else { None };
+            if let Some((t, _)) = value {
+                self.types.insert(node.clone(), t);
+            }
+            let value = value.map(|(_, v)| v);
             let code = if mask & 0x02 != 0 { r.u32()? } else { 0 };
             for (bit, len) in [(0x04, 8), (0x10, 2), (0x08, 8), (0x20, 2)] {
                 if mask & bit != 0 {
@@ -579,8 +596,21 @@ impl Session {
         Ok(out)
     }
 
-    /// Writes `on` to `node`'s value, as a Boolean.
-    pub fn write(&mut self, node: &NodeId, on: bool) -> Result<(), String> {
+    /// Writes `value` to `node`'s value: as a Boolean, or else as a number
+    /// in the node's own type — read once to learn it (an Int32 when it
+    /// holds nothing yet).
+    pub fn write(&mut self, node: &NodeId, value: i64, number: bool) -> Result<(), String> {
+        let t = if number {
+            match self.types.get(node) {
+                Some(t) => *t,
+                None => {
+                    let _ = self.read(std::slice::from_ref(node))?;
+                    *self.types.get(node).unwrap_or(&6)
+                }
+            }
+        } else {
+            1
+        };
         let mut body = Out::default();
         body.type_id(id::WRITE_REQUEST);
         let handle = self.next_request();
@@ -590,8 +620,17 @@ impl Session {
             .u32(VALUE)
             .string(None)
             .u8(0x01) // a data value with a value only
-            .u8(1) // Boolean
-            .u8(u8::from(on));
+            .u8(t);
+        match t {
+            1 => body.u8(u8::from(value != 0)),
+            2 | 3 => body.u8(value as u8),
+            4 | 5 => body.u16(value as u16),
+            6 | 7 => body.u32(value as u32),
+            8 | 9 => body.i64(value),
+            10 => body.u32((value as f32).to_bits()),
+            11 => body.f64(value as f64),
+            _ => return Err(format!("{node}: 숫자로 쓸 수 없는 형식입니다")),
+        };
         let reply = self.call(&body.0, id::WRITE_RESPONSE)?;
         let mut r = In::new(&reply);
         r.header()?;
@@ -776,7 +815,7 @@ mod tests {
             let got = s.read(&nodes).unwrap();
             println!("read {k}: {got:?} {:?}", t.elapsed());
             let t = std::time::Instant::now();
-            s.write(&nodes[1], k % 2 == 0).unwrap();
+            s.write(&nodes[1], i64::from(k % 2 == 0), false).unwrap();
             println!("write {k}: {:?}", t.elapsed());
         }
         s.close();

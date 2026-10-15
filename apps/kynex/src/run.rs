@@ -140,6 +140,11 @@ impl Runner {
         matches!(self.state, State::Done | State::Alarm(_))
     }
 
+    /// Whether it ran to its end, without an alarm.
+    pub fn finished(&self) -> bool {
+        matches!(self.state, State::Done)
+    }
+
     /// Moves the run on to `time` on the simulation's clock: as many steps
     /// as end by then. `scene` is the scene the cell is in; the robot's
     /// pose is held in `posing`. Returns whether the robot moved or the run
@@ -196,11 +201,24 @@ impl Runner {
                     self.next();
                 }
                 State::Waiting => {
-                    let Step::Do(Action::Wait { machine, signal }) = self.program.steps[self.step]
-                    else {
-                        unreachable!("waiting on a wait step");
+                    let there = match &self.program.steps[self.step] {
+                        Step::Do(Action::Wait { machine, signal }) => {
+                            cell.signal(scene, *machine, *signal)
+                        }
+                        Step::Do(Action::WaitSignal { name, value }) => {
+                            match cell.signal_value(name) {
+                                Some(v) => v == *value,
+                                None => {
+                                    self.state =
+                                        State::Alarm(format!("{name}: PLC 신호가 없습니다"));
+                                    changed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        _ => unreachable!("waiting on a wait step"),
                     };
-                    if !cell.signal(scene, machine, signal) {
+                    if !there {
                         break;
                     }
                     self.next();
@@ -288,7 +306,12 @@ impl Runner {
                 self.step += 1;
                 State::Begin
             }
-            Step::Do(Action::Wait { .. }) => State::Waiting,
+            Step::Do(Action::Wait { .. } | Action::WaitSignal { .. }) => State::Waiting,
+            Step::Do(Action::SetSignal { ref name, value }) => {
+                cell.set_signal(name, value)?;
+                self.step += 1;
+                State::Begin
+            }
             Step::Do(Action::Delay { seconds }) => State::Until(time + seconds),
             Step::Do(Action::Drive { amr, stop }) => {
                 cell.drive(scene, amr, stop)?;
@@ -472,6 +495,7 @@ impl Runner {
     fn waiting_for(&self) -> String {
         match self.program.steps.get(self.step) {
             Some(Step::Do(Action::Wait { signal, .. })) => signal_label(*signal).to_string(),
+            Some(Step::Do(Action::WaitSignal { name, value })) => format!("PLC {name} = {value}"),
             _ => String::new(),
         }
     }

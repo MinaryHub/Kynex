@@ -744,6 +744,7 @@ fn next_unit(state: &mut u64) -> f64 {
 }
 
 pub mod drl;
+pub mod fanuc;
 pub mod path;
 pub mod post;
 pub mod rapid;

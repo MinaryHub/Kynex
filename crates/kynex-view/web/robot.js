@@ -456,6 +456,7 @@ export class RobotPanel {
             <button class="text-btn quiet" data-act="export" data-vendor="ur" title="UR 컨트롤러용 URScript 파일로 내려받기">URScript</button>
             <button class="text-btn quiet" data-act="export" data-vendor="abb" title="ABB 컨트롤러용 RAPID 모듈로 내려받기">RAPID</button>
             <button class="text-btn quiet" data-act="export" data-vendor="doosan" title="두산 로보틱스 컨트롤러용 DRL 프로그램으로 내려받기">DRL</button>
+            <button class="text-btn quiet" data-act="export" data-vendor="fanuc" title="FANUC 컨트롤러용 TP 프로그램(LS)으로 내려받기">TP</button>
             <button class="text-btn quiet danger" data-act="clear">모두 지우기</button>
           </div>
         </div>`

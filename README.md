@@ -316,8 +316,8 @@ identity and by name. When Kreate builds the scene again and numbers the
 objects anew, the program finds them again by name.
 
 **URScript** downloads the program as a `.script` file for a Universal
-Robots controller, **RAPID** as a `.mod` module for an ABB one, and **DRL**
-as a `.drl` program for a Doosan Robotics one. Only the button for the
+Robots controller, **RAPID** as a `.mod` module for an ABB one, **DRL**
+as a `.drl` program for a Doosan Robotics one, and **TP** as an `.ls` file for a FANUC one. Only the button for the
 robot's own controller shows, when its description tells whose it is. The program is first made into one any vendor's
 controller can be given (`kynex_kin::post`: its moves, and between them
 outputs set or pulsed, inputs waited for, pauses, a pallet's count moved
@@ -402,6 +402,23 @@ by `Offs`. Names and comments are kept to ASCII; other letters become
   program names `KYNEX` with `set_tcp`, and gives its values at the top,
   to register on the teach pendant. I/O 0–15 are the controller's 1–16,
   16–17 the tool's 1–2.
+- **TP** (FANUC, `kynex_kin::fanuc`) downloads an `.ls` file, the TP
+  program's text form, for a controller with the ASCII program loader or
+  to be made into a TP file with FANUC's tools. Positions are in joint
+  form, exactly as taught, with J3 written from level as FANUC counts it
+  (the description's joint 3 less joint 2, the J2/J3 interaction); `J` at
+  a share of top speed, `L`/`C` in mm/sec; a blend is `CNT` with its
+  radius in mm as the value (CNT is no distance on a FANUC, so the corner
+  is only near it). The tool is user tool 1, set at the start from
+  `PR[49]`; positions are in the world frame (user frame 0, the `base`
+  link at J2's height). I/O 0–15 are `DO`/`DI[1–16]`, 16–17 the wrist's
+  `RO`/`RI[1–2]`. Pallets: places in `PR[51]`–`PR[100]`, counts in
+  `R[81]` on, `R[90]` and `PR[50]` scratch; a move on a pallet goes in
+  Cartesian form with its `CONFIG` worked out from the taught joints, by
+  `Offset,PR[50]`. Markers in `R[98]`/`R[99]`. A robot with a track is
+  refused; a positioner's turn is a remark. No free simulator runs TP, so
+  it is checked against a kept file (`crates/kynex-kin/src/fanuc/golden.ls`)
+  and has not run on a controller.
 - MoveJ becomes `movej` with the taught joint positions.
 - MoveL becomes `movel` to the taught tool pose, in the controller's base
   frame (the `base` link, half a turn from `base_link`).
@@ -421,7 +438,10 @@ thumbnails: each drawn from the piece at its usual size
   Robots의 `Universal_Robots_ROS2_Description` 기구학·관절 한계 값),
   ABB IRB 1600-10/1.45 + 이중 그리퍼, ABB IRB 1600 + 주행 트랙,
   Doosan M1013 + 이중 그리퍼(두산 `dsr_description2`의 관절·범위·속도.
-  에뮬레이터에서 영점 플랜지 `[0, 34.5, 1452.5]`와 대기 자세가 같음을 확인).
+  에뮬레이터에서 영점 플랜지 `[0, 34.5, 1452.5]`와 대기 자세가 같음을 확인),
+  FANUC LR Mate 200iD/7L + 이중 그리퍼(ROS-Industrial
+  `fanuc_lrmate200id_support`의 관절·범위·속도, 911 mm 도달. 영점에서
+  면판이 월드 좌표계(J2 높이)로부터 `[550, 0, 475]` mm임을 시험으로 확인).
   IRB 1600은 ROS-Industrial `abb_irb1600_support`의 관절 원점과 축,
   ABB 제품 사양서의 관절 범위와 최고 속도를 따릅니다. 관절값이 컨트롤러와
   같은 방향을 가리키고 `tool0`이 컨트롤러의 플랜지라서, 교정 자세의

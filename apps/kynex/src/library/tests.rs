@@ -855,3 +855,41 @@ fn a_tool_changed_says_which_roles_went_stale() {
     );
     assert!(roles.stale.is_empty());
 }
+
+/// The FANUC LR Mate 200iD/7L as ROS-Industrial describes it: FANUC's, its
+/// top speeds the datasheet's, and with its joints at zero its faceplate
+/// 550 mm out and 475 mm up from the world frame (at J2's height), facing
+/// out along X.
+#[test]
+fn the_fanuc_robot_is_as_its_description_has_it() {
+    let mut library = Library::default();
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "lrmate200id7l_tending"}),
+    );
+    let (doc, _) = shown(&mut library);
+    let robot = &kynex_model::robots(&doc)[0];
+    assert_eq!(robot.vendor(), Some("fanuc"));
+    let kin = Kinematics::of(&doc, robot.root).unwrap();
+    for (var, speed) in kin
+        .vars
+        .iter()
+        .zip([370.0, 310.0, 410.0, 550.0, 545.0, 1000.0])
+    {
+        assert!(
+            (var.velocity.to_degrees() - speed).abs() < 0.01,
+            "{}",
+            var.name
+        );
+    }
+    let uid = |n: &str| doc.object_uid(named(&doc, n)).unwrap().raw();
+    let q = [0.0; 6];
+    let base = kin.world_of(&q, uid("base")).unwrap();
+    let face = base.inverse() * kin.world_of(&q, uid("tool0")).unwrap();
+    assert!(
+        (face.translation - DVec3::new(0.55, 0.0, 0.475)).length() < 1e-6,
+        "{}",
+        face.translation
+    );
+    assert!((face.matrix3.z_axis - DVec3::X).length() < 1e-6);
+}

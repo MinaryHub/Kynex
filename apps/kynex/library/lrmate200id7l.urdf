@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<!-- FANUC LR Mate 200iD/7L, for machine tending; its tool is added by KYNEX.
+     Joint origins, axes, limits and top speeds as ROS-Industrial's
+     fanuc_lrmate200id_support (lrmate200id7l_macro.xacro) has them: base
+     is the controller's world frame, at axis 2's height, and tool0 its
+     faceplate (UT 0). Base to axis 2: 330 mm up, 50 mm out; upper arm
+     440 mm; forearm 35 mm up, 420 mm out; wrist to faceplate 80 mm: 911 mm
+     reach. Its joint 3 is the upper arm's to the forearm, as a description
+     has it; the controller's J3 is the forearm's from level (J2/J3
+     interaction), which the FANUC writer turns it into. Drawn in plain
+     shapes. -->
+<robot name="lrmate200id7l">
+  <material name="fanuc_yellow"><color rgba="0.96 0.78 0.05 1"/></material>
+  <material name="fanuc_grey"><color rgba="0.28 0.29 0.31 1"/></material>
+  <material name="fanuc_black"><color rgba="0.12 0.12 0.13 1"/></material>
+  <link name="base_link">
+    <visual><origin xyz="0 0 0.04"/><geometry><box size="0.22 0.22 0.08"/></geometry><material name="fanuc_grey"/></visual>
+    <visual><origin xyz="0 0 0.165"/><geometry><cylinder radius="0.085" length="0.17"/></geometry><material name="fanuc_grey"/></visual>
+  </link>
+  <joint name="base_link-base" type="fixed">
+    <parent link="base_link"/><child link="base"/>
+    <origin xyz="0 0 0.330"/>
+  </joint>
+  <link name="base"/>
+  <joint name="joint_1" type="revolute">
+    <parent link="base_link"/><child link="link_1"/>
+    <origin xyz="0 0 0.330"/><axis xyz="0 0 1"/>
+    <limit lower="-2.967060" upper="2.967060" effort="0" velocity="6.457718"/>
+  </joint>
+  <link name="link_1">
+    <visual><origin xyz="0 0 -0.04"/><geometry><cylinder radius="0.085" length="0.08"/></geometry><material name="fanuc_yellow"/></visual>
+    <visual><origin xyz="0.05 0 0" rpy="1.570796327 0 0"/><geometry><cylinder radius="0.07" length="0.19"/></geometry><material name="fanuc_yellow"/></visual>
+  </link>
+  <joint name="joint_2" type="revolute">
+    <parent link="link_1"/><child link="link_2"/>
+    <origin xyz="0.050 0 0"/><axis xyz="0 1 0"/>
+    <limit lower="-1.745329" upper="2.530727" effort="0" velocity="5.410521"/>
+  </joint>
+  <link name="link_2">
+    <visual><origin xyz="0 0 0.205"/><geometry><box size="0.09 0.1 0.39"/></geometry><material name="fanuc_yellow"/></visual>
+  </link>
+  <joint name="joint_3" type="revolute">
+    <parent link="link_2"/><child link="link_3"/>
+    <origin xyz="0 0 0.440"/><axis xyz="0 -1 0"/>
+    <limit lower="-1.221730" upper="3.717551" effort="0" velocity="7.155850"/>
+  </joint>
+  <link name="link_3">
+    <visual><origin rpy="1.570796327 0 0"/><geometry><cylinder radius="0.06" length="0.16"/></geometry><material name="fanuc_yellow"/></visual>
+    <visual><origin xyz="-0.03 0 0.02"/><geometry><box size="0.12 0.11 0.1"/></geometry><material name="fanuc_yellow"/></visual>
+  </link>
+  <joint name="joint_4" type="revolute">
+    <parent link="link_3"/><child link="link_4"/>
+    <origin xyz="0 0 0.035"/><axis xyz="-1 0 0"/>
+    <limit lower="-3.316126" upper="3.316126" effort="0" velocity="9.599311"/>
+  </joint>
+  <link name="link_4">
+    <visual><origin xyz="0.225 0 0" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.045" length="0.31"/></geometry><material name="fanuc_yellow"/></visual>
+  </link>
+  <joint name="joint_5" type="revolute">
+    <parent link="link_4"/><child link="link_5"/>
+    <origin xyz="0.420 0 0"/><axis xyz="0 -1 0"/>
+    <limit lower="-2.181662" upper="2.181662" effort="0" velocity="9.512044"/>
+  </joint>
+  <link name="link_5">
+    <visual><origin rpy="1.570796327 0 0"/><geometry><cylinder radius="0.04" length="0.1"/></geometry><material name="fanuc_yellow"/></visual>
+  </link>
+  <joint name="joint_6" type="revolute">
+    <parent link="link_5"/><child link="link_6"/>
+    <origin xyz="0.080 0 0"/><axis xyz="-1 0 0"/>
+    <limit lower="-6.283185" upper="6.283185" effort="0" velocity="17.453293"/>
+  </joint>
+  <link name="link_6">
+    <visual><origin xyz="-0.01 0 0" rpy="0 1.570796327 0"/><geometry><cylinder radius="0.032" length="0.02"/></geometry><material name="fanuc_black"/></visual>
+  </link>
+  <joint name="link_6-flange" type="fixed">
+    <parent link="link_6"/><child link="flange"/>
+  </joint>
+  <link name="flange"/>
+  <joint name="flange-tool0" type="fixed">
+    <parent link="flange"/><child link="tool0"/>
+    <origin rpy="3.141592654 -1.570796327 0"/>
+  </joint>
+  <link name="tool0"/>
+</robot>

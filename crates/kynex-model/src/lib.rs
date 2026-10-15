@@ -114,7 +114,8 @@ impl Robot {
     /// `"ur"` for Universal Robots (`ur_description` names its first joint
     /// `shoulder_pan_joint`), `"abb"` for ABB (an IRB, by its name),
     /// `"doosan"` for Doosan Robotics (by its name, or a model's: M1013,
-    /// H2017, A0912 and the like). `None` when it does not say.
+    /// H2017, A0912 and the like), `"fanuc"` for FANUC (by its name, or an
+    /// LR Mate's). `None` when it does not say.
     pub fn vendor(&self) -> Option<&'static str> {
         let name = self.name.to_lowercase();
         if self.joints.iter().any(|j| j.name == "shoulder_pan_joint") {
@@ -123,6 +124,8 @@ impl Robot {
             Some("abb")
         } else if name.contains("doosan") || doosan_model(&name) {
             Some("doosan")
+        } else if name.contains("fanuc") || name.replace(' ', "").contains("lrmate") {
+            Some("fanuc")
         } else {
             None
         }

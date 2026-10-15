@@ -135,6 +135,12 @@ pub const TEMPLATES: &[Template] = &[
         params: &[tool(2)],
     },
     Template {
+        key: "lrmate200id7l_tending",
+        name: "FANUC LR Mate 200iD/7L + 이중 그리퍼",
+        group: "로봇",
+        params: &[tool(2)],
+    },
+    Template {
         key: "cnc_lathe",
         name: "CNC 선반",
         group: "공작기계",
@@ -1314,8 +1320,14 @@ fn build(item: &Item) -> Result<Built, String> {
     let mut roles = Vec::new();
     let mut root_link = None;
     match item.template.as_str() {
-        "ur10e_tending" | "ur5e" | "ur3e" | "ur16e" | "irb1600_tending" | "irb1600_track"
-        | "m1013_tending" => {
+        "ur10e_tending"
+        | "ur5e"
+        | "ur3e"
+        | "ur16e"
+        | "irb1600_tending"
+        | "irb1600_track"
+        | "m1013_tending"
+        | "lrmate200id7l_tending" => {
             // Each at rest, the tool down: the pose a tending robot waits in.
             let (urdf, rest): (&str, &[(&str, f64)]) = match item.template.as_str() {
                 "ur5e" => (include_str!("../library/ur5e.urdf"), UR_REST),
@@ -1336,6 +1348,11 @@ fn build(item: &Item) -> Result<Built, String> {
                         ("joint_3", std::f64::consts::FRAC_PI_2),
                         ("joint_5", std::f64::consts::FRAC_PI_2),
                     ],
+                ),
+                // FANUC's: the forearm level, the faceplate down.
+                "lrmate200id7l_tending" => (
+                    include_str!("../library/lrmate200id7l.urdf"),
+                    &[("joint_5", -std::f64::consts::FRAC_PI_2)],
                 ),
                 _ => (include_str!("../library/ur10e_tending.urdf"), UR_REST),
             };

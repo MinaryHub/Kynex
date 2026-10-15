@@ -653,6 +653,7 @@ impl Posing {
                 None | Some("ur") => &kynex_kin::urscript::Ur,
                 Some("abb") => &kynex_kin::rapid::Abb,
                 Some("doosan") => &kynex_kin::drl::Doosan,
+                Some("fanuc") => &kynex_kin::fanuc::Fanuc,
                 Some(other) => return Err(format!("no writer for {other}")),
             };
             let program = programs.active().expect("a program worked on");

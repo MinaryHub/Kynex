@@ -41,7 +41,7 @@ function cameraFor(box, view, aspect) {
 }
 
 const mm = (v) => (v * 1000).toFixed(0);
-const VENDOR = { ur: 'Universal Robots', abb: 'ABB', doosan: 'Doosan Robotics' };
+const VENDOR = { ur: 'Universal Robots', abb: 'ABB', doosan: 'Doosan Robotics', fanuc: 'FANUC' };
 const deg = (v) => ((v * 180) / Math.PI).toFixed(1);
 
 // Opens the report in a window of its own. `ctx` has the renderer, the

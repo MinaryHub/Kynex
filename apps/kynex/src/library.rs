@@ -440,6 +440,8 @@ pub struct Item {
     /// on a wall or upside down under a gantry. Mostly none.
     pub roll: f64,
     pub pitch: f64,
+    /// Kept where it is: not moved, sized or removed until unlocked.
+    pub locked: bool,
 }
 
 impl Item {
@@ -656,6 +658,8 @@ pub struct RoleChanges {
     /// Equipment copied: each role's object in the original and in the
     /// copy, for the copy's roles to take the original's settings.
     pub copied: Vec<(u64, u64)>,
+    /// Roles whose equipment was named anew: each object and its name now.
+    pub renamed: Vec<(u64, String)>,
 }
 
 /// The placed equipment.
@@ -718,6 +722,7 @@ impl Library {
                 yaw: v["yaw"].as_f64().unwrap_or(0.0),
                 roll: v["roll"].as_f64().unwrap_or(0.0),
                 pitch: v["pitch"].as_f64().unwrap_or(0.0),
+                locked: v["locked"] == true,
             });
             library.next = library.next.max(id);
         }
@@ -748,6 +753,7 @@ impl Library {
                     "yaw": i.yaw,
                     "roll": i.roll,
                     "pitch": i.pitch,
+                    "locked": i.locked,
                 })
             }))
             .collect()
@@ -820,6 +826,7 @@ impl Library {
                 yaw: req["yaw"].as_f64().unwrap_or(0.0),
                 roll: 0.0,
                 pitch: 0.0,
+                locked: false,
             };
             let mut item = item;
             let snapped = if req["snap"] == true {
@@ -838,11 +845,33 @@ impl Library {
         // Items placed again beside themselves, `offset` along: of the same
         // template, size and turn. Their cell roles' settings go with them
         // (`roles.copied`); their wiring does not.
+        // Or each copy where `copies` puts it: `{item, at, yaw}`, an item
+        // copied as often as it is listed — an array, a mirrored copy.
         if op == "duplicate" {
+            let placed: Vec<(u64, Option<(DVec3, Option<f64>)>)> = match req["copies"].as_array() {
+                Some(copies) => {
+                    if copies.is_empty() || copies.len() > MOST_AT_ONCE {
+                        return Err(format!("복사본은 1–{MOST_AT_ONCE}개입니다"));
+                    }
+                    copies
+                        .iter()
+                        .map(|c| {
+                            let id = c["item"].as_u64().ok_or("no item")?;
+                            let at = point(&c["at"])
+                                .filter(|p| p.is_finite() && p.abs().max_element() < 1e4)
+                                .ok_or("no at")?;
+                            Ok((id, Some((at, c["yaw"].as_f64().filter(|y| y.is_finite())))))
+                        })
+                        .collect::<Result<_, String>>()?
+                }
+                None => ids(&req["items"])?
+                    .into_iter()
+                    .map(|id| (id, None))
+                    .collect(),
+            };
             let offset = point(&req["offset"]).unwrap_or(DVec3::new(0.5, 0.5, 0.0));
-            let ids = ids(&req["items"])?;
             let mut made = Vec::new();
-            for id in ids {
+            for (id, place) in placed {
                 let from = self
                     .items
                     .iter()
@@ -852,11 +881,17 @@ impl Library {
                 let named = self
                     .template_name(&from.template)
                     .ok_or("no such template")?;
+                let (at, yaw) = match place {
+                    Some((at, yaw)) => (at, yaw.unwrap_or(from.yaw)),
+                    None => (from.at + offset, from.yaw),
+                };
                 self.next += 1;
                 let item = Item {
                     id: self.next,
                     name: self.free_name(&named),
-                    at: from.at + offset,
+                    at,
+                    yaw,
+                    locked: false,
                     ..from.clone()
                 };
                 let built = self.build(&item)?;
@@ -889,6 +924,9 @@ impl Library {
             for m in moves {
                 let id = m["item"].as_u64().ok_or("no item")?;
                 let item = next.iter_mut().find(|i| i.id == id).ok_or("no such item")?;
+                if item.locked {
+                    return Err(format!("{}은(는) 잠겨 있습니다", item.name));
+                }
                 item.at = point(&m["at"]).ok_or("no at")?;
                 if let Some(yaw) = m["yaw"].as_f64() {
                     item.yaw = yaw;
@@ -905,6 +943,9 @@ impl Library {
             if ids.iter().any(|id| !self.items.iter().any(|i| i.id == *id)) {
                 return Err("no such item".into());
             }
+            if let Some(i) = self.items.iter().find(|i| i.locked && ids.contains(&i.id)) {
+                return Err(format!("{}은(는) 잠겨 있습니다", i.name));
+            }
             for id in ids {
                 let at = self.items.iter().position(|i| i.id == id).expect("checked");
                 let item = self.items.remove(at);
@@ -913,6 +954,45 @@ impl Library {
                     roles.removed.extend(gone.iter().copied());
                     self.removed.extend(gone);
                 }
+            }
+            self.items_changed = true;
+            return Ok(json!({ "ok": true }));
+        }
+        // Items kept where they are, or let go again.
+        if op == "lock" {
+            let ids = ids(&req["items"])?;
+            let locked = req["locked"].as_bool().ok_or("locked is true or false")?;
+            if ids.iter().any(|id| !self.items.iter().any(|i| i.id == *id)) {
+                return Err("no such item".into());
+            }
+            for item in self.items.iter_mut().filter(|i| ids.contains(&i.id)) {
+                item.locked = locked;
+            }
+            self.items_changed = true;
+            return Ok(json!({ "ok": true }));
+        }
+        // An item named anew: a name no other item has. Its roles take it.
+        if op == "rename" {
+            let id = req["item"].as_u64().ok_or("no item")?;
+            let name = req["name"].as_str().map(str::trim).unwrap_or("");
+            if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+                return Err("이름은 1–60자입니다".into());
+            }
+            if self.items.iter().any(|i| i.id != id && i.name == name) {
+                return Err("같은 이름의 장비가 있습니다".into());
+            }
+            let item = self
+                .items
+                .iter_mut()
+                .find(|i| i.id == id)
+                .ok_or("no such item")?;
+            item.name = name.to_string();
+            let item = item.clone();
+            if let Some((_, built)) = self.built.get(&item.id) {
+                roles.renamed = role_uids(&item, built)
+                    .into_iter()
+                    .map(|(uid, name, _)| (uid, name))
+                    .collect();
             }
             self.items_changed = true;
             return Ok(json!({ "ok": true }));
@@ -939,6 +1019,10 @@ impl Library {
             .iter()
             .position(|i| i.id == id)
             .ok_or("no such item")?;
+        // Locked: kept where it is, as it is.
+        if self.items[at].locked {
+            return Err(format!("{}은(는) 잠겨 있습니다", self.items[at].name));
+        }
         match op {
             "move" => {
                 let mut item = self.items[at].clone();
@@ -1112,6 +1196,7 @@ impl Library {
                     yaw: 0.0,
                     roll: 0.0,
                     pitch: 0.0,
+                    locked: false,
                 };
                 if let Ok(built) = build(&item) {
                     out.insert(t.key.to_string(), triangles(&built.doc));
@@ -1230,6 +1315,7 @@ impl Library {
                 "yaw": i.yaw,
                 "roll": i.roll,
                 "pitch": i.pitch,
+                "locked": i.locked,
             })).collect::<Vec<_>>(),
         })
         .to_string()
@@ -2236,7 +2322,15 @@ fn fence(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
 pub fn is_op(op: &str) -> bool {
     matches!(
         op,
-        "place" | "move" | "move_many" | "duplicate" | "resize" | "remove" | "delete_custom"
+        "place"
+            | "move"
+            | "move_many"
+            | "duplicate"
+            | "resize"
+            | "remove"
+            | "delete_custom"
+            | "lock"
+            | "rename"
     )
 }
 

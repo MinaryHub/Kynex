@@ -1038,6 +1038,15 @@ impl Cell {
     }
 
     /// Sets the settings `v` names on object `object`'s role.
+    /// Object `object`'s role under its new name (its equipment renamed).
+    pub fn rename(&mut self, object: u64, name: &str) {
+        if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {
+            c.name = name.to_string();
+            self.changed = true;
+            self.roles_changed = true;
+        }
+    }
+
     pub fn set_props(&mut self, object: u64, v: &Value) {
         if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {
             c.props.update(v);

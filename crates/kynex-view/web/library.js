@@ -96,6 +96,13 @@ export class LibraryPanel {
     this.handle.setSpace('world');
     this.helper = this.handle.getHelper();
     this.handleItem = null;
+    // Items hidden on this page alone, by id (and the name they had, so a
+    // project opened anew does not hide its own by chance).
+    this.hidden = new Map();
+    // The array and mirror numbers as last typed, and whether that part is
+    // open.
+    this.arrayVals = {};
+    this.arrayOpen = false;
     // The handle's grid and angle steps, as last chosen in this browser.
     this.snap = { grid: 0, angle: 0 };
     try {
@@ -168,11 +175,35 @@ export class LibraryPanel {
       this.placeAt(key, e.clientX, e.clientY);
     });
     this.box.addEventListener('change', (e) => this.edited(e));
+    this.box.addEventListener('toggle', (e) => {
+      if (e.target.classList?.contains('insp-array')) this.arrayOpen = e.target.open;
+    }, true);
     this.box.addEventListener('click', (e) => {
       const act = e.target.closest('[data-item-act]')?.dataset.itemAct;
       const item = this.selectedItem();
       if (!item) return;
-      if (act === 'remove') {
+      if (act === 'lock') {
+        const items = this.groupItems();
+        this.send({ op: 'lock', items: items.map((i) => i.id), locked: !item.locked }, () =>
+          this.ctx.toast(item.locked ? '잠금을 풀었습니다' : `장비 ${items.length}개를 잠갔습니다`),
+        );
+        if (!item.locked) this.showHandle(null);
+      } else if (act === 'hide') {
+        const hide = !this.hidden.has(item.id);
+        for (const i of this.groupItems()) {
+          if (hide) this.hidden.set(i.id, i.name);
+          else this.hidden.delete(i.id);
+          this.ctx.hideUnder(i.root, hide);
+        }
+        this.renderList();
+        this.showFor(this.ctx.selected());
+      } else if (act === 'array-line') {
+        this.arrayLine();
+      } else if (act === 'array-circle') {
+        this.arrayCircle();
+      } else if (act === 'mirror') {
+        this.mirror();
+      } else if (act === 'remove') {
         this.removeSelected();
       } else if (act === 'duplicate') {
         this.duplicate();
@@ -417,6 +448,23 @@ export class LibraryPanel {
   // The `library` event.
   setLibrary(library) {
     this.library = library;
+    // Hidden marks kept only for the same items: by id and name.
+    let stale = false;
+    for (const [id, name] of this.hidden) {
+      const item = library.items.find((i) => i.id === id);
+      if (!item || item.name !== name) {
+        this.hidden.delete(id);
+        stale = true;
+      }
+    }
+    // Shown again, all; then those still hidden hidden again.
+    if (stale) {
+      this.ctx.unhideAll();
+      for (const id of this.hidden.keys()) {
+        const item = library.items.find((i) => i.id === id);
+        if (item) this.ctx.hideUnder(item.root, true);
+      }
+    }
     this.renderList();
     if (this.handleItem != null && !this.itemById(this.handleItem)) this.showHandle(null);
     this.followHandle();
@@ -453,7 +501,8 @@ export class LibraryPanel {
     if (this.library.items.length) {
       html += '<li class="lib-group">배치된 장비</li>';
       for (const i of this.library.items) {
-        html += `<li class="lib-item" data-item="${i.id}">${escapeHtml(i.name)}</li>`;
+        const marks = `${i.locked ? '🔒 ' : ''}${this.hidden.has(i.id) ? '◌ ' : ''}`;
+        html += `<li class="lib-item${this.hidden.has(i.id) ? ' hidden-item' : ''}" data-item="${i.id}">${marks}${escapeHtml(i.name)}</li>`;
       }
     }
     this.list.innerHTML = html;
@@ -479,8 +528,13 @@ export class LibraryPanel {
       .join('');
     const [x, y, z] = item.at.map((v) => Math.round(v * 1000));
     const many = this.groupItems().length;
+    const lock = item.locked ? ' disabled' : '';
+    const hidden = this.hidden.has(item.id);
     this.box.innerHTML = `
-      <div class="insp-item-head"><span class="insp-kind">장비</span><span>${escapeHtml(item.name)}</span></div>
+      <div class="insp-item-head"><span class="insp-kind">장비</span><input class="insp-name" data-rename value="${escapeHtml(item.name)}" maxlength="60" spellcheck="false" title="이름 바꾸기 (프로그램은 이 이름으로 장비를 찾습니다)">
+        <button class="icon-mini${item.locked ? ' on' : ''}" data-item-act="lock" title="${item.locked ? '잠금 풀기' : '잠그기: 옮기거나 지울 수 없게'}">${item.locked ? '🔒' : '🔓'}</button>
+        <button class="icon-mini${hidden ? ' on' : ''}" data-item-act="hide" title="${hidden ? '다시 보이기' : '이 화면에서만 숨기기'}">${hidden ? '◌' : '◉'}</button></div>
+      <fieldset class="insp-lockable"${lock}>
       <div class="insp-props">
         <label class="insp-field">X<input type="number" class="num" data-at="0" value="${x}" step="10"><span>mm</span></label>
         <label class="insp-field">Y<input type="number" class="num" data-at="1" value="${y}" step="10"><span>mm</span></label>
@@ -511,12 +565,109 @@ export class LibraryPanel {
         <button class="text-btn quiet" data-item-act="duplicate" title="옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V">복제</button>
         <button class="text-btn quiet danger" data-item-act="remove" title="삭제 (Delete)">${many > 1 ? `${many}개 삭제` : '삭제'}</button>
       </div>
+      </fieldset>
+      <details class="insp-array"${this.arrayOpen ? ' open' : ''}>
+        <summary>배열·대칭 복사 <span class="muted">${many > 1 ? `선택한 ${many}개` : '이 장비'}</span></summary>
+        <div class="array-row"><span>직선</span>
+          <label>개수<input type="number" class="num" data-array="n" value="${this.arrayVals.n ?? 3}" min="2" max="50"></label>
+          <label>X<input type="number" class="num" data-array="dx" value="${this.arrayVals.dx ?? 2000}" step="100"></label>
+          <label>Y<input type="number" class="num" data-array="dy" value="${this.arrayVals.dy ?? 0}" step="100"></label><span class="muted">mm</span>
+          <button class="text-btn quiet" data-item-act="array-line">만들기</button></div>
+        <div class="array-row"><span>원형</span>
+          <label>개수<input type="number" class="num" data-array="m" value="${this.arrayVals.m ?? 4}" min="2" max="50"></label>
+          <label>중심 X<input type="number" class="num" data-array="cx" value="${this.arrayVals.cx ?? 0}" step="100"></label>
+          <label>Y<input type="number" class="num" data-array="cy" value="${this.arrayVals.cy ?? 0}" step="100"></label><span class="muted">mm</span>
+          <button class="text-btn quiet" data-item-act="array-circle">만들기</button></div>
+        <div class="array-row"><span>대칭</span>
+          <select data-array="axis"><option value="x">X 방향으로 (YZ면)</option><option value="y">Y 방향으로 (XZ면)</option></select>
+          <button class="text-btn quiet" data-item-act="mirror" title="선택한 장비 상자의 끝에 붙여, 위치와 방향을 거울처럼 뒤집은 복사본을 놓습니다. 장비 형상 자체는 뒤집지 않습니다">만들기</button></div>
+      </details>
       <div class="muted insp-hint">Ctrl·Shift+클릭: 장비 여러 개 선택</div>`;
+  }
+
+  // The array and mirror numbers as typed.
+  arrayValue(key) {
+    return Number(this.box.querySelector(`[data-array="${key}"]`)?.value);
+  }
+
+  // Copies of the selected equipment, each where `place(item, k)` puts it
+  // ({at, yaw}), for k = 1 … n-1: one edit.
+  placeCopies(n, place, said) {
+    const items = this.groupItems();
+    if (!items.length) return;
+    if (!(Number.isInteger(n) && n >= 2 && n <= 50)) return this.ctx.toast('개수는 2–50입니다');
+    const copies = [];
+    for (let k = 1; k < n; k++) for (const i of items) copies.push({ item: i.id, ...place(i, k) });
+    if (copies.length > 200) return this.ctx.toast('한 번에 200개까지 복사합니다');
+    this.send({ op: 'duplicate', copies }, (a) => {
+      this.ctx.toast(`${said}: 장비 ${a.made.length}개를 놓았습니다`);
+      this.selectWhenHere(a.made.map((m) => m.root));
+    });
+  }
+
+  arrayLine() {
+    const [dx, dy] = [this.arrayValue('dx') / 1000, this.arrayValue('dy') / 1000];
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return this.ctx.toast('간격을 넣으세요');
+    this.placeCopies(this.arrayValue('n'), (i, k) => ({ at: [i.at[0] + k * dx, i.at[1] + k * dy, i.at[2]], yaw: i.yaw }), '직선 배열');
+  }
+
+  // Round a centre, the whole turn shared out: each copy turned with it.
+  arrayCircle() {
+    const n = this.arrayValue('m');
+    const [cx, cy] = [this.arrayValue('cx') / 1000, this.arrayValue('cy') / 1000];
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+    this.placeCopies(
+      n,
+      (i, k) => {
+        const t = (2 * Math.PI * k) / n;
+        const [x, y] = [i.at[0] - cx, i.at[1] - cy];
+        return { at: [cx + x * Math.cos(t) - y * Math.sin(t), cy + x * Math.sin(t) + y * Math.cos(t), i.at[2]], yaw: i.yaw + t };
+      },
+      '원형 배열',
+    );
+  }
+
+  // Mirrored about the plane at the far side of the selection's boxes, so
+  // the copies stand beside: places and headings mirrored.
+  mirror() {
+    const items = this.groupItems();
+    if (!items.length) return;
+    const axis = this.box.querySelector('[data-array="axis"]')?.value === 'y' ? 1 : 0;
+    const key = axis ? 'y' : 'x';
+    let edge = -Infinity;
+    for (const i of items) {
+      const b = this.ctx.boxUnder(i.root);
+      if (b.isEmpty()) return this.ctx.toast('모양이 아직 없는 장비가 있습니다');
+      edge = Math.max(edge, b.max[key]);
+    }
+    this.placeCopies(
+      2,
+      (i) => {
+        const at = [...i.at];
+        at[axis] = 2 * edge - at[axis];
+        return { at, yaw: axis ? -i.yaw : Math.PI - i.yaw };
+      },
+      '대칭 복사',
+    );
   }
 
   edited(e) {
     const item = this.selectedItem();
     if (!item) return;
+    if (e.target.dataset.array !== undefined) {
+      this.arrayVals[e.target.dataset.array] = e.target.value;
+      return;
+    }
+    if (e.target.dataset.rename !== undefined) {
+      const name = e.target.value.trim();
+      if (name && name !== item.name) {
+        this.send({ op: 'rename', item: item.id, name }, () => this.ctx.toast(`이름을 "${name}"(으)로 바꿨습니다`));
+        // Still hidden under its new name.
+        if (this.hidden.has(item.id)) this.hidden.set(item.id, name);
+      }
+      else e.target.value = item.name;
+      return;
+    }
     if (e.target.dataset.align !== undefined) {
       const kind = e.target.value;
       e.target.value = '';

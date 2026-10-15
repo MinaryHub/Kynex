@@ -35,6 +35,7 @@ export class Batch {
     this.inst = new Map(); // object uid -> { id, mesh, level, shown, small, center, radius }
     this.owner = []; // instance id -> object uid
     this.base = new Map(); // object uid -> THREE.Color, before any highlight
+    this.hidden = new Set(); // object uids hidden on this page alone
     this.maxVerts = 0;
     this.maxIndices = 0;
     this.holes = 0; // vertices left behind by replaced geometry
@@ -155,7 +156,18 @@ export class Batch {
     this.base.set(uid, color.clone());
     this.mesh.setColorAt(it.id, color);
     it.shown = visible;
-    this.mesh.setVisibleAt(it.id, visible && !it.small);
+    this.mesh.setVisibleAt(it.id, visible && !it.small && !this.hidden.has(uid));
+  }
+
+  // Parts hidden from view on this page alone (the scene keeps them), or
+  // shown again.
+  hide(uids, hidden) {
+    for (const uid of uids) {
+      if (hidden) this.hidden.add(uid);
+      else this.hidden.delete(uid);
+      const it = this.inst.get(uid);
+      if (it) this.mesh.setVisibleAt(it.id, it.shown && !it.small && !this.hidden.has(uid));
+    }
   }
 
   move(uid, matrix) {
@@ -209,7 +221,7 @@ export class Batch {
       }
       if (small !== it.small) {
         it.small = small;
-        this.mesh.setVisibleAt(it.id, it.shown && !small);
+        this.mesh.setVisibleAt(it.id, it.shown && !small && !this.hidden.has(uid));
       }
     }
   }

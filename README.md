@@ -350,6 +350,17 @@ their boxes: to a side or the middle of the one selected, its floor
 height, one against the next along X or Y, or evenly spaced between the
 outermost two.
 
+**More of one.** The inspector's name is equipment's name, to change:
+programs find it by name, its cell role takes it, and no other item may
+have it. 🔓 locks the equipment selected (🔒 in the list): it is not
+moved, sized or removed until unlocked, and stays locked in the project.
+◉ hides it on this page alone (◌ in the list), until shown again.
+**배열·대칭 복사** copies the equipment selected along a line (count,
+spacing in X and Y), round a centre (count; each copy turned with it), or
+mirrored beside itself across the far side of its box in X or Y: places
+and headings mirrored, its shape not. Each is one edit. The measuring
+tool (M) takes a third point for the angle at the second.
+
 **Program steps.** A step clicked, and another Shift-clicked, picks the
 steps between. The bar under the add buttons then copies them (⧉,
 Ctrl+C while the program was last clicked in) and pastes what was copied

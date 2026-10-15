@@ -473,6 +473,9 @@ impl Stage {
                 for (from, to) in &roles.copied {
                     self.cell.copy_props(*from, *to);
                 }
+                for (uid, name) in &roles.renamed {
+                    self.cell.rename(*uid, name);
+                }
                 self.rebase(doc);
                 let after = self.base.as_ref().unwrap_or(doc);
                 self.cell.carry(&before, after);
@@ -1228,6 +1231,8 @@ fn edit_label(op: &str) -> &'static str {
         "place" => "장비 놓기",
         "move" | "move_many" => "장비 이동",
         "duplicate" => "장비 복제",
+        "lock" => "장비 잠금",
+        "rename" => "장비 이름",
         "resize" => "장비 크기·설정",
         "remove" => "장비 삭제",
         "save_custom" | "delete_custom" => "내 장비",

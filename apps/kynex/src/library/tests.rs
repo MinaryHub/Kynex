@@ -1080,3 +1080,89 @@ fn a_robot_hung_upside_down_reaches_below_it() {
     let got = kin.world_of(&found.positions, tip).unwrap().translation;
     assert!((got - goal.position).length() < 1e-3, "{got}");
 }
+
+/// Copies placed one by one (an array, a mirrored copy); an item locked
+/// stays put until let go; an item renamed, its role with it, and not to
+/// a name another has.
+#[test]
+fn copies_are_placed_items_locked_and_renamed() {
+    let mut library = Library::default();
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "cnc_lathe", "at": [1.0, 0.0, 0.0], "yaw": 0.3}),
+    );
+    let lathe = a["item"].as_u64().unwrap();
+    let (c, _) = ask(
+        &mut library,
+        json!({"op": "duplicate", "copies": [
+            {"item": lathe, "at": [3.0, 0.0, 0.0]},
+            {"item": lathe, "at": [-1.0, 0.0, 0.0], "yaw": 2.8},
+        ]}),
+    );
+    assert_eq!(c["made"].as_array().unwrap().len(), 2, "{c}");
+    let yaws: Vec<f64> = library.items().iter().map(|i| i.yaw).collect();
+    assert_eq!(yaws, vec![0.3, 0.3, 2.8]);
+    let (far, _) = ask(
+        &mut library,
+        json!({"op": "duplicate", "copies": [{"item": lathe, "at": [1e9, 0.0, 0.0]}]}),
+    );
+    assert_eq!(far["ok"], false);
+
+    let (l, _) = ask(
+        &mut library,
+        json!({"op": "lock", "items": [lathe], "locked": true}),
+    );
+    assert_eq!(l["ok"], true);
+    for req in [
+        json!({"op": "move", "item": lathe, "at": [0.0, 0.0, 0.0]}),
+        json!({"op": "resize", "item": lathe, "params": {"width": 2.0}}),
+        json!({"op": "remove", "item": lathe}),
+        json!({"op": "remove", "items": [lathe]}),
+        json!({"op": "move_many", "moves": [{"item": lathe, "at": [0.0, 0.0, 0.0]}]}),
+    ] {
+        let (refused, _) = ask(&mut library, req.clone());
+        assert_eq!(refused["ok"], false, "{req}");
+    }
+    assert!(
+        Library::from_saved(&library.to_saved()).items()[0].locked,
+        "kept locked"
+    );
+    ask(
+        &mut library,
+        json!({"op": "lock", "items": [lathe], "locked": false}),
+    );
+    let (moved, _) = ask(
+        &mut library,
+        json!({"op": "move", "item": lathe, "at": [0.0, 0.0, 0.0]}),
+    );
+    assert_eq!(moved["ok"], true);
+
+    let (r, roles) = ask(
+        &mut library,
+        json!({"op": "rename", "item": lathe, "name": "OP10 선반"}),
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    let root = library.items()[0].root_uid();
+    assert!(
+        roles.renamed.contains(&(root, "OP10 선반".to_string())),
+        "{:?}",
+        roles.renamed
+    );
+    let (doc, _) = shown(&mut library);
+    assert_eq!(
+        doc.object(doc.object_by_uid(Uid::from_raw(root)).unwrap())
+            .unwrap()
+            .name,
+        "OP10 선반"
+    );
+    let (taken, _) = ask(
+        &mut library,
+        json!({"op": "rename", "item": lathe, "name": "CNC 선반 2"}),
+    );
+    assert_eq!(taken["ok"], false);
+    let (empty, _) = ask(
+        &mut library,
+        json!({"op": "rename", "item": lathe, "name": "  "}),
+    );
+    assert_eq!(empty["ok"], false);
+}

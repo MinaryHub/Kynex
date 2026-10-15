@@ -681,6 +681,8 @@ const libraryPanel = new LibraryPanel({
   group: () => group,
   toggleGroup: (uid) => toggleGroup(uid),
   boxUnder: (root) => boxUnder(root),
+  hideUnder: (root, hidden) => hideUnder(root, hidden),
+  unhideAll: () => batch.hide([...batch.hidden], false),
   select,
   pick,
   toast,
@@ -873,6 +875,17 @@ const VIEWS = {
   right: new THREE.Vector3(1, 0, 0.0001),
 };
 
+// `root` and everything below it hidden on this page, or shown again.
+function hideUnder(root, hidden) {
+  const under = [];
+  for (const uid of records.keys()) {
+    let at = uid;
+    for (let n = 0; at != null && at !== root && n < 64; n++) at = records.get(at)?.parent;
+    if (at === root) under.push(uid);
+  }
+  batch.hide(under, hidden);
+}
+
 // The box about `root` and everything below it that has a shape.
 function boxUnder(root) {
   const box = new THREE.Box3();
@@ -952,8 +965,11 @@ function clearMeasure() {
   document.getElementById('measure').hidden = true;
 }
 
+// Measuring: two points give their distance; a third, the angle at the
+// second between the other two. A fourth starts again.
 function measureAt(point) {
-  if (measured.points.length === 2) clearMeasure();
+  if (measured.points.length === 3) clearMeasure();
+  if (measured.points.length === 2) return measureAngle(point);
   measured.points.push(point.clone());
   const dot = new THREE.Mesh(
     new THREE.SphereGeometry(0.008, 12, 8),
@@ -977,7 +993,28 @@ function measureAt(point) {
   measured.group.add(line);
   const d = b.clone().sub(a);
   const f = (v) => (v * 1000).toFixed(1);
-  out.textContent = `거리 ${f(d.length())} mm · ΔX ${f(d.x)} · ΔY ${f(d.y)} · ΔZ ${f(d.z)}`;
+  out.textContent = `거리 ${f(d.length())} mm · ΔX ${f(d.x)} · ΔY ${f(d.y)} · ΔZ ${f(d.z)} · 세 번째 점: 각도`;
+}
+
+function measureAngle(point) {
+  const [a, b] = measured.points;
+  measured.points.push(point.clone());
+  const color = new THREE.LineBasicMaterial({ color: 0x7fd4ff, depthTest: false });
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.008, 12, 8), new THREE.MeshBasicMaterial({ color: 0x7fd4ff, depthTest: false }));
+  dot.position.copy(point);
+  dot.renderOrder = 12;
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([b, point]), color);
+  line.renderOrder = 12;
+  measured.group.add(dot, line);
+  const [u, v] = [a.clone().sub(b), point.clone().sub(b)];
+  const out = document.getElementById('measure');
+  if (u.length() < 1e-9 || v.length() < 1e-9) {
+    out.textContent = '두 번째 점과 같은 점입니다';
+    return;
+  }
+  const angle = THREE.MathUtils.radToDeg(u.angleTo(v));
+  const f = (x) => (x * 1000).toFixed(1);
+  out.textContent = `각도 ${angle.toFixed(2)}° · 첫 선 ${f(u.length())} mm · 둘째 선 ${f(v.length())} mm`;
 }
 
 function setToggle(name, on) {

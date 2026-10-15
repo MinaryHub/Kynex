@@ -246,7 +246,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .plc-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
 .plc-fields label:nth-child(-n + 2) { grid-column: 1 / -1; }
 .plc-fields select { flex: 1; min-width: 0; }
-.plc-fields input[type="text"] { flex: 1; min-width: 0; }
+.plc-fields input[type="text"], .plc-fields input[type="password"] { flex: 1; min-width: 0; }
 .plc-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .plc-status.ok { color: #3ddc84; }
 .plc-status.bad { color: #ff7a6b; }
@@ -875,3 +875,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .plc-row .plc-value { font: 11px var(--mono); text-align: right; color: var(--muted, #9aa3ad); }
 .plc-row.head { font-size: 10px; color: var(--muted, #9aa3ad); }
 @media (max-width: 640px) { .plc-row { grid-template-columns: 1fr 1fr; } }
+.plc-certs { margin-top: 8px; font-size: 11px; display: grid; gap: 3px; word-break: break-all; }
+.plc-certs[hidden] { display: none; }
+.plc-certs .num { font-size: 10px; }

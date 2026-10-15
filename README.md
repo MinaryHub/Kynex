@@ -671,10 +671,19 @@ or **OPC UA**:
   a command's address (each takes it); a state's address shared by two is
   on only when both say so, and is warned of. A command the machine
   cannot take (a door while machining) is shown beside the link's state.
-- OPC UA: KYNEX's own client (`apps/kynex/src/plc/opcua.rs`), with no
-  message security (the `None` policy) and an anonymous user — a PLC's
-  server set up to allow that, as for commissioning on a bench. Signed or
-  encrypted channels and user names are not made.
+- OPC UA: KYNEX's own client (`apps/kynex/src/plc/opcua.rs`). **보안**:
+  none (the `None` policy), or Basic256Sha256 signed, or signed and
+  encrypted (`plc/secure.rs`, on the RustCrypto crates: RSA-OAEP and RSA
+  PKCS #1 v1.5 for opening the channel, AES-256-CBC and HMAC-SHA256 for its
+  messages, P_SHA256 between). KYNEX makes its own application
+  certificate the first time it needs one (RSA-2048, application URI
+  `urn:kynex:client`) and keeps it with its key in `%APPDATA%/kynex/pki`;
+  the panel shows its thumbprint, for the PLC's administrator to trust.
+  The server's certificate is trusted on first use: its thumbprint is
+  kept in the project, a server with another refused, and **다시 믿기**
+  forgets it. **사용자** and **비밀번호** log in as a user (anonymous when
+  empty); the password, encrypted for the server as its policy says, is
+  held in memory only, never saved.
 - **신호** in the PLC panel: signals besides the machines', each a name,
   a direction (PLC → KYNEX, or KYNEX → PLC), a bit or a number, an
   address (over Modbus a bit is a coil, a number a holding register,
@@ -712,7 +721,14 @@ target/plc/venv38/Scripts/python -m pip install --upgrade pip
 target/plc/venv38/Scripts/python -m pip install --only-binary=:all: asyncua
 cargo run -p kynex -- view --empty --port 8098 --project target/plc/kynex-project-ua.json
 target/plc/venv38/Scripts/python tools/plc/check.py --protocol opcua --kynex http://127.0.0.1:8098 --cycles 3
+target/plc/venv38/Scripts/python tools/plc/check.py --protocol opcua --kynex http://127.0.0.1:8098 --security encrypt --user kynex --password secret
 ```
+
+Over a Basic256Sha256 channel, signed and encrypted, logged in as a user,
+the same program ran two cycles within 0.125 s of the lathe's times;
+signed only, within 0.11 s. With the server's certificate replaced KYNEX
+refused it, saying both thumbprints; with a wrong password the server's
+`BadUserAccessDenied` showed in the panel.
 
 Every step took the lathe's own time to within 0.13 s over either (3 s
 doors, 1 s chuck), the rest being the 50 ms exchange and the program's

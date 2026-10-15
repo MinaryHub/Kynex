@@ -12,6 +12,10 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::secure::{
+    Identity, Keys, Peer, APPLICATION_URI, BASIC256SHA256, PASSWORD_ALGORITHM, SIGNATURE_ALGORITHM,
+};
+
 /// The security policy of a channel with none.
 const POLICY_NONE: &str = "http://opcfoundation.org/UA/SecurityPolicy#None";
 
@@ -24,6 +28,10 @@ mod id {
     pub const ACTIVATE_SESSION_REQUEST: u32 = 467;
     pub const ACTIVATE_SESSION_RESPONSE: u32 = 470;
     pub const CLOSE_SESSION_REQUEST: u32 = 473;
+    pub const CLOSE_CHANNEL_REQUEST: u32 = 452;
+    pub const GET_ENDPOINTS_REQUEST: u32 = 428;
+    pub const GET_ENDPOINTS_RESPONSE: u32 = 431;
+    pub const USER_NAME_IDENTITY_TOKEN: u32 = 324;
     pub const READ_REQUEST: u32 = 631;
     pub const READ_RESPONSE: u32 = 634;
     pub const WRITE_REQUEST: u32 = 673;
@@ -320,6 +328,40 @@ impl<'a> In<'a> {
         }
         Ok(())
     }
+    /// An EndpointDescription.
+    fn endpoint(&mut self) -> Result<Endpoint, String> {
+        self.string()?; // its url
+                        // The server's ApplicationDescription.
+        self.string()?;
+        self.string()?;
+        self.localized()?;
+        self.u32()?;
+        self.string()?;
+        self.string()?;
+        for _ in 0..self.count()? {
+            self.string()?;
+        }
+        let certificate = self.bytes()?.unwrap_or_default().to_vec();
+        let mode = self.u32()?;
+        let policy = self.string()?.unwrap_or_default();
+        let mut tokens = Vec::new();
+        for _ in 0..self.count()? {
+            let id = self.string()?.unwrap_or_default();
+            let kind = self.u32()?;
+            self.string()?; // issued token type
+            self.string()?; // issuer endpoint
+            let policy = self.string()?.unwrap_or_default();
+            tokens.push((id, kind, policy));
+        }
+        self.string()?; // transport profile
+        self.u8()?; // security level
+        Ok(Endpoint {
+            certificate,
+            mode,
+            policy,
+            tokens,
+        })
+    }
     /// A Variant holding a Boolean or a number: its type, and its value
     /// as a whole number (a Boolean 0 or 1, a real rounded).
     fn variant(&mut self) -> Result<Option<(u8, i64)>, String> {
@@ -373,6 +415,78 @@ fn status(code: u32) -> String {
 
 // --- the connection -------------------------------------------------------------
 
+/// How a channel's messages are kept: not at all, signed, or signed and
+/// encrypted (Basic256Sha256).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    None,
+    Sign,
+    SignAndEncrypt,
+}
+
+impl Mode {
+    /// MessageSecurityMode, as the protocol numbers it.
+    pub fn code(self) -> u32 {
+        match self {
+            Mode::None => 1,
+            Mode::Sign => 2,
+            Mode::SignAndEncrypt => 3,
+        }
+    }
+
+    /// The policy KYNEX uses for it.
+    pub fn policy(self) -> &'static str {
+        match self {
+            Mode::None => POLICY_NONE,
+            _ => BASIC256SHA256,
+        }
+    }
+}
+
+/// An endpoint a server offers: its certificate, how its messages
+/// are kept, and the users it takes.
+#[derive(Clone, Debug)]
+pub struct Endpoint {
+    pub certificate: Vec<u8>,
+    pub mode: u32,
+    pub policy: String,
+    /// Its user tokens: policy id, kind (0 anonymous, 1 user name), and the
+    /// policy a password is encrypted with ("" for the endpoint's).
+    pub tokens: Vec<(String, u32, String)>,
+}
+
+/// How to connect: the channel's keeping, KYNEX's identity and the
+/// server's certificate when it is kept, and a user, if not anonymous.
+pub struct Options {
+    pub mode: Mode,
+    pub identity: Option<Identity>,
+    pub server: Option<Peer>,
+    pub user: Option<(String, String)>,
+}
+
+impl Options {
+    pub fn anonymous() -> Self {
+        Self {
+            mode: Mode::None,
+            identity: None,
+            server: None,
+            user: None,
+        }
+    }
+}
+
+/// A secure channel's parties and keys.
+struct Channel {
+    mode: Mode,
+    identity: Identity,
+    server: Peer,
+    client_nonce: [u8; 32],
+    /// The client's keys, for what KYNEX sends; the server's, for what it
+    /// receives.
+    client: Option<Keys>,
+    server_keys: Option<Keys>,
+}
+
 /// A session on a server: its channel, and the token its requests carry.
 pub struct Session {
     stream: TcpStream,
@@ -381,27 +495,99 @@ pub struct Session {
     sequence: u32,
     request: u32,
     auth: NodeId,
+    secure: Option<Channel>,
     /// Each node's value type, as last read (OPC 10000-6 built-in type ids).
     types: std::collections::HashMap<NodeId, u8>,
 }
 
 impl Session {
-    /// Connects to the server at `stream`'s other end, as `url` names it:
-    /// a channel with no security, a session, an anonymous user.
-    pub fn open(stream: TcpStream, url: &str) -> Result<Self, String> {
-        let mut s = Self {
+    fn new(stream: TcpStream) -> Self {
+        Self {
             stream,
             channel: 0,
             token_id: 0,
             sequence: 0,
             request: 0,
             auth: NodeId::Numeric(0, 0),
+            secure: None,
             types: Default::default(),
-        };
+        }
+    }
+
+    /// The endpoints the server at `stream`'s other end offers, asked on a
+    /// channel with no security, which is then closed.
+    pub fn endpoints(stream: TcpStream, url: &str) -> Result<Vec<Endpoint>, String> {
+        let mut s = Self::new(stream);
         s.hello(url)?;
         s.open_channel()?;
-        let policy = s.create_session(url)?;
-        s.activate_session(&policy)?;
+        let mut body = Out::default();
+        body.type_id(id::GET_ENDPOINTS_REQUEST);
+        let handle = s.next_request();
+        body.header(&NodeId::Numeric(0, 0), handle)
+            .string(Some(url))
+            .i32(-1) // locales
+            .i32(-1); // profiles
+        let reply = s.call(&body.0, id::GET_ENDPOINTS_RESPONSE)?;
+        let mut r = In::new(&reply);
+        r.header()?;
+        let mut out = Vec::new();
+        for _ in 0..r.count()? {
+            out.push(r.endpoint()?);
+        }
+        s.close_channel();
+        Ok(out)
+    }
+
+    /// Connects to the server at `stream`'s other end, as `url` names it:
+    /// a channel kept as `options` say, a session, a user.
+    pub fn open(stream: TcpStream, url: &str, options: Options) -> Result<Self, String> {
+        let mut s = Self::new(stream);
+        if options.mode != Mode::None {
+            let (Some(identity), Some(server)) = (options.identity, options.server) else {
+                return Err("OPC UA: 보안 채널에는 인증서가 있어야 합니다".into());
+            };
+            s.secure = Some(Channel {
+                mode: options.mode,
+                identity,
+                server,
+                client_nonce: super::secure::nonce(),
+                client: None,
+                server_keys: None,
+            });
+        }
+        s.hello(url)?;
+        s.open_channel()?;
+        let (endpoints, server_nonce, server_cert) = s.create_session(url)?;
+        // The user token the server takes, on an endpoint kept as this
+        // channel is.
+        let mode = options.mode;
+        let kind = if options.user.is_some() { 1 } else { 0 };
+        let (endpoint_policy, token) = endpoints
+            .iter()
+            .filter(|e| e.mode == mode.code() && e.policy == mode.policy())
+            .find_map(|e| {
+                e.tokens
+                    .iter()
+                    .find(|t| t.1 == kind)
+                    .map(|t| (e.policy.clone(), t.clone()))
+            })
+            .ok_or_else(|| {
+                format!(
+                    "OPC UA: 서버에 이 보안 방식으로 {} 접속하는 엔드포인트가 없습니다",
+                    if kind == 1 {
+                        "사용자 이름으로"
+                    } else {
+                        "익명으로"
+                    }
+                )
+            })?;
+        s.activate_session(
+            &token,
+            &endpoint_policy,
+            options.user,
+            &server_nonce,
+            &server_cert,
+        )?;
         Ok(s)
     }
 
@@ -413,8 +599,8 @@ impl Session {
             .u32(MAX_MESSAGE)
             .u32(MAX_CHUNKS)
             .string(Some(url));
-        self.send(b"HEL", &body.0)?;
-        let (kind, _) = self.receive()?;
+        self.write_message(b"HEL", &body.0)?;
+        let (kind, _) = self.read_raw()?;
         match &kind {
             b"ACK" => Ok(()),
             _ => Err(format!(
@@ -425,48 +611,60 @@ impl Session {
     }
 
     fn open_channel(&mut self) -> Result<(), String> {
-        let mut body = Out::default();
-        body.u32(0) // no channel yet
-            .string(Some(POLICY_NONE))
-            .i32(-1) // no certificate
-            .i32(-1); // no thumbprint
-        self.sequence_header(&mut body);
-        body.type_id(id::OPEN_REQUEST);
         let handle = self.next_request();
+        let mut body = Out::default();
+        body.type_id(id::OPEN_REQUEST);
         body.header(&NodeId::Numeric(0, 0), handle)
             .u32(0) // client protocol version
-            .u32(0) // issue
-            .u32(1) // security mode None
-            .i32(-1) // no nonce
-            .u32(3_600_000); // lifetime, ms
-        self.send(b"OPN", &body.0)?;
-        let (kind, reply) = self.receive()?;
+            .u32(0); // issue
+        match &self.secure {
+            Some(c) => {
+                body.u32(c.mode.code());
+                body.i32(32);
+                body.0.extend(c.client_nonce);
+            }
+            None => {
+                body.u32(Mode::None.code()).i32(-1);
+            }
+        }
+        body.u32(3_600_000); // lifetime, ms
+        self.sequence += 1;
+        let (sequence, request) = (self.sequence, self.request);
+        let message = self.seal_asymmetric(&body.0, sequence, request)?;
+        self.stream.write_all(&message).map_err(|e| e.to_string())?;
+        let (kind, reply) = self.read_raw()?;
         if &kind != b"OPN" {
             return Err(self.error_of(&kind, &reply, "OpenSecureChannel"));
         }
-        let mut r = In::new(&reply);
-        self.channel = r.u32()?;
-        r.string()?; // policy
-        r.bytes()?; // certificate
-        r.bytes()?; // thumbprint
-        r.skip(8)?; // sequence header
+        let body = self.unseal_asymmetric(&reply)?;
+        let mut r = In::new(&body);
         expect(&mut r, id::OPEN_RESPONSE)?;
         r.header()?;
         r.u32()?; // server protocol version
         r.u32()?; // the token's channel
         self.token_id = r.u32()?;
+        r.skip(8)?; // created at
+        r.u32()?; // revised lifetime
+        let server_nonce = r.bytes()?.unwrap_or_default().to_vec();
+        if let Some(c) = self.secure.as_mut() {
+            if server_nonce.len() != 32 {
+                return Err("OPC UA: 서버 nonce가 32바이트가 아닙니다".into());
+            }
+            c.client = Some(Keys::derive(&server_nonce, &c.client_nonce));
+            c.server_keys = Some(Keys::derive(&c.client_nonce, &server_nonce));
+        }
         Ok(())
     }
 
-    /// Creates a session; returns the policy id of the server's anonymous
-    /// user token on a channel with no security.
-    fn create_session(&mut self, url: &str) -> Result<String, String> {
+    /// Creates a session; returns the server's endpoints, its nonce and
+    /// its certificate.
+    fn create_session(&mut self, url: &str) -> Result<(Vec<Endpoint>, Vec<u8>, Vec<u8>), String> {
         let mut body = Out::default();
         body.type_id(id::CREATE_SESSION_REQUEST);
         let handle = self.next_request();
         body.header(&NodeId::Numeric(0, 0), handle);
         // The client: an application of type client.
-        body.string(Some("urn:kynex:client"))
+        body.string(Some(APPLICATION_URI))
             .string(Some("urn:kynex"))
             .u8(0x02)
             .string(Some("KYNEX"))
@@ -476,10 +674,20 @@ impl Session {
             .i32(-1);
         body.string(None) // server URI
             .string(Some(url))
-            .string(Some("KYNEX"))
-            .i32(-1) // no nonce
-            .i32(-1) // no certificate
-            .f64(60_000.0) // session timeout, ms
+            .string(Some("KYNEX"));
+        match &self.secure {
+            Some(c) => {
+                let nonce = super::secure::nonce();
+                body.i32(32);
+                body.0.extend(nonce);
+                body.i32(c.identity.der.len() as i32);
+                body.0.extend(&c.identity.der);
+            }
+            None => {
+                body.i32(-1).i32(-1);
+            }
+        }
+        body.f64(60_000.0) // session timeout, ms
             .u32(0); // no response size limit
         let reply = self.call(&body.0, id::CREATE_SESSION_RESPONSE)?;
         let mut r = In::new(&reply);
@@ -487,60 +695,80 @@ impl Session {
         r.node()?; // session id
         self.auth = r.node()?;
         r.skip(8)?; // revised timeout
-        r.bytes()?; // nonce
-        r.bytes()?; // certificate
-                    // The endpoints: the anonymous token's policy on one with no
-                    // security.
-        let mut policy = None;
+        let nonce = r.bytes()?.unwrap_or_default().to_vec();
+        let certificate = r.bytes()?.unwrap_or_default().to_vec();
+        let mut endpoints = Vec::new();
         for _ in 0..r.count()? {
-            r.string()?; // url
-                         // The server's description.
-            r.string()?;
-            r.string()?;
-            r.localized()?;
-            r.u32()?;
-            r.string()?;
-            r.string()?;
-            for _ in 0..r.count()? {
-                r.string()?;
-            }
-            r.bytes()?; // certificate
-            let mode = r.u32()?;
-            let uri = r.string()?.unwrap_or_default();
-            for _ in 0..r.count()? {
-                let id = r.string()?.unwrap_or_default();
-                let kind = r.u32()?;
-                r.string()?;
-                r.string()?;
-                r.string()?;
-                if mode == 1 && uri == POLICY_NONE && kind == 0 && policy.is_none() {
-                    policy = Some(id);
-                }
-            }
-            r.string()?; // transport profile
-            r.u8()?; // security level
+            endpoints.push(r.endpoint()?);
         }
-        policy.ok_or_else(|| {
-            "OPC UA: 서버에 보안 없음(None)·익명 접속 엔드포인트가 없습니다".to_string()
-        })
+        Ok((endpoints, nonce, certificate))
     }
 
-    fn activate_session(&mut self, policy: &str) -> Result<(), String> {
+    fn activate_session(
+        &mut self,
+        token: &(String, u32, String),
+        endpoint_policy: &str,
+        user: Option<(String, String)>,
+        server_nonce: &[u8],
+        server_cert: &[u8],
+    ) -> Result<(), String> {
         let mut body = Out::default();
         body.type_id(id::ACTIVATE_SESSION_REQUEST);
         let handle = self.next_request();
         let auth = self.auth.clone();
         body.header(&auth, handle);
-        body.string(None).i32(-1); // no signature
+        // The client's signature: of the server's certificate and nonce,
+        // on a kept channel.
+        match &self.secure {
+            Some(c) => {
+                let mut signed = server_cert.to_vec();
+                signed.extend(server_nonce);
+                let signature = c.identity.sign(&signed);
+                body.string(Some(SIGNATURE_ALGORITHM))
+                    .i32(signature.len() as i32);
+                body.0.extend(signature);
+            }
+            None => {
+                body.string(None).i32(-1);
+            }
+        }
         body.i32(-1); // no software certificates
         body.i32(-1); // no locales
-                      // An anonymous user, its policy the server's.
-        let mut token = Out::default();
-        token.string(Some(policy));
-        body.type_id(id::ANONYMOUS_IDENTITY_TOKEN)
-            .u8(0x01)
-            .i32(token.0.len() as i32);
-        body.0.extend(token.0);
+        let mut t = Out::default();
+        match user {
+            // A user name, its password encrypted for the server as its
+            // policy says.
+            Some((name, password)) => {
+                let policy = if token.2.is_empty() {
+                    endpoint_policy
+                } else {
+                    &token.2
+                };
+                t.string(Some(&token.0)).string(Some(&name));
+                if policy == POLICY_NONE {
+                    t.i32(password.len() as i32);
+                    t.0.extend(password.as_bytes());
+                    t.string(None);
+                } else {
+                    let server = Peer::of(server_cert)?;
+                    let mut plain = Vec::new();
+                    plain.extend(((password.len() + server_nonce.len()) as u32).to_le_bytes());
+                    plain.extend(password.as_bytes());
+                    plain.extend(server_nonce);
+                    let sealed = server.encrypt(&plain)?;
+                    t.i32(sealed.len() as i32);
+                    t.0.extend(sealed);
+                    t.string(Some(PASSWORD_ALGORITHM));
+                }
+                body.type_id(id::USER_NAME_IDENTITY_TOKEN);
+            }
+            None => {
+                t.string(Some(&token.0));
+                body.type_id(id::ANONYMOUS_IDENTITY_TOKEN);
+            }
+        }
+        body.u8(0x01).i32(t.0.len() as i32);
+        body.0.extend(t.0);
         body.string(None).i32(-1); // no user signature
         let reply = self.call(&body.0, id::ACTIVATE_SESSION_RESPONSE)?;
         In::new(&reply).header()
@@ -651,10 +879,17 @@ impl Session {
         let auth = self.auth.clone();
         body.header(&auth, handle).u8(1); // delete subscriptions
         let _ = self.call(&body.0, 0);
-        let mut clo = Out::default();
-        clo.u32(self.channel).u32(self.token_id);
-        self.sequence_header(&mut clo);
-        let _ = self.send(b"CLO", &clo.0);
+        self.close_channel();
+    }
+
+    fn close_channel(&mut self) {
+        let mut body = Out::default();
+        body.type_id(id::CLOSE_CHANNEL_REQUEST);
+        let handle = self.next_request();
+        body.header(&NodeId::Numeric(0, 0), handle);
+        if let Ok(message) = self.seal_symmetric(b"CLO", &body.0) {
+            let _ = self.stream.write_all(&message);
+        }
     }
 
     // --- messages ---
@@ -664,26 +899,13 @@ impl Session {
         self.request
     }
 
-    fn sequence_header(&mut self, out: &mut Out) {
-        self.sequence += 1;
-        out.u32(self.sequence).u32(self.request + 1);
-    }
-
     /// A service request on the channel; its response's body after the
     /// response type, which must be `want` (or anything, for 0).
     fn call(&mut self, request: &[u8], want: u32) -> Result<Vec<u8>, String> {
-        let mut body = Out::default();
-        body.u32(self.channel).u32(self.token_id);
-        self.sequence += 1;
-        body.u32(self.sequence).u32(self.request);
-        body.0.extend(request);
-        self.send(b"MSG", &body.0)?;
-        let (kind, reply) = self.receive()?;
-        if &kind != b"MSG" {
-            return Err(self.error_of(&kind, &reply, "요청"));
-        }
+        let message = self.seal_symmetric(b"MSG", request)?;
+        self.stream.write_all(&message).map_err(|e| e.to_string())?;
+        let reply = self.read_service()?;
         let mut r = In::new(&reply);
-        r.skip(4 + 4 + 8)?; // channel, token, sequence header
         match r.node()? {
             NodeId::Numeric(0, i) if i == want || want == 0 => {}
             NodeId::Numeric(0, id::SERVICE_FAULT) => {
@@ -711,8 +933,9 @@ impl Session {
         }
     }
 
-    /// Sends a whole message of type `kind` in one chunk.
-    fn send(&mut self, kind: &[u8; 3], body: &[u8]) -> Result<(), String> {
+    /// Writes a message of type `kind` with `body` after its header, in
+    /// one chunk: Hello's, which is not on the channel.
+    fn write_message(&mut self, kind: &[u8; 3], body: &[u8]) -> Result<(), String> {
         let mut out = Vec::with_capacity(8 + body.len());
         out.extend(kind);
         out.push(b'F');
@@ -721,43 +944,251 @@ impl Session {
         self.stream.write_all(&out).map_err(|e| e.to_string())
     }
 
-    /// A whole message: its type and its body, the chunks of a long one
-    /// joined (each chunk after the first without its channel and
-    /// sequence headers).
-    fn receive(&mut self) -> Result<([u8; 3], Vec<u8>), String> {
+    /// One chunk as it came: its type, its final-or-not flag, and all of it
+    /// after the first eight bytes.
+    fn read_chunk(&mut self) -> Result<([u8; 3], u8, Vec<u8>), String> {
+        let mut head = [0u8; 8];
+        self.stream
+            .read_exact(&mut head)
+            .map_err(|e| e.to_string())?;
+        let kind = [head[0], head[1], head[2]];
+        let size = u32::from_le_bytes(head[4..8].try_into().unwrap()) as usize;
+        // No more than KYNEX said it takes.
+        if !(8..=CHUNK as usize).contains(&size) {
+            return Err(format!("OPC UA: 메시지 크기가 맞지 않습니다: {size}"));
+        }
+        let mut rest = vec![0u8; size - 8];
+        self.stream
+            .read_exact(&mut rest)
+            .map_err(|e| e.to_string())?;
+        Ok((kind, head[3], rest))
+    }
+
+    /// A message not on a symmetric channel — Acknowledge, an error, or
+    /// OpenSecureChannel's answer — whole.
+    fn read_raw(&mut self) -> Result<([u8; 3], Vec<u8>), String> {
+        let (kind, flag, rest) = self.read_chunk()?;
+        if flag != b'F' {
+            return Err("OPC UA: 나뉜 메시지는 받지 않습니다".into());
+        }
+        Ok((kind, rest))
+    }
+
+    /// A service's answer: its chunks unsealed, their bodies joined.
+    fn read_service(&mut self) -> Result<Vec<u8>, String> {
         let mut body: Vec<u8> = Vec::new();
         for _ in 0..MAX_CHUNKS {
-            let mut head = [0u8; 8];
-            self.stream
-                .read_exact(&mut head)
-                .map_err(|e| e.to_string())?;
-            let kind = [head[0], head[1], head[2]];
-            let size = u32::from_le_bytes(head[4..8].try_into().unwrap()) as usize;
-            // No more than KYNEX said it takes: a chunk its buffer, a
-            // message its limit.
-            if !(8..=CHUNK as usize).contains(&size) {
-                return Err(format!("OPC UA: 메시지 크기가 맞지 않습니다: {size}"));
+            let (kind, flag, rest) = self.read_chunk()?;
+            if &kind != b"MSG" {
+                return Err(self.error_of(&kind, &rest, "요청"));
             }
-            if body.len() + size > MAX_MESSAGE as usize {
+            let part = self.unseal_symmetric(&kind, flag, &rest)?;
+            if body.len() + part.len() > MAX_MESSAGE as usize {
                 return Err("OPC UA: 메시지가 너무 깁니다".into());
             }
-            let mut chunk = vec![0u8; size - 8];
-            self.stream
-                .read_exact(&mut chunk)
-                .map_err(|e| e.to_string())?;
-            if body.is_empty() {
-                body = chunk;
-            } else {
-                // Channel, token and sequence header: 16 bytes.
-                body.extend_from_slice(chunk.get(16..).unwrap_or_default());
-            }
-            match head[3] {
-                b'F' => return Ok((kind, body)),
+            body.extend(part);
+            match flag {
+                b'F' => return Ok(body),
                 b'C' => continue,
                 _ => return Err("OPC UA: 메시지가 중간에 취소됐습니다".into()),
             }
         }
         Err("OPC UA: 메시지 조각이 너무 많습니다".into())
+    }
+
+    /// OpenSecureChannel's request, `body`, as a whole message: on a kept
+    /// channel signed with KYNEX's key and encrypted for the server's.
+    fn seal_asymmetric(&self, body: &[u8], sequence: u32, request: u32) -> Result<Vec<u8>, String> {
+        let mut security = Out::default();
+        security.string(Some(
+            self.secure
+                .as_ref()
+                .map_or(POLICY_NONE, |c| c.mode.policy()),
+        ));
+        let mut plain = Out::default();
+        plain.u32(sequence).u32(request);
+        plain.0.extend(body);
+        let Some(c) = &self.secure else {
+            security.i32(-1).i32(-1);
+            let mut out = Out::default();
+            out.0.extend(b"OPNF");
+            out.u32((8 + 4 + security.0.len() + plain.0.len()) as u32)
+                .u32(0);
+            out.0.extend(security.0);
+            out.0.extend(plain.0);
+            return Ok(out.0);
+        };
+        security.i32(c.identity.der.len() as i32);
+        security.0.extend(&c.identity.der);
+        security.i32(20);
+        security.0.extend(c.server.thumbprint());
+        // Padded to whole blocks of the server's key, the signature
+        // KYNEX's key long.
+        let cipher_block = c.server.key_bytes();
+        let plain_block = cipher_block - 42;
+        let signature = c.identity.key_bytes();
+        let extra = cipher_block > 256;
+        let used = plain.0.len() + 1 + usize::from(extra) + signature;
+        let padding = (plain_block - used % plain_block) % plain_block;
+        plain.0.push(padding as u8);
+        plain.0.extend(std::iter::repeat_n(padding as u8, padding));
+        if extra {
+            plain.0.push((padding >> 8) as u8);
+        }
+        let blocks = (plain.0.len() + signature) / plain_block;
+        let size = 8 + 4 + security.0.len() + blocks * cipher_block;
+        let mut head = Out::default();
+        head.0.extend(b"OPNF");
+        head.u32(size as u32).u32(0);
+        head.0.extend(&security.0);
+        let mut signed = head.0.clone();
+        signed.extend(&plain.0);
+        let sig = c.identity.sign(&signed);
+        plain.0.extend(sig);
+        let sealed = c.server.encrypt(&plain.0)?;
+        head.0.extend(sealed);
+        if head.0.len() != size {
+            return Err("OPC UA: 암호화한 메시지 길이가 맞지 않습니다".into());
+        }
+        Ok(head.0)
+    }
+
+    /// OpenSecureChannel's answer after its first eight bytes: its body,
+    /// decrypted with KYNEX's key and checked against the server's.
+    fn unseal_asymmetric(&mut self, reply: &[u8]) -> Result<Vec<u8>, String> {
+        let mut r = In::new(reply);
+        self.channel = r.u32()?;
+        let policy = r.string()?.unwrap_or_default();
+        let sender = r.bytes()?.map(<[u8]>::to_vec);
+        r.bytes()?; // receiver thumbprint
+        let at = r.at;
+        let Some(c) = &self.secure else {
+            r.skip(8)?; // sequence header
+            return Ok(reply[r.at..].to_vec());
+        };
+        if policy != c.mode.policy() {
+            return Err(format!(
+                "OPC UA: 서버가 다른 보안 정책으로 답했습니다: {policy}"
+            ));
+        }
+        if sender.as_deref() != Some(c.server.der.as_slice()) {
+            return Err("OPC UA: 서버가 엔드포인트와 다른 인증서로 답했습니다".into());
+        }
+        let plain = c.identity.decrypt(&reply[at..])?;
+        let signature = c.server.key_bytes();
+        if plain.len() < 8 + signature + 1 {
+            return Err("OPC UA: 응답이 짧습니다".into());
+        }
+        let (content, sig) = plain.split_at(plain.len() - signature);
+        // Signed as it was sent: its header with the encrypted size.
+        let mut signed = Vec::with_capacity(8 + reply.len());
+        signed.extend(b"OPNF");
+        signed.extend(((8 + reply.len()) as u32).to_le_bytes());
+        signed.extend(&reply[..at]);
+        signed.extend(content);
+        if !c.server.verify(&signed, sig) {
+            return Err("OPC UA: 서버 서명이 맞지 않습니다".into());
+        }
+        let extra = c.identity.key_bytes() > 256;
+        let padding = if extra {
+            (content[content.len() - 1] as usize) << 8 | content[content.len() - 2] as usize
+        } else {
+            content[content.len() - 1] as usize
+        };
+        let end = content
+            .len()
+            .checked_sub(1 + usize::from(extra) + padding)
+            .filter(|e| *e >= 8)
+            .ok_or("OPC UA: 응답의 채움 길이가 맞지 않습니다")?;
+        Ok(content[8..end].to_vec())
+    }
+
+    /// A message of type `kind` on the channel, `body` its service: signed,
+    /// and encrypted, with KYNEX's keys as the channel keeps it.
+    fn seal_symmetric(&mut self, kind: &[u8; 3], body: &[u8]) -> Result<Vec<u8>, String> {
+        self.sequence += 1;
+        let mut plain = Out::default();
+        plain.u32(self.sequence).u32(self.request);
+        plain.0.extend(body);
+        let keys = self
+            .secure
+            .as_ref()
+            .and_then(|c| c.client.as_ref().map(|k| (c.mode, k)));
+        let mut head = Out::default();
+        head.0.extend(kind);
+        head.0.push(b'F');
+        match keys {
+            None => {
+                head.u32((16 + plain.0.len()) as u32)
+                    .u32(self.channel)
+                    .u32(self.token_id);
+                head.0.extend(plain.0);
+                Ok(head.0)
+            }
+            Some((mode, keys)) => {
+                let encrypt = mode == Mode::SignAndEncrypt;
+                if encrypt {
+                    let used = plain.0.len() + 1 + 32;
+                    let padding = (16 - used % 16) % 16;
+                    plain.0.push(padding as u8);
+                    plain.0.extend(std::iter::repeat_n(padding as u8, padding));
+                }
+                let size = 16 + plain.0.len() + 32;
+                head.u32(size as u32).u32(self.channel).u32(self.token_id);
+                let mut signed = head.0.clone();
+                signed.extend(&plain.0);
+                plain.0.extend(keys.mac(&signed));
+                if encrypt {
+                    keys.encrypt(&mut plain.0)?;
+                }
+                head.0.extend(plain.0);
+                Ok(head.0)
+            }
+        }
+    }
+
+    /// A chunk on the channel after its first eight bytes: its service
+    /// body, decrypted and checked with the server's keys as the channel
+    /// keeps it.
+    fn unseal_symmetric(&self, kind: &[u8; 3], flag: u8, rest: &[u8]) -> Result<Vec<u8>, String> {
+        if rest.len() < 16 {
+            return Err("OPC UA: 응답이 짧습니다".into());
+        }
+        let keys = self
+            .secure
+            .as_ref()
+            .and_then(|c| c.server_keys.as_ref().map(|k| (c.mode, k)));
+        let Some((mode, keys)) = keys else {
+            return Ok(rest[16..].to_vec());
+        };
+        let mut content = rest[8..].to_vec();
+        let encrypt = mode == Mode::SignAndEncrypt;
+        if encrypt {
+            keys.decrypt(&mut content)?;
+        }
+        if content.len() < 8 + 32 {
+            return Err("OPC UA: 응답이 짧습니다".into());
+        }
+        let (data, mac) = content.split_at(content.len() - 32);
+        let mut signed = Vec::with_capacity(16 + data.len());
+        signed.extend(kind);
+        signed.push(flag);
+        signed.extend(((8 + rest.len()) as u32).to_le_bytes());
+        signed.extend(&rest[..8]);
+        signed.extend(data);
+        if !keys.verify(&signed, mac) {
+            return Err("OPC UA: 응답 서명이 맞지 않습니다".into());
+        }
+        let end = if encrypt {
+            let padding = *data.last().ok_or("OPC UA: 응답이 짧습니다")? as usize;
+            data.len()
+                .checked_sub(1 + padding)
+                .filter(|e| *e >= 8)
+                .ok_or("OPC UA: 응답의 채움 길이가 맞지 않습니다")?
+        } else {
+            data.len()
+        };
+        Ok(data[8..end].to_vec())
     }
 }
 
@@ -804,7 +1235,12 @@ mod tests {
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
             .unwrap();
         let t = std::time::Instant::now();
-        let mut s = Session::open(stream, "opc.tcp://127.0.0.1:4842/kynex/").unwrap();
+        let mut s = Session::open(
+            stream,
+            "opc.tcp://127.0.0.1:4842/kynex/",
+            Options::anonymous(),
+        )
+        .unwrap();
         println!("open {:?}", t.elapsed());
         let nodes = [
             NodeId::parse("ns=2;s=Lathe.open").unwrap(),

@@ -19,6 +19,9 @@ export class PlcPanel {
     this.panel = document.getElementById('plc-panel');
     this.protocol = document.getElementById('plc-protocol');
     this.path = document.getElementById('plc-path');
+    this.security = document.getElementById('plc-security');
+    this.user = document.getElementById('plc-user');
+    this.password = document.getElementById('plc-password');
     this.host = document.getElementById('plc-host');
     this.port = document.getElementById('plc-port');
     this.unit = document.getElementById('plc-unit');
@@ -27,6 +30,10 @@ export class PlcPanel {
     this.dot = document.querySelector('.toolbar .plc-dot');
     this.state = null;
     this.button.addEventListener('click', () => this.send(!this.state?.settings?.on));
+    // The server certificate trusted forgotten: the next one met is.
+    document.getElementById('plc-forget').addEventListener('click', () => {
+      if (confirm('믿던 서버 인증서를 잊을까요? 다음에 연결하는 서버의 인증서를 믿게 됩니다.')) this.send(this.state?.settings?.on ?? false, { trust: '' });
+    });
     // OPC UA's usual port in place of Modbus's, as the protocol changes.
     this.protocol.addEventListener('change', () => {
       const usual = { modbus: '502', opcua: '4840' };
@@ -50,7 +57,7 @@ export class PlcPanel {
     this.panel.hidden = !this.panel.hidden;
   }
 
-  async send(on) {
+  async send(on, more = {}) {
     const port = Number(this.port.value);
     const unit = Number(this.unit.value);
     if (!(Number.isInteger(port) && port >= 1 && port <= 65535)) return this.ctx.toast('포트는 1–65535입니다');
@@ -63,8 +70,14 @@ export class PlcPanel {
         port,
         unit,
         path: this.path.value.trim(),
+        security: this.security.value,
+        user: this.user.value.trim(),
+        // Left empty, the password KYNEX holds for this user stays.
+        password: this.password.value,
         on,
+        ...more,
       });
+      this.password.value = '';
       if (!answer.ok) this.ctx.toast(answer.error || 'PLC 설정을 바꾸지 못했습니다');
     } catch (err) {
       this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
@@ -82,6 +95,8 @@ export class PlcPanel {
       [this.port, s.port],
       [this.unit, s.unit],
       [this.path, s.path ?? ''],
+      [this.security, s.security ?? 'none'],
+      [this.user, s.user ?? ''],
     ]) {
       if (document.activeElement !== input) input.value = v;
     }
@@ -101,6 +116,10 @@ export class PlcPanel {
     if (s.on && state.drops) text += ` · 끊김 ${state.drops}회 (${state.dropped})`;
     this.status.textContent = text;
     this.status.className = `plc-status ${cls}`;
+    this.password.placeholder = state.has_password ? '기억함 (바꿀 때만 입력)' : '';
+    document.getElementById('plc-trust').textContent = s.trust || (state.server_thumbprint ?? '아직 없음 (처음 연결할 때 믿습니다)');
+    document.getElementById('plc-client').textContent = state.client_thumbprint ?? '보안 연결 때 만듭니다';
+    document.getElementById('plc-pki').textContent = state.pki ? `· ${state.pki}` : '';
     this.dot.hidden = !s.on;
     this.dot.classList.toggle('ok', s.on && state.connected);
   }

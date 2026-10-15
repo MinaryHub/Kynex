@@ -7,6 +7,7 @@ KYNEX through its cycle.
     kynex view --empty --port 8097 --project target/plc/kynex-project.json
     python tools/plc/check.py                    # Modbus TCP
     python tools/plc/check.py --protocol opcua   # OPC UA
+    python tools/plc/check.py --protocol opcua --security encrypt --user kynex --password secret
 
 The script places a lathe in that KYNEX (over its page's requests), wires
 the lathe's commands and states to the PLC — over Modbus, commands to coils
@@ -149,15 +150,56 @@ async def modbus_plc(program, port):
     return stop, link, {name: str(n) for name, n in COILS.items()}
 
 
-async def opcua_plc(program, port):
-    """An OPC UA server with no security and anonymous access, its program
-    scanning every 10 ms. Returns its stop, and each name's node id."""
+async def opcua_plc(program, port, security="none", user=None, password=None):
+    """An OPC UA server, its program scanning every 10 ms: with no security,
+    or Basic256Sha256 signed (`sign`) or signed and encrypted (`encrypt`)
+    with a certificate of its own; anonymous, or only `user` with
+    `password`. Returns its stop, and each name's node id."""
     from asyncua import Server, ua
+    from asyncua.server.user_managers import User, UserManager, UserRole
 
-    server = Server()
+    wanted = (user, password)
+
+    class OneUser(UserManager):
+        def get_user(self, iserver, username=None, password=None, certificate=None):
+            if (username, password) == wanted:
+                # Writes the lathe's states: a user with the rights to.
+                return User(role=UserRole.Admin, name=username)
+            return None
+
+    server = Server(user_manager=OneUser() if user else None)
     await server.init()
     server.set_endpoint(f"opc.tcp://127.0.0.1:{port}/kynex/")
-    server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
+    await server.set_application_uri("urn:kynex:check:server")
+    if security == "none":
+        server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
+    else:
+        import pathlib
+        import socket
+
+        from asyncua.crypto.cert_gen import setup_self_signed_certificate
+        from cryptography.x509.oid import ExtendedKeyUsageOID
+
+        key = pathlib.Path("target/plc/server_key.pem")
+        cert = pathlib.Path("target/plc/server_cert.der")
+        if not cert.exists():
+            await setup_self_signed_certificate(
+                key,
+                cert,
+                "urn:kynex:check:server",
+                socket.gethostname(),
+                [ExtendedKeyUsageOID.SERVER_AUTH],
+                {"commonName": "KYNEX check server"},
+            )
+        await server.load_certificate(str(cert))
+        await server.load_private_key(str(key))
+        server.set_security_policy([
+            ua.SecurityPolicyType.Basic256Sha256_Sign
+            if security == "sign"
+            else ua.SecurityPolicyType.Basic256Sha256_SignAndEncrypt
+        ])
+    if user:
+        server.set_security_IDs(["Username"])
     ns = await server.register_namespace("urn:kynex:check")
     lathe = await server.nodes.objects.add_object(ua.NodeId("Lathe", ns), "Lathe")
     nodes = {}
@@ -186,7 +228,15 @@ async def opcua_plc(program, port):
         task.cancel()
         await server.stop()
 
-    link = {"protocol": "opcua", "host": "127.0.0.1", "port": port, "path": "/kynex/"}
+    link = {
+        "protocol": "opcua",
+        "host": "127.0.0.1",
+        "port": port,
+        "path": "/kynex/",
+        "security": security,
+        "user": user or "",
+        "password": password or "",
+    }
     return stop, link, {name: f"ns={ns};s=Lathe.{name}" for name in nodes}
 
 
@@ -196,13 +246,18 @@ async def main():
     parser.add_argument("--protocol", choices=["modbus", "opcua"], default="modbus")
     parser.add_argument("--port", type=int)
     parser.add_argument("--cycles", type=int, default=2)
+    parser.add_argument("--security", choices=["none", "sign", "encrypt"], default="none")
+    parser.add_argument("--user")
+    parser.add_argument("--password")
     args = parser.parse_args()
 
     program = Program(args.cycles)
     if args.protocol == "modbus":
         stop, link, addresses = await modbus_plc(program, args.port or 5020)
     else:
-        stop, link, addresses = await opcua_plc(program, args.port or 4840)
+        stop, link, addresses = await opcua_plc(
+            program, args.port or 4840, args.security, args.user, args.password
+        )
 
     # A lathe, wired to the PLC.
     post(args.kynex, {"op": "place", "template": "cnc_lathe", "at": [0, 0, 0]})

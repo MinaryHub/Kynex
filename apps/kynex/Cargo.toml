@@ -17,3 +17,13 @@ kynex-kin.workspace = true
 kynex-collide.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
+rsa = { version = "0.9", features = ["sha2"] }
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+aes = "0.8"
+rand = "0.8"
+pkcs8 = { version = "0.10", features = ["pem"] }
+cbc = { version = "0.1", features = ["alloc"] }
+x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
+const-oid = "0.9"

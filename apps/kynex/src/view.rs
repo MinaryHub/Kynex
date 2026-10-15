@@ -375,7 +375,13 @@ impl Stage {
             } else if op == "plc_link" {
                 // Where the PLC is, and whether to be linked to it.
                 let req: Value = serde_json::from_str(&request.body).unwrap_or_default();
-                self.plc.set(crate::plc::Settings::of(&req));
+                let mut settings = crate::plc::Settings::of(&req);
+                // The server certificate trusted stays, unless the request
+                // says otherwise (empty: trust the next one met).
+                if req.get("trust").is_none() {
+                    settings.trust = self.plc.settings.trust.clone();
+                }
+                self.plc.set(settings);
                 self.plc_changed = true;
                 touched = true;
                 serde_json::json!({ "ok": true }).to_string()
@@ -485,6 +491,10 @@ impl Stage {
             starts = exchange.start;
             self.plc.warn(errors);
             self.plc.hand(self.cell.plc_reads(), exchange.writes);
+            // The server certificate met first is trusted, and kept.
+            if self.plc.trust_on_first_use().is_some() {
+                self.plc_changed = true;
+            }
             touched |= self.cell.take_changed();
         }
         // A program going round is kept supplied, as an operator would:
@@ -548,10 +558,12 @@ impl Stage {
         touched
     }
 
-    /// While a program runs, every so often whether or not anything moved:
+    /// While a program runs or a PLC is linked, every so often whether or
+    /// not anything moved:
     /// a pause counting down, a wait going on, shown as they go.
     fn ticking(&mut self) -> bool {
-        if !self.runners.iter().any(|r| !r.stopped()) {
+        // A PLC linked changes on its own: its state, its values.
+        if !self.runners.iter().any(|r| !r.stopped()) && !self.plc.on() {
             return false;
         }
         let due = self

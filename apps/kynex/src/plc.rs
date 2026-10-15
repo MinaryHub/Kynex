@@ -17,6 +17,7 @@
 //! connects. The page and the cell never wait on the network.
 
 pub mod opcua;
+pub mod secure;
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -58,6 +59,14 @@ pub struct Settings {
     /// The OPC UA server's path after its host and port, if its endpoint
     /// has one (`/freeopcua/server/`).
     pub path: String,
+    /// OPC UA: how the channel's messages are kept, the user (none for
+    /// anonymous) and the password — the password only in memory, never
+    /// saved — and the server certificate's thumbprint KYNEX trusts (taken
+    /// on the first connection, refused when it changes).
+    pub security: opcua::Mode,
+    pub user: String,
+    pub password: String,
+    pub trust: String,
     /// Whether to connect.
     pub on: bool,
 }
@@ -70,6 +79,10 @@ impl Default for Settings {
             port: 502,
             unit: 1,
             path: String::new(),
+            security: opcua::Mode::None,
+            user: String::new(),
+            password: String::new(),
+            trust: String::new(),
             on: false,
         }
     }
@@ -96,6 +109,24 @@ impl Settings {
                 .as_u64()
                 .and_then(|u| u8::try_from(u).ok())
                 .unwrap_or(d.unit),
+            security: match v["security"].as_str() {
+                Some("sign") => opcua::Mode::Sign,
+                Some("encrypt") => opcua::Mode::SignAndEncrypt,
+                _ => opcua::Mode::None,
+            },
+            user: v["user"]
+                .as_str()
+                .map_or(d.user, |u| u.trim().chars().take(100).collect()),
+            password: v["password"]
+                .as_str()
+                .map_or(d.password, |p| p.chars().take(200).collect()),
+            trust: v["trust"].as_str().map_or(d.trust, |t| {
+                t.chars()
+                    .filter(char::is_ascii_hexdigit)
+                    .take(40)
+                    .collect::<String>()
+                    .to_uppercase()
+            }),
             on: v["on"].as_bool().unwrap_or(d.on),
         }
     }
@@ -107,6 +138,13 @@ impl Settings {
             "port": self.port,
             "unit": self.unit,
             "path": self.path,
+            "security": match self.security {
+                opcua::Mode::None => "none",
+                opcua::Mode::Sign => "sign",
+                opcua::Mode::SignAndEncrypt => "encrypt",
+            },
+            "user": self.user,
+            "trust": self.trust,
             "on": self.on,
         })
     }
@@ -263,6 +301,8 @@ struct Shared {
     /// often it has.
     dropped: Option<String>,
     drops: u64,
+    /// The thumbprint of the server's certificate, as last connected.
+    server_thumbprint: Option<String>,
     /// Exchanges done since connecting.
     exchanges: u64,
 }
@@ -288,7 +328,10 @@ impl Plc {
     }
 
     /// Connects to where `settings` say, or lets go, as they say.
-    pub fn set(&mut self, settings: Settings) {
+    pub fn set(&mut self, mut settings: Settings) {
+        if settings.password.is_empty() && settings.user == self.settings.user {
+            settings.password = self.settings.password.clone();
+        }
         if settings == self.settings && (self.thread.is_some() == settings.on) {
             return;
         }
@@ -341,6 +384,17 @@ impl Plc {
         s.writes = writes.into_iter().map(|(a, k, v)| (a, (k, v))).collect();
     }
 
+    /// The server certificate's thumbprint, when KYNEX trusts none yet and
+    /// has just met one: trusted from now on (and so saved).
+    pub fn trust_on_first_use(&mut self) -> Option<String> {
+        if !self.settings.trust.is_empty() {
+            return None;
+        }
+        let seen = self.shared.lock().unwrap().server_thumbprint.clone()?;
+        self.settings.trust = seen.clone();
+        Some(seen)
+    }
+
     /// What went wrong giving the cell the PLC's commands, last time
     /// something did: shown with the link.
     pub fn warn(&self, errors: Vec<String>) {
@@ -358,6 +412,14 @@ impl Plc {
             "error": s.error,
             "warning": s.warning,
             "problems": s.problems,
+            "server_thumbprint": s.server_thumbprint,
+            "has_password": !self.settings.password.is_empty(),
+            // KYNEX's own certificate, for a PLC's administrator to trust:
+            // where it is kept, and its thumbprint once it is made.
+            "pki": secure::pki_dir().display().to_string(),
+            "client_thumbprint": std::fs::read(secure::pki_dir().join("kynex_cert.der"))
+                .ok()
+                .map(|der| secure::hex(&secure::thumbprint(&der))),
             "dropped": s.dropped,
             "drops": s.drops,
             "exchanges": s.exchanges,
@@ -414,16 +476,59 @@ fn spans(
 }
 
 impl Conn {
-    fn open(settings: &Settings) -> Result<Self, String> {
+    /// A connection as `settings` say; with it, the thumbprint of the
+    /// server's certificate, when the channel is kept with it.
+    fn open(settings: &Settings) -> Result<(Self, Option<String>), String> {
         let stream = connect(settings)?;
-        Ok(match settings.protocol {
-            Protocol::Modbus => Conn::Modbus {
-                stream,
-                tid: 0,
-                unit: settings.unit,
-            },
-            Protocol::OpcUa => Conn::OpcUa(opcua::Session::open(stream, &settings.url())?),
-        })
+        if settings.protocol == Protocol::Modbus {
+            return Ok((
+                Conn::Modbus {
+                    stream,
+                    tid: 0,
+                    unit: settings.unit,
+                },
+                None,
+            ));
+        }
+        let url = settings.url();
+        let user =
+            (!settings.user.is_empty()).then(|| (settings.user.clone(), settings.password.clone()));
+        let mode = settings.security;
+        if mode == opcua::Mode::None {
+            let options = opcua::Options {
+                user,
+                ..opcua::Options::anonymous()
+            };
+            return Ok((
+                Conn::OpcUa(opcua::Session::open(stream, &url, options)?),
+                None,
+            ));
+        }
+        // The server's certificate, from its endpoints: the one it is kept
+        // with as asked, and only if it is the one trusted.
+        drop(stream);
+        let endpoints = opcua::Session::endpoints(connect(settings)?, &url)?;
+        let endpoint = endpoints
+            .iter()
+            .find(|e| e.mode == mode.code() && e.policy == mode.policy())
+            .ok_or("OPC UA: 서버에 Basic256Sha256 보안 방식의 엔드포인트가 없습니다")?;
+        let server = secure::Peer::of(&endpoint.certificate)?;
+        let thumbprint = secure::hex(&server.thumbprint());
+        if !settings.trust.is_empty() && settings.trust != thumbprint {
+            return Err(format!(
+                "OPC UA: 서버 인증서가 믿기로 한 것과 다릅니다 (믿는 지문 {}, 지금 {thumbprint})",
+                settings.trust
+            ));
+        }
+        let identity = secure::Identity::load_or_create(&secure::pki_dir())?;
+        let options = opcua::Options {
+            mode,
+            identity: Some(identity),
+            server: Some(server),
+            user,
+        };
+        let session = opcua::Session::open(connect(settings)?, &url, options)?;
+        Ok((Conn::OpcUa(session), Some(thumbprint)))
     }
 
     /// What is at `addresses`, and the addresses that could not be read.
@@ -552,7 +657,10 @@ impl Conn {
 fn run(settings: &Settings, shared: &Mutex<Shared>, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
         let mut conn = match Conn::open(settings) {
-            Ok(c) => c,
+            Ok((c, thumbprint)) => {
+                shared.lock().unwrap().server_thumbprint = thumbprint;
+                c
+            }
             Err(e) => {
                 fail(shared, e);
                 pause(stop, Duration::from_secs(1));

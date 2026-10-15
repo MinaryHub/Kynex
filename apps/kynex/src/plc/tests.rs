@@ -118,6 +118,7 @@ fn settings(port: u16) -> Settings {
         unit: 1,
         path: String::new(),
         on: true,
+        ..Settings::default()
     }
 }
 

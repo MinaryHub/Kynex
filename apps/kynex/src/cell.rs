@@ -382,7 +382,14 @@ pub fn io_points(kind: Kind) -> (&'static [&'static str], &'static [&'static str
         Kind::Gripper => (&["close"], &["closed"]),
         Kind::Cnc => (
             &["open", "close", "clamp", "unclamp", "start"],
-            &["door_open", "door_closed", "clamped", "unclamped", "idle", "done"],
+            &[
+                "door_open",
+                "door_closed",
+                "clamped",
+                "unclamped",
+                "idle",
+                "done",
+            ],
         ),
         Kind::Molder => (
             &["open", "close", "start"],

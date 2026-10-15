@@ -288,7 +288,13 @@ impl Stage {
             compared: Vec::new(),
             scenarios_changed: false,
             comparing: None,
-            plc: crate::plc::Plc::new(crate::plc::Settings::of(&saved.plc)),
+            // Where the PLC is, from the file; never linked to it until
+            // someone at this computer says so: a project from elsewhere
+            // does not drive a PLC on opening.
+            plc: crate::plc::Plc::new(crate::plc::Settings {
+                on: false,
+                ..crate::plc::Settings::of(&saved.plc)
+            }),
             plc_changed: false,
         })
     }
@@ -355,7 +361,12 @@ impl Stage {
                     .retain(|r| robot.is_some_and(|robot| robot != r.root));
                 touched |= self.runners.len() != before;
             }
-            let reply = if op == "plc_link" {
+            let reply = if matches!(op.as_str(), "plc_link" | "plc") && !request.local {
+                // A viewer shared on the network does not let others point
+                // KYNEX at a PLC, nor rewire what it writes there.
+                serde_json::json!({ "ok": false, "error": "PLC 설정은 KYNEX를 실행한 컴퓨터에서만 바꿀 수 있습니다" })
+                    .to_string()
+            } else if op == "plc_link" {
                 // Where the PLC is, and whether to be linked to it.
                 let req: Value = serde_json::from_str(&request.body).unwrap_or_default();
                 self.plc.set(crate::plc::Settings::of(&req));

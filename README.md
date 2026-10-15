@@ -650,8 +650,11 @@ to try the PLC's logic before the machines exist (`apps/kynex/src/plc.rs`).
 KYNEX is a Modbus TCP client of the PLC, as Visual Components is:
 
 - **PLC** in the toolbar: the PLC's address, port (502 by default) and
-  unit, and **연결**. Kept in the project file. The dot on the button is
-  green while KYNEX exchanges with the PLC, every 50 ms.
+  unit, and **연결**. Where the PLC is is kept in the project file, but
+  opening a project never connects: someone presses 연결 each time. The
+  dot on the button is green while KYNEX exchanges with the PLC, every
+  50 ms. The link and the coils are changed only from the computer KYNEX
+  runs on: a viewer shared with `--lan` refuses them from elsewhere.
 - **PLC 코일** in a machine's inspector: a coil address (from 0, as
   Modbus addresses them) for each command and each state. A command — 문
   열기, 척 물림, 시작 … — is given as the PLC turns its coil on; a state —

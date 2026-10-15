@@ -52,6 +52,10 @@ const ROBOT_LIMIT: usize = 64 * 1024;
 pub struct RobotRequest {
     pub body: String,
     pub reply: Sender<String>,
+    /// Whether it came from this computer, not another on the network (a
+    /// viewer shared with `--lan`): what reaches beyond the viewer, as a
+    /// link to a PLC does, is only for this computer's page to change.
+    pub local: bool,
 }
 
 /// Where the scene the viewer shows comes from, and how that is going.
@@ -302,6 +306,7 @@ impl Gate {
 
 /// One connection: a file, or the stream.
 fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
+    let local = stream.peer_addr().is_ok_and(|a| a.ip().is_loopback());
     // A peer that stops reading is let go after this long, and its thread
     // and connection slot with it.
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
@@ -396,6 +401,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         let asked = robot.send(RobotRequest {
             body: String::from_utf8_lossy(&body).into_owned(),
             reply: tx,
+            local,
         });
         return match asked
             .ok()

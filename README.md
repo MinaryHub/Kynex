@@ -94,7 +94,9 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   points into the edge along the bisector of its two faces, its X along
   the way it goes; each point is solved from the one before, and how
   many it cannot reach is said. Pick the TCP the work is done with (the
-  tool's tip) first: the path is for it.
+  tool's tip) first: the path is for it. Its moves after the first are
+  the tool's work: within 0.2 m of where its tip goes on them, coming
+  close to the part is not warned of, as at a gripper's grip.
 - **Measure, report, video** (the toolbar): the ruler (M) measures between
   two points clicked on shapes — the distance and ΔX/ΔY/ΔZ in mm; the
   report opens a page to print or keep as a PDF: the cell from above and
@@ -161,7 +163,9 @@ Each robot card has a **프로그램**: a list of steps.
    An action's machine, grip point, command or signal is changed in its
    row. Clicking a step's row picks it, and the next step added goes
    after it.
-4. **▶ 실행** runs the program (`apps/kynex/src/run.rs`).
+4. **▶ 실행** runs the program (`apps/kynex/src/run.rs`). Each robot runs
+   its own: started on another robot, a program goes on beside those
+   running, on the same clock, and the timeline has a lane for each.
 
 KYNEX times the moves (`kynex_kin::path`):
 

@@ -124,6 +124,9 @@ pub struct Point {
     /// For a circular move, the point its arc passes through: joint
     /// positions, as `positions`.
     pub via: Option<BTreeMap<u64, f64>>,
+    /// Whether the tool works on a part on the way into it — deburring
+    /// along an edge — so its tip comes to the part as it means to.
+    pub work: bool,
 }
 
 /// What the robot does between moves.
@@ -209,6 +212,7 @@ impl Program {
             frame: None,
             blend: 0.0,
             via: via.filter(|_| kind == MoveKind::Circular),
+            work: false,
         };
         self.insert(Step::Move(point), after);
     }
@@ -468,6 +472,7 @@ impl Program {
                     "frame_name": p.frame.map(|f| name(f.object)),
                     "frame_at": p.frame.map(|f| affine_json(&f.taught_in)),
                     "blend": p.blend,
+                    "work": p.work,
                     "via": p.via.as_ref().map(|via| via.iter().map(|(uid, q)| json!({
                         "uid": uid.to_string(),
                         "name": var_name.get(uid).copied().unwrap_or(""),
@@ -553,6 +558,7 @@ impl Program {
                         },
                         blend: s["blend"].as_f64().unwrap_or(0.0).clamp(0.0, MAX_BLEND),
                         via: s["via"].is_array().then(|| joints(&s["via"])),
+                        work: s["work"] == true,
                     };
                     // Saved before points had frames: a pallet point is in
                     // its pallet's frame, where the pallet stands now.
@@ -805,12 +811,37 @@ impl Program {
             let tool = kin.tool(gripper, DAffine3::IDENTITY)?;
             Some(kin.pose(&waypoints[m].positions, &tool).translation)
         };
+        // Into a point the tool works on the way to: where its tip goes, a
+        // tenth of a second apart.
+        let tool = self.tool(kin);
+        let along = |seg: &kynex_kin::path::Segment| -> Vec<DVec3> {
+            let working = moves
+                .get(seg.to)
+                .and_then(|i| self.steps.get(*i))
+                .is_some_and(|s| matches!(s, Step::Move(p) if p.work));
+            match (&tool, working) {
+                (Some(tool), true) => {
+                    let n = (seg.duration / 0.1).ceil().max(1.0) as usize;
+                    (0..=n)
+                        .map(|k| {
+                            let t = seg.start + seg.duration * k as f64 / n as f64;
+                            kin.pose(&plan.at(t), tool).translation
+                        })
+                        .collect()
+                }
+                _ => Vec::new(),
+            }
+        };
         plan.segments
             .iter()
             .map(|seg| {
                 let to = seg.to;
                 let from = if to == 0 { moves.len() - 1 } else { to - 1 };
-                at(to).into_iter().chain(at(from)).collect()
+                at(to)
+                    .into_iter()
+                    .chain(at(from))
+                    .chain(along(seg))
+                    .collect()
             })
             .collect()
     }

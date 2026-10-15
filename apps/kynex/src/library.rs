@@ -94,7 +94,7 @@ const fn tool(default: usize) -> Param {
 pub const TEMPLATES: &[Template] = &[
     Template {
         key: "ur10e_tending",
-        name: "UR10e + 이중 그리퍼",
+        name: "UR10e",
         group: "로봇",
         params: &[tool(2)],
     },
@@ -118,7 +118,7 @@ pub const TEMPLATES: &[Template] = &[
     },
     Template {
         key: "irb1600_tending",
-        name: "ABB IRB 1600 + 이중 그리퍼",
+        name: "ABB IRB 1600",
         group: "로봇",
         params: &[tool(2)],
     },
@@ -130,13 +130,13 @@ pub const TEMPLATES: &[Template] = &[
     },
     Template {
         key: "m1013_tending",
-        name: "Doosan M1013 + 이중 그리퍼",
+        name: "Doosan M1013",
         group: "로봇",
         params: &[tool(2)],
     },
     Template {
         key: "lrmate200id7l_tending",
-        name: "FANUC LR Mate 200iD/7L + 이중 그리퍼",
+        name: "FANUC LR Mate 200iD/7L",
         group: "로봇",
         params: &[tool(2)],
     },

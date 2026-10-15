@@ -68,10 +68,7 @@ fn a_robot_from_the_library_is_a_robot() {
     let (doc, _) = shown(&mut library);
     let robots = kynex_model::robots(&doc);
     assert_eq!(robots.len(), 1);
-    assert_eq!(
-        robots[0].name, "UR10e + 이중 그리퍼 1",
-        "named after the item"
-    );
+    assert_eq!(robots[0].name, "UR10e 1", "named after the item");
     let kin = Kinematics::of(&doc, robots[0].root).unwrap();
     assert_eq!(kin.vars.len(), 6);
     // Its base link stands where the item was placed, 0.7 m up.

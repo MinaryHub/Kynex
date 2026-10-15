@@ -113,8 +113,9 @@ export class RobotPanel {
     this.cell = { components: [], parts: [] };
     // By robot root, as the `programs` event has them.
     this.programs = {};
-    // The program running, and the clock, as the `pose` event has them.
-    this.running = null;
+    // The programs running, a robot's each, and the clock, as the `pose`
+    // event has them.
+    this.running = [];
     this.clock = { speed: 1, time: 0 };
     // The tool paths and taught points, drawn over the scene.
     this.paths = new THREE.Group();
@@ -175,18 +176,23 @@ export class RobotPanel {
     return ui;
   }
 
-  // The `pose` event: the robots held here, the program running, and the
+  // Robot `root`'s program running, if it has one.
+  runOf(root) {
+    return this.running.find((r) => r.robot === root) ?? null;
+  }
+
+  // The `pose` event: the robots held here, the programs running, and the
   // simulation's clock.
   setPose(pose) {
     this.held = new Set(pose.held);
-    this.running = pose.running ?? null;
+    this.running = Array.isArray(pose.running) ? pose.running : [];
     if (pose.clock) this.clock = pose.clock;
     for (const section of this.host.querySelectorAll('.robot')) {
       const root = section.dataset.root;
       const held = this.held.has(root);
       section.classList.toggle('held', held);
       section.querySelector('.robot-local').hidden = !held;
-      this.showRun(section, this.running?.robot === root ? this.running : null);
+      this.showRun(section, this.runOf(root));
     }
   }
 
@@ -553,7 +559,7 @@ export class RobotPanel {
           </li>`);
       }
       list.innerHTML = rows.join('');
-      this.showRun(section, this.running?.robot === section.dataset.root ? this.running : null);
+      this.showRun(section, this.runOf(section.dataset.root));
     }
   }
 
@@ -1261,7 +1267,8 @@ export class RobotPanel {
         if (ui.cursor != null) ui.cursor += 1;
       });
     } else if (act === 'play') {
-      const going = this.running?.robot === r.root && !['done', 'alarm'].includes(this.running.state);
+      const run = this.runOf(r.root);
+      const going = run && !['done', 'alarm'].includes(run.state);
       this.programOp(r, { op: going ? 'stop' : 'play' });
     } else if (act === 'export') {
       this.programOp(r, { op: 'export', vendor: e.target.closest('[data-vendor]').dataset.vendor }, (answer) => {

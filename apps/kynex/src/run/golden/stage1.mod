@@ -1,5 +1,5 @@
-MODULE KYNEX_UR10e__________1
-  ! Made by KYNEX from program "UR10e + ?? ??? 1".
+MODULE KYNEX_UR10e_1
+  ! Made by KYNEX from program "UR10e 1".
   ! Targets in the base frame (wobj0), millimetres and quaternions.
   ! Signals to set up on the controller:
   !   DO_KYNEX_0: digital output

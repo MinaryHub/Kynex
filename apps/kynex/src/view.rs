@@ -225,8 +225,8 @@ struct Stage {
     base: Option<Document>,
     /// What the viewers need to look at again for the equipment.
     placed: Changes,
-    /// The program running, and the clock it runs by.
-    runner: Option<Runner>,
+    /// The programs running, a robot's each, and the clock they run by.
+    runners: Vec<Runner>,
     /// When the viewers were last told, while a run goes on.
     ticked: Option<Instant>,
     clock: Clock,
@@ -275,7 +275,7 @@ impl Stage {
             collider: Collider::default(),
             base: None,
             placed: Changes::default(),
-            runner: None,
+            runners: Vec::new(),
             ticked: None,
             clock: Clock::default(),
             timeline: None,
@@ -343,14 +343,11 @@ impl Stage {
                 .ok()
                 .and_then(|v| v["robot"].as_str().and_then(|s| s.parse::<u64>().ok()));
             // Moving a robot by hand stops its program.
-            if matches!(op.as_str(), "jog" | "ik" | "release" | "goto")
-                && self
-                    .runner
-                    .as_ref()
-                    .is_some_and(|r| Some(r.root) == robot || robot.is_none())
-            {
-                self.runner = None;
-                touched = true;
+            if matches!(op.as_str(), "jog" | "ik" | "release" | "goto") {
+                let before = self.runners.len();
+                self.runners
+                    .retain(|r| robot.is_some_and(|robot| robot != r.root));
+                touched |= self.runners.len() != before;
             }
             let reply = if op == "scenario" {
                 touched = true;
@@ -429,7 +426,7 @@ impl Stage {
         let now = Instant::now();
         let time = self.clock.advance(now);
         let scene = self.base.as_ref().unwrap_or(doc);
-        if let Some(runner) = self.runner.as_mut() {
+        for runner in &mut self.runners {
             if runner.tick(time, now, &mut self.posing, &mut self.cell, scene) {
                 touched = true;
                 // The robot the program moves, drawn where it now is.
@@ -440,7 +437,7 @@ impl Stage {
         // A program going round is kept supplied, as an operator would:
         // raw parts on the infeed, finished parts off the outfeed — whole
         // pallets at a time for the pallets it goes through place by place.
-        if let Some(runner) = self.runner.as_ref().filter(|r| r.looping() && !r.stopped()) {
+        for runner in self.runners.iter().filter(|r| r.looping() && !r.stopped()) {
             self.cell.swap_pallets(scene, &runner.counted_pallets());
             touched |= self.cell.take_changed();
         }
@@ -460,15 +457,19 @@ impl Stage {
             }
         }
         // While a run goes on, the timeline grows with it.
-        if let (Some(timeline), Some(runner)) = (self.timeline.as_mut(), self.runner.as_ref()) {
-            // The tick a run stops on is recorded too: an alarm shows.
+        if let Some(timeline) = self.timeline.as_mut().filter(|_| !self.runners.is_empty()) {
+            // The tick the last run stops on is recorded too: an alarm shows.
             if !timeline.ended() {
-                let mut lanes = vec![Now {
-                    key: runner.root.to_string(),
-                    name: crate::collide::label(scene, runner.root),
-                    group: "robot",
-                    activity: runner.activity(),
-                }];
+                let mut lanes: Vec<Now> = self
+                    .runners
+                    .iter()
+                    .map(|runner| Now {
+                        key: runner.root.to_string(),
+                        name: crate::collide::label(scene, runner.root),
+                        group: "robot",
+                        activity: runner.activity(),
+                    })
+                    .collect();
                 lanes.extend(self.cell.activities(scene).into_iter().map(
                     |(uid, name, activity)| Now {
                         key: uid.to_string(),
@@ -478,7 +479,7 @@ impl Stage {
                     },
                 ));
                 timeline.sample(time, lanes);
-                if runner.stopped() {
+                if self.runners.iter().all(|r| r.stopped()) {
                     timeline.end();
                 }
             }
@@ -489,7 +490,7 @@ impl Stage {
     /// While a program runs, every so often whether or not anything moved:
     /// a pause counting down, a wait going on, shown as they go.
     fn ticking(&mut self) -> bool {
-        if !self.runner.as_ref().is_some_and(|r| !r.stopped()) {
+        if !self.runners.iter().any(|r| !r.stopped()) {
             return false;
         }
         let due = self
@@ -503,7 +504,7 @@ impl Stage {
 
     /// Whether anything runs by the clock: the loop then keeps time.
     fn running(&self) -> bool {
-        self.runner.as_ref().is_some_and(|r| !r.stopped())
+        self.runners.iter().any(|r| !r.stopped())
             || self.cell.is_running()
             || self.comparing.is_some()
     }
@@ -519,8 +520,12 @@ impl Stage {
                 }
                 _ => Err("speed is a positive number".to_string()),
             },
+            // One robot's program, or every one's.
             "stop" => {
-                self.runner = None;
+                match req["robot"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                    Some(root) => self.runners.retain(|r| r.root != root),
+                    None => self.runners.clear(),
+                }
                 Ok(())
             }
             _ => (|| {
@@ -533,12 +538,17 @@ impl Stage {
                 let scene = self.base.as_ref().unwrap_or(doc);
                 let mut runner = Runner::new(root, program, scene, self.clock.time)?;
                 runner.origin = origin;
-                self.runner = Some(runner);
+                // The other robots' programs go on: a cell runs together.
+                // With none going on, a new run and a new record.
+                let alone = !self.runners.iter().any(|r| r.root != root && !r.stopped());
+                self.runners.retain(|r| r.root != root && !r.stopped());
+                self.runners.push(runner);
                 // Parts to take: the infeed stocked as the run starts.
                 self.cell.stock(scene);
-                // A new run, a new record.
-                self.timeline = Some(Timeline::new(self.clock.time));
-                self.timeline_told = None;
+                if alone {
+                    self.timeline = Some(Timeline::new(self.clock.time));
+                    self.timeline_told = None;
+                }
                 Ok(())
             })(),
         };
@@ -587,7 +597,7 @@ impl Stage {
             "load" => index.ok_or("no such scenario".to_string()).map(|i| {
                 let s = self.scenarios[i].clone();
                 let list = |key: &str| s[key].as_array().cloned().unwrap_or_default();
-                self.runner = None;
+                self.runners.clear();
                 self.timeline = None;
                 self.library.restore(&list("library"));
                 self.cell.restore(list("cell"));
@@ -653,10 +663,12 @@ impl Stage {
     /// the cell and the equipment, and saves what changed.
     fn tell(&mut self, server: &Server, doc: &Document, replaced: bool) {
         let scene = self.base.as_ref().unwrap_or(doc);
-        let running = self
-            .runner
-            .as_ref()
-            .map_or(Value::Null, |r| r.to_json(self.clock.time));
+        let running = Value::Array(
+            self.runners
+                .iter()
+                .map(|r| r.to_json(self.clock.time))
+                .collect(),
+        );
         server.state("pose", &self.posing.to_json(running, self.clock.to_json()));
         // At its pace while the run goes on; at once when it has ended, so
         // the last of it is shown.

@@ -253,8 +253,8 @@ impl Posing {
         Some(shown)
     }
 
-    /// What the `pose` event says: the robots held here, the program
-    /// running (see `crate::run`), and the simulation's clock.
+    /// What the `pose` event says: the robots held here, the programs
+    /// running, a list of them (see `crate::run`), and the simulation's clock.
     pub fn to_json(&self, running: Value, clock: Value) -> String {
         json!({
             "held": self.held.keys().map(u64::to_string).collect::<Vec<_>>(),
@@ -634,6 +634,8 @@ impl Posing {
                 });
                 if let Some(point) = program.point_mut(i) {
                     point.speed = pace;
+                    // Into the edge, along it and off it, the tool works.
+                    point.work = k > 0;
                 }
                 after = Some(i);
             }

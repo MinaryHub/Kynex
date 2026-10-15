@@ -1676,3 +1676,141 @@ fn a_path_follows_an_edge_picked_on_a_part() {
         "{into} at y {edge_y}"
     );
 }
+
+/// M2 (docs/roadmap-vs-visual-components.md §10): a machine tending and
+/// deburring cell laid out from the catalogue alone — stage 1's cell, and
+/// beside it an ABB IRB 1600 with a deburring spindle on a pedestal, the
+/// near top edge of a part on a stand followed with the spindle — every
+/// path free of contact, the tending program written for Universal Robots
+/// and the deburring one for ABB. Writes the project to `target/m2` for
+/// the viewer to open and record (`kynex view --empty --project
+/// target/m2/kynex-project.json`).
+#[test]
+fn m2_a_tending_and_deburring_cell_from_the_catalogue() {
+    let mut c = stage_one(2);
+    let place = |library: &mut Library, req: serde_json::Value| {
+        let (a, _) = library.handle(&req.to_string());
+        let a: serde_json::Value = serde_json::from_str(&a).unwrap();
+        assert_eq!(a["ok"], true, "{a}");
+        a["item"].as_u64().unwrap()
+    };
+    place(
+        &mut c.library,
+        json!({"op": "place", "template": "pedestal", "at": [-3.2, 0.0, 0.0]}),
+    );
+    let (a, _) = c.library.handle(
+        &json!({"op": "place", "template": "irb1600_tending", "at": [-3.15, 0.05, 0.0],
+                "params": {"tool": 4}, "snap": true})
+        .to_string(),
+    );
+    assert!(a.contains("로봇 받침대"), "snapped onto its pedestal: {a}");
+    // The part: a 0.5 m block on a stand, 0.6 m up.
+    let part = place(
+        &mut c.library,
+        json!({"op": "place", "template": "pedestal", "at": [-2.0, 0.0, 0.0],
+               "params": {"height": 0.6, "size": 0.5}}),
+    );
+    let mut doc = Document::new();
+    c.library.apply(&mut doc);
+    for (uid, name, kind) in c.library.roles() {
+        c.cell.ensure(uid, name, kind);
+    }
+    c.doc = doc;
+    let listed: serde_json::Value = serde_json::from_str(&c.library.to_json()).unwrap();
+    let part_root = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == part)
+        .unwrap()["root"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let abb = kynex_model::robots(&c.doc)
+        .into_iter()
+        .find(|r| r.vendor() == Some("abb"))
+        .unwrap()
+        .root;
+    let tcp = c
+        .doc
+        .objects()
+        .find(|(id, o)| o.name == "tcp" && c.doc.robot_root(*id).is_some())
+        .and_then(|(id, _)| c.doc.object_uid(id))
+        .unwrap()
+        .raw();
+
+    // The near top edge, deburred at 30 mm/s.
+    let a = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "edge_path", "robot": abb.to_string(), "tool": tcp.to_string(),
+               "object": part_root, "point": [-2.26, 0.0, 0.61], "speed": 0.03, "approach": 0.05}),
+    );
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(a["missed"], 0, "{a}");
+    assert!((a["length"].as_f64().unwrap() - 0.5).abs() < 1e-6, "{a}");
+
+    // Every path of both robots touches nothing and comes near nothing but
+    // where its tool works.
+    let programs: serde_json::Value = serde_json::from_str(&c.posing.programs_json(
+        &c.doc,
+        &mut Collider::default(),
+        &c.cell,
+    ))
+    .unwrap();
+    for robot in [c.robot, abb] {
+        let problems: Vec<&serde_json::Value> = programs[robot.to_string()]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["move"]["problems"].as_array().into_iter().flatten())
+            .collect();
+        assert!(problems.is_empty(), "{robot}: {problems:?}");
+    }
+
+    // Two vendors' programs.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/m2");
+    std::fs::create_dir_all(&dir).unwrap();
+    let io = stage_one_io(&c);
+    for (robot, writer, file) in [
+        (
+            c.robot,
+            &kynex_kin::urscript::Ur as &dyn kynex_kin::post::Writer,
+            "tending.script",
+        ),
+        (abb, &kynex_kin::rapid::Abb, "deburring.mod"),
+    ] {
+        let (flat, _) = c.posing.runnable(robot).unwrap();
+        let kin = kynex_kin::Kinematics::of(&c.doc, robot).unwrap();
+        let (script, _) = flat
+            .export(robot, &c.doc, &kin, false, &io, writer)
+            .unwrap();
+        std::fs::write(dir.join(file), &script).unwrap();
+        let plan = flat.plan(&kin).unwrap();
+        let cycle = plan.segments.last().map_or(0.0, |s| s.start + s.duration);
+        println!(
+            "{file}: {} lines, moves {:.1} s",
+            script.lines().count(),
+            cycle
+        );
+    }
+    let deburr = std::fs::read_to_string(dir.join("deburring.mod")).unwrap();
+    assert!(
+        deburr.contains("MoveL") && deburr.contains("kynex_v30"),
+        "{deburr}"
+    );
+
+    // The project, for the viewer.
+    let project = json!({
+        "version": crate::program::FILE_VERSION,
+        "programs": c.posing.saved_programs(&c.doc),
+        "cell": c.cell.to_saved(),
+        "library": c.library.to_saved(),
+        "scenarios": [],
+    });
+    std::fs::write(
+        dir.join("kynex-project.json"),
+        serde_json::to_string_pretty(&project).unwrap(),
+    )
+    .unwrap();
+}

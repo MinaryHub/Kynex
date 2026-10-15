@@ -1,6 +1,6 @@
-# Made by KYNEX from program "UR10e + ?? ??? 1".
+# Made by KYNEX from program "UR10e 1".
 # Poses in the base frame, metres and rotation vectors.
-def UR10e__________1():
+def UR10e_1():
   set_tcp(p[0.000000, 0.070000, 0.170000, 0.000000, 0.000000, 0.000000])
   # To the start
   write_output_integer_register(0, 1)
@@ -71,4 +71,4 @@ def UR10e__________1():
   write_output_integer_register(1, 13)
   write_output_integer_register(0, 14)
 end
-UR10e__________1()
+UR10e_1()

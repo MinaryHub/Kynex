@@ -439,7 +439,7 @@ fn run_browser(docs: &[(Tier, Document)], port: u16, open: bool) -> Result<Vec<V
     server.status(&Status::File {
         path: "benchmark".into(),
     });
-    let url = format!("http://localhost:{}/?bench", server.addr().port());
+    let url = format!("http://127.0.0.1:{}/?bench", server.addr().port());
     println!("\n브라우저 측정: {url}");
     println!("  (기본 브라우저가 열립니다. 측정이 끝날 때까지 창을 앞에 두고 건드리지 마세요.)\n");
 

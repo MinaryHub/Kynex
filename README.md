@@ -55,7 +55,7 @@ over 2 million triangles, or over a kilometre, is refused. It is read on a
 thread of its own, so the viewer goes on meanwhile. Files go to `POST
 /import` as bytes, from this computer only, at most 256 MB.
 
-This opens `http://localhost:8090` in a browser. The viewer is a web page
+This opens `http://127.0.0.1:8090` in a browser. The viewer is a web page
 that KYNEX serves itself. It works on Windows, macOS, Linux and tablets, in
 any browser with WebGL, and there is nothing to install. The page and
 three.js are built into the `kynex` binary, so the viewer also works on a

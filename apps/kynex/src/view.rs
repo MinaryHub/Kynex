@@ -84,7 +84,10 @@ pub fn run_with(
         format!("127.0.0.1:{port}")
     };
     let server = Server::start(&bind).map_err(|e| format!("could not listen on {bind}: {e}"))?;
-    let local = format!("http://localhost:{}", server.addr().port());
+    // The address served on, not `localhost`: that may be IPv6's ::1 first,
+    // where another program could be listening on the same port and be
+    // shown in KYNEX's window or the browser in its place.
+    let local = format!("http://127.0.0.1:{}", server.addr().port());
     println!("KYNEX 뷰어: {local}");
     if lan {
         println!(

@@ -16,7 +16,7 @@
 //!
 //! `--json` writes one JSON object per line instead, for a program to read.
 //!
-//! `view` serves the 3D viewer at `http://localhost:8090`, for any browser
+//! `view` serves the 3D viewer at `http://127.0.0.1:8090`, for any browser
 //! on any system: KYNEX on its own, its cell laid out from its library and
 //! the models it imports, in the project last opened. Given a Kreate
 //! session's address (or `--kreate` for this machine's), it does what

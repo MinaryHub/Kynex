@@ -35,6 +35,16 @@ mod id {
 /// The Value attribute.
 const VALUE: u32 = 13;
 
+/// The largest chunk KYNEX takes: its receive buffer, as Hello says.
+const CHUNK: u32 = 65_536;
+/// The largest message KYNEX takes, and in how many chunks at most, as
+/// Hello says; a server that sends more is cut off. KYNEX's answers are a
+/// few kilobytes.
+const MAX_MESSAGE: u32 = 4 * 1024 * 1024;
+const MAX_CHUNKS: u32 = 128;
+/// How deep diagnostic information may nest.
+const MAX_DIAGNOSTIC_DEPTH: usize = 16;
+
 /// A node's identity: its namespace, and a number or a name in it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NodeId {
@@ -259,6 +269,14 @@ impl<'a> In<'a> {
         Ok(())
     }
     fn diagnostic(&mut self) -> Result<(), String> {
+        self.diagnostic_within(0)
+    }
+    /// A DiagnosticInfo, and the ones nested in it, no deeper than a
+    /// server has any need to: a hostile one does not run KYNEX's stack out.
+    fn diagnostic_within(&mut self, depth: usize) -> Result<(), String> {
+        if depth > MAX_DIAGNOSTIC_DEPTH {
+            return Err("OPC UA: 진단 정보가 너무 깊이 겹쳐 있습니다".into());
+        }
         let mask = self.u8()?;
         for bit in [0x01, 0x02, 0x04, 0x08] {
             if mask & bit != 0 {
@@ -272,7 +290,7 @@ impl<'a> In<'a> {
             self.u32()?;
         }
         if mask & 0x40 != 0 {
-            self.diagnostic()?;
+            self.diagnostic_within(depth + 1)?;
         }
         Ok(())
     }
@@ -375,10 +393,10 @@ impl Session {
     fn hello(&mut self, url: &str) -> Result<(), String> {
         let mut body = Out::default();
         body.u32(0) // protocol version
-            .u32(65_536) // receive buffer
-            .u32(65_536) // send buffer
-            .u32(0) // no message size limit
-            .u32(0) // no chunk count limit
+            .u32(CHUNK) // receive buffer
+            .u32(CHUNK) // send buffer
+            .u32(MAX_MESSAGE)
+            .u32(MAX_CHUNKS)
             .string(Some(url));
         self.send(b"HEL", &body.0)?;
         let (kind, _) = self.receive()?;
@@ -534,7 +552,8 @@ impl Session {
         let mut r = In::new(&reply);
         r.header()?;
         let n = r.count()?;
-        let mut out = Vec::with_capacity(n);
+        // As many as were asked for, whatever the count the server gives.
+        let mut out = Vec::with_capacity(n.min(nodes.len()));
         for node in nodes.iter().take(n) {
             let mask = r.u8()?;
             let value = if mask & 0x01 != 0 {
@@ -668,15 +687,20 @@ impl Session {
     /// sequence headers).
     fn receive(&mut self) -> Result<([u8; 3], Vec<u8>), String> {
         let mut body: Vec<u8> = Vec::new();
-        loop {
+        for _ in 0..MAX_CHUNKS {
             let mut head = [0u8; 8];
             self.stream
                 .read_exact(&mut head)
                 .map_err(|e| e.to_string())?;
             let kind = [head[0], head[1], head[2]];
             let size = u32::from_le_bytes(head[4..8].try_into().unwrap()) as usize;
-            if !(8..=16 * 1024 * 1024).contains(&size) {
+            // No more than KYNEX said it takes: a chunk its buffer, a
+            // message its limit.
+            if !(8..=CHUNK as usize).contains(&size) {
                 return Err(format!("OPC UA: 메시지 크기가 맞지 않습니다: {size}"));
+            }
+            if body.len() + size > MAX_MESSAGE as usize {
+                return Err("OPC UA: 메시지가 너무 깁니다".into());
             }
             let mut chunk = vec![0u8; size - 8];
             self.stream
@@ -694,6 +718,7 @@ impl Session {
                 _ => return Err("OPC UA: 메시지가 중간에 취소됐습니다".into()),
             }
         }
+        Err("OPC UA: 메시지 조각이 너무 많습니다".into())
     }
 }
 
@@ -755,6 +780,20 @@ mod tests {
             println!("write {k}: {:?}", t.elapsed());
         }
         s.close();
+    }
+
+    /// Diagnostic information nested a few deep reads; nested past the
+    /// limit — as a hostile server could, a million deep — is refused
+    /// rather than running the stack out.
+    #[test]
+    fn diagnostics_nest_only_so_deep() {
+        let nested = |depth: usize| {
+            let mut bytes = vec![0x40; depth];
+            bytes.push(0x00);
+            bytes
+        };
+        assert!(In::new(&nested(3)).diagnostic().is_ok());
+        assert!(In::new(&nested(1_000_000)).diagnostic().is_err());
     }
 
     /// Node ids in their shortest binary form, and read back.

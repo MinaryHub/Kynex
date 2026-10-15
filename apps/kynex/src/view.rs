@@ -367,11 +367,11 @@ impl Stage {
                     .retain(|r| robot.is_some_and(|robot| robot != r.root));
                 touched |= self.runners.len() != before;
             }
-            let reply = if matches!(op.as_str(), "plc_link" | "plc" | "signals") && !request.local {
-                // A viewer shared on the network does not let others point
-                // KYNEX at a PLC, nor rewire what it writes there.
-                serde_json::json!({ "ok": false, "error": "PLC 설정은 KYNEX를 실행한 컴퓨터에서만 바꿀 수 있습니다" })
-                    .to_string()
+            let reply = if let Some(why) = (!request.local)
+                .then(|| reaches_plc(&op, &request.body, self.plc.on()))
+                .flatten()
+            {
+                serde_json::json!({ "ok": false, "error": why }).to_string()
             } else if op == "plc_link" {
                 // Where the PLC is, and whether to be linked to it.
                 let req: Value = serde_json::from_str(&request.body).unwrap_or_default();
@@ -861,6 +861,30 @@ fn offline(
     }
 }
 
+/// Why request `op` (`body`) from another computer — a viewer shared with
+/// `--lan` — is refused, if it reaches a PLC: where the PLC is and what is
+/// wired to it, a program step that writes or waits on its signals, and,
+/// while KYNEX is linked to one, running programs and commanding machines,
+/// whose states go to it. `None` when it does not.
+fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
+    if matches!(op, "plc_link" | "plc" | "signals") {
+        return Some("PLC 설정은 KYNEX를 실행한 컴퓨터에서만 바꿀 수 있습니다");
+    }
+    if matches!(op, "add" | "edit") {
+        let req: Value = serde_json::from_str(body).unwrap_or_default();
+        let kind = req["step"]["type"].as_str().unwrap_or("");
+        if kind.starts_with("signal") {
+            return Some("PLC 신호 동작은 KYNEX를 실행한 컴퓨터에서만 넣을 수 있습니다");
+        }
+    }
+    if linked && matches!(op, "play" | "stop" | "machine") {
+        return Some(
+            "PLC에 연결된 동안에는 KYNEX를 실행한 컴퓨터에서만 실행하고 장비를 움직일 수 있습니다",
+        );
+    }
+    None
+}
+
 fn names(peers: &[(u16, String)]) -> Vec<String> {
     peers.iter().map(|(_, n)| n.clone()).collect()
 }
@@ -896,6 +920,25 @@ pub(crate) fn open_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// From another computer: the PLC's settings never; a program step on
+    /// its signals never; running and machine commands not while linked;
+    /// anything else, as before.
+    #[test]
+    fn another_computer_cannot_reach_the_plc() {
+        assert!(reaches_plc("plc_link", "{}", false).is_some());
+        assert!(reaches_plc("signals", "{}", false).is_some());
+        let set = r#"{"op":"add","step":{"type":"signal_set","name":"go","value":1}}"#;
+        assert!(reaches_plc("add", set, false).is_some());
+        let edit = r#"{"op":"edit","index":2,"step":{"type":"signal_wait","name":"go","value":1}}"#;
+        assert!(reaches_plc("edit", edit, false).is_some());
+        let delay = r#"{"op":"add","step":{"type":"delay","seconds":1}}"#;
+        assert!(reaches_plc("add", delay, true).is_none());
+        assert!(reaches_plc("play", "{}", false).is_none());
+        assert!(reaches_plc("play", "{}", true).is_some());
+        assert!(reaches_plc("machine", "{}", true).is_some());
+        assert!(reaches_plc("jog", "{}", true).is_none());
+    }
 
     #[test]
     fn a_check_waits_three_times_as_long_as_the_last_took() {

@@ -658,7 +658,9 @@ or **OPC UA**:
   with the PLC, every 50 ms; addresses the PLC would not read or write
   are listed beside it, the link going on with the rest. The link and the
   addresses are changed only from the computer KYNEX runs on: a viewer
-  shared with `--lan` refuses them from elsewhere.
+  shared with `--lan` refuses them from elsewhere, and with them program
+  steps on PLC signals; while linked, it also refuses running programs and
+  commanding machines from elsewhere, as their states reach the PLC.
 - **PLC 주소** in a machine's inspector, for each command and each state:
   over Modbus a coil's number (from 0, as Modbus addresses them), over
   OPC UA a Boolean variable's node id (`ns=2;s=Lathe.Open`, `ns=3;i=1001`;

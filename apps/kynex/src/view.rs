@@ -245,6 +245,8 @@ struct Stage {
     /// changed since last saved.
     plc: crate::plc::Plc,
     plc_changed: bool,
+    /// The real machines the cell's follow, by machine (`crate::mtconnect`).
+    mirrors: std::collections::BTreeMap<u64, crate::mtconnect::Mirror>,
 }
 
 /// How often the timeline goes to the viewers while it grows.
@@ -302,6 +304,7 @@ impl Stage {
                 ..crate::plc::Settings::of(&saved.plc)
             }),
             plc_changed: false,
+            mirrors: Default::default(),
         })
     }
 
@@ -470,6 +473,20 @@ impl Stage {
             }
         }
         touched |= self.cell.tick(scene, time, now);
+        // Machines following real ones: their agents asked, their states
+        // taken.
+        let sources = self.cell.mirror_sources();
+        self.mirrors
+            .retain(|uid, m| sources.iter().any(|(u, s)| u == uid && *s == m.source));
+        for (uid, source) in sources {
+            let link = self
+                .mirrors
+                .entry(uid)
+                .or_insert_with(|| crate::mtconnect::Mirror::start(source));
+            self.cell
+                .mirror(uid, link.observation().as_ref(), time, link.to_json());
+        }
+        touched |= self.cell.take_changed();
         // A PLC's commands given, the machines' states handed back.
         let mut starts: Vec<u64> = Vec::new();
         if self.plc.on() {
@@ -580,6 +597,7 @@ impl Stage {
         self.runners.iter().any(|r| !r.stopped())
             || self.cell.is_running()
             || self.plc.on()
+            || !self.mirrors.is_empty()
             || self.comparing.is_some()
     }
 
@@ -885,8 +903,10 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
     if linked {
         return Some("PLC에 연결된 동안 다른 컴퓨터에서는 보기만 할 수 있습니다");
     }
-    if matches!(op, "plc_link" | "plc" | "signals" | "scenario") {
-        return Some("PLC 설정과 시나리오 불러오기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다");
+    if matches!(op, "plc_link" | "plc" | "signals" | "scenario" | "mirror") {
+        return Some(
+            "PLC·MTConnect 설정과 시나리오 불러오기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다",
+        );
     }
     if matches!(op, "add" | "edit") {
         let req: Value = serde_json::from_str(body).unwrap_or_default();

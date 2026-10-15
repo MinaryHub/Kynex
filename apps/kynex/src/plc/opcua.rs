@@ -1346,10 +1346,19 @@ mod tests {
         assert!(s.check_sequence(&ids(5, 9), &seq(101, 3)).is_ok());
         assert!(s.check_sequence(&ids(5, 9), &seq(101, 3)).is_err(), "again");
         assert!(s.check_sequence(&ids(5, 9), &seq(50, 3)).is_err(), "older");
-        assert!(s.check_sequence(&ids(6, 9), &seq(102, 3)).is_err(), "another channel");
-        assert!(s.check_sequence(&ids(5, 9), &seq(103, 4)).is_err(), "another request");
+        assert!(
+            s.check_sequence(&ids(6, 9), &seq(102, 3)).is_err(),
+            "another channel"
+        );
+        assert!(
+            s.check_sequence(&ids(5, 9), &seq(103, 4)).is_err(),
+            "another request"
+        );
         s.server_sequence = Some(u32::MAX - 3);
-        assert!(s.check_sequence(&ids(5, 9), &seq(2, 3)).is_ok(), "round past the top");
+        assert!(
+            s.check_sequence(&ids(5, 9), &seq(2, 3)).is_ok(),
+            "round past the top"
+        );
     }
 
     /// Diagnostic information nested a few deep reads; nested past the

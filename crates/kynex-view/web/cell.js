@@ -139,6 +139,16 @@ export class CellPanel {
       }
       this.send({ op: 'io', object: this.ctx.selected(), key, port });
     });
+    // Following a real machine, or no more.
+    document.getElementById('mirror-go').addEventListener('click', () => {
+      const object = this.ctx.selected();
+      const c = this.componentOf(object);
+      const following = !!c?.mirror;
+      const agent = following ? '' : document.getElementById('mirror-agent').value.trim();
+      const device = document.getElementById('mirror-device').value.trim();
+      if (!following && !agent) return this.ctx.toast('에이전트 주소를 넣으세요 (http://호스트:5000)');
+      this.send({ op: 'mirror', object, agent, device });
+    });
     document.getElementById('cell-plc').addEventListener('change', (e) => {
       const key = e.target.dataset.plc;
       if (!key) return;
@@ -259,6 +269,34 @@ export class CellPanel {
       };
       document.getElementById('cell-io').innerHTML =
         io.outputs.map((k) => row(k, true)).join('') + io.inputs.map((k) => row(k, false)).join('');
+    }
+    // The real machine it follows, and how that is going.
+    const mirrorBox = document.getElementById('cell-mirror-box');
+    mirrorBox.hidden = !(c && (c.kind === 'cnc' || c.kind === 'molder'));
+    if (!mirrorBox.hidden) {
+      const agent = document.getElementById('mirror-agent');
+      const device = document.getElementById('mirror-device');
+      if (c.mirror && !mirrorBox.contains(document.activeElement)) {
+        agent.value = c.mirror.agent;
+        device.value = c.mirror.device;
+      }
+      agent.disabled = device.disabled = !!c.mirror;
+      document.getElementById('mirror-go').textContent = c.mirror ? '그만 따라가기' : '따라가기';
+      const st = c.machine?.mirror;
+      let text = '';
+      if (c.mirror && st) {
+        const last = st.last;
+        if (st.error) text = st.error;
+        if (last) {
+          const said = [last.device, last.execution, last.door ? `문 ${last.door}` : null, last.part_count != null ? `생산 ${last.part_count}` : null, last.program]
+            .filter(Boolean)
+            .join(' · ');
+          text = `${said} (${st.age ?? '?'}초 전)${st.error ? ` · ${st.error}` : ''}`;
+        }
+      } else if (c.mirror) {
+        text = '연결 중…';
+      }
+      document.getElementById('mirror-state').textContent = text;
     }
     // Its PLC coils: commands the PLC gives it, states it gives the PLC.
     // A gripper is the robot's: its program closes it.

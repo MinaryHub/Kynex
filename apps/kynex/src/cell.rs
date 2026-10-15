@@ -374,6 +374,28 @@ pub struct Component {
     /// command is given as its address comes on; a state is written to
     /// its address.
     pub plc: BTreeMap<String, String>,
+    /// The real machine it follows, if it does (see `crate::mtconnect`):
+    /// its door, its cutting and its count of parts are then that
+    /// machine's, and it takes no commands.
+    pub mirror: Option<crate::mtconnect::Source>,
+}
+
+/// A mirror's source as saved: `{"agent": …, "device": …}`.
+fn mirror_of(v: &Value) -> Option<crate::mtconnect::Source> {
+    let agent = v["agent"].as_str()?.trim();
+    if agent.is_empty() || agent.len() > 300 {
+        return None;
+    }
+    Some(crate::mtconnect::Source {
+        agent: agent.to_string(),
+        device: v["device"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(100)
+            .collect(),
+    })
 }
 
 /// What a component of kind `kind` can be wired to: the robot's outputs
@@ -480,6 +502,12 @@ pub struct Machine {
     pub machining: Option<f64>,
     /// Cycles finished since the cell started.
     pub cycles: u64,
+    /// Following a real machine: when it began cutting, on the
+    /// simulation's clock; its part count when first read; and how its
+    /// agent is getting on, for the page.
+    pub cutting_since: Option<f64>,
+    pub parts_at_start: Option<i64>,
+    pub mirror_state: Option<Value>,
 }
 
 impl Machine {
@@ -946,6 +974,7 @@ impl Cell {
                         props,
                         io: io_of(&saved["io"]),
                         plc: plc_of(&saved["plc"]),
+                        mirror: mirror_of(&saved["mirror"]),
                     });
                     self.changed = true;
                 }
@@ -955,6 +984,7 @@ impl Cell {
                     if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {
                         c.io = io_of(&saved["io"]);
                         c.plc = plc_of(&saved["plc"]);
+                        c.mirror = mirror_of(&saved["mirror"]);
                         c.kind = kind;
                         c.props.update(&saved["props"]);
                         self.changed = true;
@@ -999,6 +1029,7 @@ impl Cell {
                     "props": c.props.to_json(),
                     "io": c.io,
                     "plc": c.plc,
+                    "mirror": c.mirror.as_ref().map(|m| json!({"agent": m.agent, "device": m.device})),
                 })
             })
             .chain(self.pending.iter().cloned())
@@ -1039,6 +1070,7 @@ impl Cell {
             props: Props::for_kind(kind),
             io: BTreeMap::new(),
             plc: BTreeMap::new(),
+            mirror: None,
         });
         self.roles_changed = true;
         self.changed = true;
@@ -1440,6 +1472,10 @@ impl Cell {
                             .filter(|c| c.kind == kind)
                             .map(|c| c.io.clone())
                             .unwrap_or_default(),
+                        mirror: was
+                            .as_ref()
+                            .filter(|c| c.kind == kind)
+                            .and_then(|c| c.mirror.clone()),
                         plc: was
                             .filter(|c| c.kind == kind)
                             .map(|c| c.plc)
@@ -1531,6 +1567,7 @@ impl Cell {
                         props: Props::for_kind(kind),
                         io: BTreeMap::new(),
                         plc: BTreeMap::new(),
+                        mirror: None,
                     });
                     added += 1;
                 }
@@ -1625,6 +1662,23 @@ impl Cell {
                 } else {
                     c.plc.insert(key.to_string(), address);
                 }
+                self.roles_changed = true;
+                self.changed = true;
+            }
+            // A machine to follow a real one over MTConnect, or no more.
+            "mirror" => {
+                let object = uid("object")?;
+                let c = self
+                    .components
+                    .iter_mut()
+                    .find(|c| c.object == object && c.kind.machine())
+                    .ok_or("CNC나 사출기가 아닙니다")?;
+                c.mirror = mirror_of(&req);
+                if let Some(m) = c.mirror.as_ref() {
+                    crate::mtconnect::split_url(&m.agent)?;
+                }
+                // Its state its own again, or the real one's from now.
+                self.machines.remove(&object);
                 self.roles_changed = true;
                 self.changed = true;
             }
@@ -1757,6 +1811,9 @@ impl Cell {
             .find(|c| c.object == machine && c.kind.machine())
             .cloned()
             .ok_or("명령을 받는 장비(CNC, 사출기)가 아닙니다")?;
+        if c.mirror.is_some() {
+            return Err("실제 장비(MTConnect)를 따라가는 중이라 명령을 받지 않습니다".into());
+        }
         let in_chuck = self.in_chuck(doc, &c);
         let m = self.machines.entry(machine).or_default();
         let busy = m.machining.is_some();
@@ -1974,6 +2031,65 @@ impl Cell {
         out
     }
 
+    /// The machines that follow real ones, and where.
+    pub fn mirror_sources(&self) -> Vec<(u64, crate::mtconnect::Source)> {
+        self.components
+            .iter()
+            .filter_map(|c| Some((c.object, c.mirror.clone()?)))
+            .collect()
+    }
+
+    /// Machine `machine` as the real one it follows was last read, `seen`
+    /// (none while its agent does not answer), at `time` on the
+    /// simulation's clock: its door open or shut, cutting or not, and the
+    /// parts it has made since it was first read counted as its cycles.
+    /// `state` is how its agent is getting on, for the page.
+    pub fn mirror(
+        &mut self,
+        machine: u64,
+        seen: Option<&crate::mtconnect::Observation>,
+        time: f64,
+        state: Value,
+    ) {
+        let m = self.machines.entry(machine).or_default();
+        if m.mirror_state.as_ref() != Some(&state) {
+            m.mirror_state = Some(state);
+            self.changed = true;
+        }
+        let Some(seen) = seen else { return };
+        let before = (m.door, m.opening, m.machining.is_some(), m.cycles);
+        match seen.door.as_deref() {
+            Some("OPEN") | Some("UNLATCHED") => {
+                m.door = 1.0;
+                m.opening = true;
+            }
+            Some("CLOSED") => {
+                m.door = 0.0;
+                m.opening = false;
+            }
+            _ => {}
+        }
+        if seen.execution.as_deref() == Some("ACTIVE") {
+            let since = *m.cutting_since.get_or_insert(time);
+            m.machining = Some((time - since).max(0.0));
+        } else {
+            m.cutting_since = None;
+            m.machining = None;
+        }
+        if let Some(count) = seen.part_count {
+            let start = *m.parts_at_start.get_or_insert(count);
+            // A count reset at the machine starts the count again.
+            if count < start {
+                m.parts_at_start = Some(count);
+            } else {
+                m.cycles = (count - start) as u64;
+            }
+        }
+        if before != (m.door, m.opening, m.machining.is_some(), m.cycles) {
+            self.changed = true;
+        }
+    }
+
     /// The signals shared with a PLC, as saved.
     pub fn signals_saved(&self) -> Value {
         Value::Array(self.signals.iter().map(PlcSignal::to_json).collect())
@@ -2081,6 +2197,9 @@ impl Cell {
         let mut done: Vec<DVec3> = Vec::new();
         let mut moulded: Vec<DVec3> = Vec::new();
         for c in &self.components {
+            if c.mirror.is_some() {
+                continue;
+            }
             let Some(m) = self.machines.get_mut(&c.object) else {
                 continue;
             };
@@ -2720,6 +2839,7 @@ impl Cell {
                     "props": c.props.to_json(),
                     "io": c.io,
                     "plc": c.plc,
+                    "mirror": c.mirror.as_ref().map(|m| json!({"agent": m.agent, "device": m.device})),
                     "io_points": {
                         "outputs": io_points(c.kind).0,
                         "inputs": io_points(c.kind).1,
@@ -2770,6 +2890,8 @@ impl Cell {
                             "door": m.door,
                             "opening": m.opening,
                             "clamped": m.clamped,
+                            "cycles": m.cycles,
+                            "mirror": m.mirror_state,
                             "chuck": m.chuck,
                             "progress": m.machining.map(|t| (t / c.props.cycle.max(1e-9)).min(1.0)),
                             "left": m.machining.map(|t| (c.props.cycle - t).max(0.0)),
@@ -2823,6 +2945,7 @@ pub fn is_op(op: &str) -> bool {
             | "point"
             | "plc"
             | "signals"
+            | "mirror"
     )
 }
 
@@ -3559,5 +3682,71 @@ mod tests {
             .unwrap();
         assert_eq!(c.kind, Kind::Door);
         assert!((c.props.travel - 0.4).abs() < 1e-12);
+    }
+
+    /// A lathe following a real one: its door as the real one's, cutting
+    /// while it is ACTIVE (its own cycle not run), its cycles the parts made
+    /// since first read (a count reset starting again); no commands taken;
+    /// following kept in the project file, and let go.
+    #[test]
+    fn a_machine_follows_a_real_one() {
+        use crate::mtconnect::Observation;
+        let (doc, mut cell, machine) = equipment("cnc_lathe", json!({}));
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "mirror", "object": machine.to_string(),
+                   "agent": "http://10.0.0.5:5000", "device": "Mazak"}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        assert_eq!(cell.mirror_sources().len(), 1);
+        let seen = |door: &str, execution: &str, parts: i64| Observation {
+            device: "Mazak".into(),
+            door: Some(door.into()),
+            execution: Some(execution.into()),
+            part_count: Some(parts),
+            ..Observation::default()
+        };
+        cell.mirror(machine, Some(&seen("OPEN", "READY", 41)), 0.0, json!({}));
+        assert!(cell.signal(&doc, machine, Signal::DoorOpen));
+        cell.mirror(machine, Some(&seen("CLOSED", "ACTIVE", 41)), 1.0, json!({}));
+        assert!(cell.signal(&doc, machine, Signal::DoorClosed));
+        assert!(!cell.signal(&doc, machine, Signal::Idle), "cutting");
+        // Its own 90 s cycle not run: it cuts as long as the real one does.
+        let t0 = Instant::now();
+        cell.tick(&doc, 200.0, t0);
+        cell.tick(&doc, 400.0, t0 + Duration::from_secs(1));
+        assert!(!cell.signal(&doc, machine, Signal::Idle));
+        cell.mirror(machine, Some(&seen("CLOSED", "READY", 43)), 2.0, json!({}));
+        assert!(cell.signal(&doc, machine, Signal::Idle));
+        assert_eq!(cell.machines[&machine].cycles, 2);
+        cell.mirror(machine, Some(&seen("CLOSED", "READY", 0)), 3.0, json!({}));
+        cell.mirror(machine, Some(&seen("CLOSED", "READY", 1)), 4.0, json!({}));
+        assert_eq!(
+            cell.machines[&machine].cycles, 1,
+            "counted again after a reset"
+        );
+        // Its agent silent: as it was last read.
+        cell.mirror(machine, None, 5.0, json!({"error": "timed out"}));
+        assert!(cell.signal(&doc, machine, Signal::Idle));
+        assert!(cell.command(&doc, machine, Command::Open).is_err());
+
+        let mut again = Cell::from_saved(cell.to_saved());
+        again.adopt(&doc);
+        assert_eq!(again.mirror_sources(), cell.mirror_sources());
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "mirror", "object": machine.to_string(), "agent": ""}),
+        );
+        assert_eq!(a["ok"], true);
+        assert!(cell.mirror_sources().is_empty());
+        assert!(cell.command(&doc, machine, Command::Open).is_ok());
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "mirror", "object": machine.to_string(), "agent": "https://x"}),
+        );
+        assert_eq!(a["ok"], false, "only http");
     }
 }

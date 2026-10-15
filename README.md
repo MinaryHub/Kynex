@@ -744,6 +744,33 @@ running and coil 111 to 준비, `tools/plc/robot_check.py` on pymodbus
 turned coil 10 on: the program ran 0.05 s later, set 준비 at 0.42 s, and
 was done at 1.05 s.
 
+## Machine tools (MTConnect)
+
+A machine of the cell can follow a real machine tool on the shop floor
+(`apps/kynex/src/mtconnect.rs`): **실제 장비 따라가기** in a CNC machine's or
+moulding machine's inspector takes the machine's MTConnect agent
+(`http://host:5000`, plain HTTP as shop-floor agents serve it) and its
+device's name (empty: the agent's first). KYNEX asks the agent for the
+device's current state about once a second and shows it beside the box;
+the machine then is the real one: its door open or shut as the real
+door is (`DoorState`), cutting while it is `ACTIVE` (`Execution`) — its
+own cycle not run — and its cycles the parts made since it was first
+read (`PartCount`, counted again after a reset). It takes no commands
+while it follows. Following is kept in the project file; it is set only
+from the computer KYNEX runs on.
+
+Checked two ways, as no reference agent ran here (Docker was off):
+
+- The MTConnect Institute's public demo agent, live
+  (`http://demo.mtconnect.org:5000`): its Mazak, cutting, followed in the
+  viewer ("Mazak · ACTIVE · 문 CLOSED · 생산 0 · 101010"); its whole answer
+  kept as a test's fixture (`mtconnect/demo_current.xml`), read for both
+  its devices.
+- `tools/mtconnect/check.py`: a small agent answering in the same form,
+  its machine opening its door for 2 s, shutting it, cutting for 4 s and
+  making a part, over and over; KYNEX's lathe followed each change, its
+  cycles counting the parts.
+
 ## Benchmark
 
 ```

@@ -139,6 +139,14 @@
           <summary>I/O 연결 <span class="muted">URScript로 내보낼 때</span></summary>
           <div id="cell-io"></div>
         </details>
+        <details class="insp-io" id="cell-mirror-box" hidden>
+          <summary>실제 장비 따라가기 <span class="muted">MTConnect</span></summary>
+          <div class="insp-props">
+            <label class="insp-field">에이전트<input id="mirror-agent" type="text" placeholder="http://10.0.0.5:5000" spellcheck="false"></label>
+            <label class="insp-field">장비<input id="mirror-device" type="text" placeholder="이름 (비우면 첫 장비)" spellcheck="false"></label>
+          </div>
+          <div class="insp-actions"><button class="text-btn" id="mirror-go">따라가기</button><span class="muted" id="mirror-state"></span></div>
+        </details>
         <details class="insp-io" id="cell-plc-box" hidden>
           <summary>PLC 주소 <span class="muted">코일 번호 또는 OPC UA 노드 ID</span></summary>
           <div id="cell-plc"></div>

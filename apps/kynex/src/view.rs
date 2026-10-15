@@ -257,7 +257,25 @@ struct Stage {
     reset: bool,
     /// Where projects are made, opened and listed (`projects_dir`).
     projects: PathBuf,
+    /// Edits to undo and to redo.
+    history: History,
 }
+
+/// The project as it was before each edit, to go back to, and as it was
+/// before each undo, to go forward to again.
+#[derive(Default)]
+struct History {
+    undo: Vec<(Value, &'static str)>,
+    redo: Vec<(Value, &'static str)>,
+    /// The last edit: what it was to, and when. More of the same within
+    /// [`ONE_EDIT`] — a handle dragged, a number typed — is one edit.
+    last: Option<(String, Instant)>,
+}
+
+/// How many edits can be undone.
+const MOST_UNDONE: usize = 100;
+/// How close together edits of one thing are one edit.
+const ONE_EDIT: Duration = Duration::from_millis(1500);
 
 /// How often the timeline goes to the viewers while it grows.
 const TIMELINE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
@@ -318,6 +336,7 @@ impl Stage {
             file,
             reset: false,
             projects: projects_dir(),
+            history: History::default(),
         })
     }
 
@@ -383,6 +402,8 @@ impl Stage {
                     .retain(|r| robot.is_some_and(|robot| robot != r.root));
                 touched |= self.runners.len() != before;
             }
+            // An edit can be undone: the project as it was before it.
+            let before = undoable(&op).then(|| self.snapshot(doc));
             let reply = if let Some(why) = (!request.local)
                 .then(|| reaches_plc(&op, &request.body, self.plc.on()))
                 .flatten()
@@ -401,6 +422,9 @@ impl Stage {
                 self.plc_changed = true;
                 touched = true;
                 serde_json::json!({ "ok": true }).to_string()
+            } else if op == "undo" || op == "redo" {
+                touched = true;
+                self.history_op(doc, op == "undo")
             } else if op == "project" {
                 touched = true;
                 self.project_op(doc, &request.body)
@@ -446,6 +470,9 @@ impl Stage {
                 for (uid, props) in &roles.props {
                     self.cell.set_props(*uid, props);
                 }
+                for (from, to) in &roles.copied {
+                    self.cell.copy_props(*from, *to);
+                }
                 self.rebase(doc);
                 let after = self.base.as_ref().unwrap_or(doc);
                 self.cell.carry(&before, after);
@@ -474,6 +501,9 @@ impl Stage {
                 self.placed.removed.extend(changed.removed);
                 reply
             };
+            if let Some(before) = before {
+                self.remember(doc, before, &op, &request.body);
+            }
             // A page that gave up waiting has nobody to answer.
             let _ = request.reply.send(reply);
         }
@@ -818,6 +848,7 @@ impl Stage {
         let plc = std::mem::take(&mut self.plc_changed);
         server.state("plc", &self.plc.to_json().to_string());
         server.state("project", &self.project_json().to_string());
+        server.state("history", &self.history_json().to_string());
         if programs || roles || items || scenarios || plc || replaced {
             if let Err(e) = self.save(doc) {
                 println!("프로젝트를 저장하지 못했습니다: {e}");
@@ -931,6 +962,94 @@ impl Stage {
         Ok(Value::Null)
     }
 
+    /// What undoing and redoing go back and forward to: the equipment, the
+    /// cell's roles, the programs and the PLC's signals.
+    fn snapshot(&mut self, doc: &Document) -> Value {
+        let scene = self.base.as_ref().unwrap_or(doc);
+        serde_json::json!({
+            "programs": self.posing.saved_programs(scene),
+            "cell": self.cell.to_saved(),
+            "library": self.library.to_saved(),
+            "signals": self.cell.signals_saved(),
+        })
+    }
+
+    /// Keeps `before` to undo to, if request `op` (`body`) changed the
+    /// project. More of the same edit, close behind, adds nothing.
+    fn remember(&mut self, doc: &Document, before: Value, op: &str, body: &str) {
+        if self.snapshot(doc) == before {
+            return;
+        }
+        let key = edit_key(op, body);
+        let now = Instant::now();
+        let h = &mut self.history;
+        // Only what goes on and on is one edit: a handle dragged, sizes or a
+        // step's numbers typed. Two points taught are two.
+        let same = matches!(op, "move" | "move_many" | "resize" | "edit")
+            && h.last
+                .as_ref()
+                .is_some_and(|(k, at)| *k == key && now.duration_since(*at) < ONE_EDIT);
+        if !same || h.undo.is_empty() {
+            h.undo.push((before, edit_label(op)));
+            if h.undo.len() > MOST_UNDONE {
+                h.undo.remove(0);
+            }
+        }
+        h.last = Some((key, now));
+        h.redo.clear();
+    }
+
+    /// Undoes the last edit, or redoes the last undone.
+    fn history_op(&mut self, doc: &Document, undo: bool) -> String {
+        let popped = if undo {
+            self.history.undo.pop()
+        } else {
+            self.history.redo.pop()
+        };
+        let Some((state, label)) = popped else {
+            let nothing = if undo {
+                "되돌릴 것이 없습니다"
+            } else {
+                "다시 할 것이 없습니다"
+            };
+            return serde_json::json!({ "ok": false, "error": nothing }).to_string();
+        };
+        let now = self.snapshot(doc);
+        if undo {
+            self.history.redo.push((now, label));
+        } else {
+            self.history.undo.push((now, label));
+        }
+        self.history.last = None;
+        self.restore(doc, &state);
+        serde_json::json!({ "ok": true, "edit": label }).to_string()
+    }
+
+    /// Puts the project back as `state` (a [`Self::snapshot`]) has it. What
+    /// runs stops; the robots stay as posed.
+    fn restore(&mut self, doc: &Document, state: &Value) {
+        let list = |key: &str| state[key].as_array().cloned().unwrap_or_default();
+        self.runners.clear();
+        self.timeline = None;
+        self.library.restore(&list("library"));
+        self.cell.restore(list("cell"));
+        if let Err(e) = self.cell.set_signals(&state["signals"]) {
+            println!("PLC 신호를 되돌리지 못했습니다: {e}");
+        }
+        let actives = self.posing.undo_to(list("programs"));
+        self.replaced(doc);
+        self.posing.set_actives(&actives);
+        self.plc_changed = true;
+    }
+
+    /// The `history` event: what undoing and redoing would do.
+    fn history_json(&self) -> Value {
+        serde_json::json!({
+            "undo": self.history.undo.last().map(|(_, l)| l),
+            "redo": self.history.redo.last().map(|(_, l)| l),
+        })
+    }
+
     /// Whether the project changed and the viewers must be shown all anew.
     fn take_reset(&mut self) -> bool {
         std::mem::take(&mut self.reset)
@@ -1035,9 +1154,12 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
     if linked {
         return Some("PLC에 연결된 동안 다른 컴퓨터에서는 보기만 할 수 있습니다");
     }
-    if matches!(op, "plc_link" | "plc" | "signals" | "scenario" | "mirror") {
+    if matches!(
+        op,
+        "plc_link" | "plc" | "signals" | "scenario" | "mirror" | "undo" | "redo"
+    ) {
         return Some(
-            "PLC·MTConnect 설정과 시나리오 불러오기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다",
+            "PLC·MTConnect 설정, 시나리오 불러오기, 되돌리기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다",
         );
     }
     // Opening a project brings its PLC wiring and machines followed; and
@@ -1053,6 +1175,78 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Whether request `op` can change the project, and so can be undone.
+/// Moving robots by hand, running and looking change nothing kept.
+fn undoable(op: &str) -> bool {
+    !matches!(
+        op,
+        "" | "jog"
+            | "ik"
+            | "goto"
+            | "play"
+            | "stop"
+            | "speed"
+            | "export"
+            | "urscript"
+            | "reach"
+            | "program"
+            | "routine_select"
+            | "undo"
+            | "redo"
+            | "project"
+            | "plc_link"
+    )
+}
+
+/// What an edit is to: its kind and the thing it touches. Edits to one
+/// thing close together are one.
+fn edit_key(op: &str, body: &str) -> String {
+    let req: Value = serde_json::from_str(body).unwrap_or_default();
+    let of = |k: &str| req[k].to_string();
+    // Several moved together: the same ones.
+    let moved: Vec<String> = req["moves"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| m["item"].to_string())
+        .collect();
+    format!(
+        "{op} {} {} {} {} {}",
+        of("item"),
+        of("object"),
+        of("robot"),
+        of("index"),
+        moved.join(",")
+    )
+}
+
+/// An edit, as the page says it was undone or redone.
+fn edit_label(op: &str) -> &'static str {
+    match op {
+        "place" => "장비 놓기",
+        "move" | "move_many" => "장비 이동",
+        "duplicate" => "장비 복제",
+        "resize" => "장비 크기·설정",
+        "remove" => "장비 삭제",
+        "save_custom" | "delete_custom" => "내 장비",
+        "teach" => "지점 티칭",
+        "retouch" => "지점 다시 티칭",
+        "add" => "단계 추가",
+        "edit" => "단계 수정",
+        "delete" => "단계 삭제",
+        "clear" => "프로그램 비우기",
+        "shift" => "단계 순서",
+        "copy" => "구간 복제",
+        "edge" | "edge_path" => "모서리 경로",
+        "routine_new" | "routine_rename" | "routine_delete" => "루틴",
+        "role" | "auto" => "셀 역할",
+        "plc" | "signals" | "io" => "신호 연결",
+        "mirror" => "실제 장비 따라가기",
+        "scenario" => "시나리오 불러오기",
+        _ => "편집",
+    }
 }
 
 /// Where projects are made, opened and listed: `KYNEX` in the user's
@@ -1208,6 +1402,87 @@ mod tests {
             }],
         );
         serde_json::from_str(&answer.recv().unwrap()).unwrap()
+    }
+
+    /// Equipment placed, moved (twice, close together: one edit) and
+    /// removed; each undone in turn and done again; a new edit leaves
+    /// nothing to redo; never from another computer.
+    #[test]
+    fn edits_are_undone_and_redone() {
+        let dir = std::env::temp_dir().join(format!("kynex-undo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(dir.join("undo.json"))).unwrap();
+        stage.replaced(&doc);
+        let place = json!({"op": "place", "template": "cnc_lathe", "at": [0, 0, 0]});
+        let item = ask(&mut stage, &doc, place, true)["item"].clone();
+        let at = |stage: &Stage| {
+            stage
+                .library
+                .to_saved()
+                .iter()
+                .find_map(|v| v["at"].as_array().cloned())
+        };
+        for x in [1.0, 2.0] {
+            let moved = json!({"op": "move", "item": item, "at": [x, 0, 0]});
+            assert_eq!(ask(&mut stage, &doc, moved, true)["ok"], true);
+        }
+        assert_eq!(
+            ask(
+                &mut stage,
+                &doc,
+                json!({"op": "remove", "item": item}),
+                true
+            )["ok"],
+            true
+        );
+        assert_eq!(stage.history.undo.len(), 3, "placed, moved, removed");
+        assert_eq!(stage.history_json()["undo"], "장비 삭제");
+
+        let undo = json!({"op": "undo"});
+        assert_eq!(ask(&mut stage, &doc, undo.clone(), false)["ok"], false);
+        assert_eq!(
+            ask(&mut stage, &doc, undo.clone(), true)["edit"],
+            "장비 삭제"
+        );
+        assert_eq!(at(&stage).unwrap()[0], 2.0);
+        assert_eq!(
+            ask(&mut stage, &doc, undo.clone(), true)["edit"],
+            "장비 이동"
+        );
+        assert_eq!(at(&stage).unwrap()[0], 0.0);
+        assert_eq!(
+            ask(&mut stage, &doc, undo.clone(), true)["edit"],
+            "장비 놓기"
+        );
+        assert!(stage.library.items().is_empty());
+        assert_eq!(ask(&mut stage, &doc, undo, true)["ok"], false);
+
+        let redo = json!({"op": "redo"});
+        assert_eq!(
+            ask(&mut stage, &doc, redo.clone(), true)["edit"],
+            "장비 놓기"
+        );
+        assert_eq!(
+            ask(&mut stage, &doc, redo.clone(), true)["edit"],
+            "장비 이동"
+        );
+        assert_eq!(at(&stage).unwrap()[0], 2.0);
+        let again = json!({"op": "move", "item": item, "at": [3, 0, 0]});
+        assert_eq!(ask(&mut stage, &doc, again, true)["ok"], true);
+        assert_eq!(
+            ask(&mut stage, &doc, redo, true)["ok"],
+            false,
+            "a new edit: nothing to redo"
+        );
+        // Two placed at once are two edits, not one.
+        let edits = stage.history.undo.len();
+        for x in [5, 6] {
+            let place = json!({"op": "place", "template": "fence", "at": [x, 0, 0]});
+            assert_eq!(ask(&mut stage, &doc, place, true)["ok"], true);
+        }
+        assert_eq!(stage.history.undo.len(), edits + 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Names a file may have in the projects folder, and those it may not.

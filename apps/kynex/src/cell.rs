@@ -1046,6 +1046,29 @@ impl Cell {
         }
     }
 
+    /// Object `to` (a copy of `from`) takes `from`'s settings: its cycle,
+    /// its door's times, its grid. Not its wiring, nor the real machine it
+    /// follows: those are one machine's own.
+    pub fn copy_props(&mut self, from: u64, to: u64) {
+        let Some((props, kind)) = self
+            .components
+            .iter()
+            .find(|c| c.object == from)
+            .map(|c| (c.props, c.kind))
+        else {
+            return;
+        };
+        if let Some(c) = self
+            .components
+            .iter_mut()
+            .find(|c| c.object == to && c.kind == kind)
+        {
+            c.props = props;
+            self.changed = true;
+            self.roles_changed = true;
+        }
+    }
+
     pub fn ensure(&mut self, object: u64, name: String, kind: Kind) {
         if self.components.iter().any(|c| c.object == object) {
             return;

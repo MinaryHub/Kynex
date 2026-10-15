@@ -152,6 +152,26 @@ impl Posing {
         self.programs_changed = true;
     }
 
+    /// Programs as saved before (an edit undone): the robots stay posed as
+    /// they are, and each keeps the routine it was working on once its
+    /// programs are adopted again (see [`Self::set_actives`]).
+    pub fn undo_to(&mut self, saved: Vec<Value>) -> BTreeMap<u64, usize> {
+        let held = std::mem::take(&mut self.held);
+        let actives = self.programs.iter().map(|(r, p)| (*r, p.active)).collect();
+        self.restore(saved);
+        self.held = held;
+        actives
+    }
+
+    /// Each robot back on the routine it was working on, if it still has it.
+    pub fn set_actives(&mut self, actives: &BTreeMap<u64, usize>) {
+        for (root, active) in actives {
+            if let Some(p) = self.programs.get_mut(root) {
+                p.active = (*active).min(p.list.len().saturating_sub(1));
+            }
+        }
+    }
+
     /// Every robot's main program, as a run takes it: its calls replaced
     /// by what they call.
     pub fn mains(&self) -> Vec<(u64, Result<Program, String>)> {

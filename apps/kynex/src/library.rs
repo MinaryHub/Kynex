@@ -487,6 +487,27 @@ impl Plug {
 /// metres.
 pub const SNAP: f64 = 0.25;
 
+/// How many items one request may move, copy or remove.
+const MOST_AT_ONCE: usize = 200;
+
+/// The item ids `v` lists: some, not too many, none twice.
+fn ids(v: &Value) -> Result<Vec<u64>, String> {
+    let list: Vec<u64> = v
+        .as_array()
+        .ok_or("no items")?
+        .iter()
+        .map(|i| i.as_u64().ok_or("an item is a number"))
+        .collect::<Result<_, _>>()?;
+    if list.is_empty() || list.len() > MOST_AT_ONCE {
+        return Err(format!("장비는 1–{MOST_AT_ONCE}개입니다"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if !list.iter().all(|i| seen.insert(*i)) {
+        return Err("같은 장비가 두 번 있습니다".into());
+    }
+    Ok(list)
+}
+
 impl Custom {
     /// Its connection points, from its origin: the connectors among its
     /// parts.
@@ -595,6 +616,9 @@ pub struct RoleChanges {
     pub stale: Vec<u64>,
     /// The settings roles added come with, where they have their own.
     pub props: Vec<(u64, Value)>,
+    /// Equipment copied: each role's object in the original and in the
+    /// copy, for the copy's roles to take the original's settings.
+    pub copied: Vec<(u64, u64)>,
 }
 
 /// The placed equipment.
@@ -696,6 +720,25 @@ impl Library {
         &self.items
     }
 
+    /// The name of template `key`: a catalogue's, or the user's own.
+    fn template_name(&self, key: &str) -> Option<String> {
+        template(key).map(|t| t.name.to_string()).or_else(|| {
+            self.customs
+                .iter()
+                .find(|c| c.key == key)
+                .map(|c| c.name.clone())
+        })
+    }
+
+    /// `named` numbered with the first number no item's name has: names
+    /// are what programs find objects by, so no two are alike.
+    fn free_name(&self, named: &str) -> String {
+        (1..)
+            .map(|n| format!("{named} {n}"))
+            .find(|name| !self.items.iter().any(|i| i.name == *name))
+            .expect("a free number")
+    }
+
     /// Takes one request from the page. Returns the answer, and the roles
     /// that came or went with the equipment.
     pub fn handle(&mut self, body: &str) -> (String, RoleChanges) {
@@ -725,21 +768,12 @@ impl Library {
         };
         if op == "place" {
             let key = req["template"].as_str().ok_or("no template")?;
-            let named = template(key)
-                .map(|t| t.name.to_string())
-                .or_else(|| {
-                    self.customs
-                        .iter()
-                        .find(|c| c.key == key)
-                        .map(|c| c.name.clone())
-                })
-                .ok_or("no such template")?;
+            let named = self.template_name(key).ok_or("no such template")?;
             self.next += 1;
-            let n = self.items.iter().filter(|i| i.template == key).count() + 1;
             let item = Item {
                 id: self.next,
                 template: key.to_string(),
-                name: format!("{named} {n}"),
+                name: self.free_name(&named),
                 params: params(&req["params"]),
                 at: point(&req["at"]).unwrap_or(DVec3::ZERO),
                 yaw: req["yaw"].as_f64().unwrap_or(0.0),
@@ -757,6 +791,87 @@ impl Library {
             self.items.push(item);
             self.items_changed = true;
             return Ok(json!({ "ok": true, "item": self.next, "snapped": snapped }));
+        }
+        // Items placed again beside themselves, `offset` along: of the same
+        // template, size and turn. Their cell roles' settings go with them
+        // (`roles.copied`); their wiring does not.
+        if op == "duplicate" {
+            let offset = point(&req["offset"]).unwrap_or(DVec3::new(0.5, 0.5, 0.0));
+            let ids = ids(&req["items"])?;
+            let mut made = Vec::new();
+            for id in ids {
+                let from = self
+                    .items
+                    .iter()
+                    .find(|i| i.id == id)
+                    .cloned()
+                    .ok_or("no such item")?;
+                let named = self
+                    .template_name(&from.template)
+                    .ok_or("no such template")?;
+                self.next += 1;
+                let item = Item {
+                    id: self.next,
+                    name: self.free_name(&named),
+                    at: from.at + offset,
+                    ..from.clone()
+                };
+                let built = self.build(&item)?;
+                let new_roles = role_uids(&item, &built);
+                roles.props.extend(role_props(&item, &built));
+                if let Some((_, old)) = self.built.get(&from.id) {
+                    let old_roles = role_uids(&from, old);
+                    roles.copied.extend(
+                        old_roles
+                            .iter()
+                            .zip(&new_roles)
+                            .map(|((a, _, _), (b, _, _))| (*a, *b)),
+                    );
+                }
+                roles.added.extend(new_roles);
+                self.built.insert(item.id, (item.params.clone(), built));
+                made.push(json!({ "item": item.id, "root": item.root_uid().to_string() }));
+                self.items.push(item);
+            }
+            self.items_changed = true;
+            return Ok(json!({ "ok": true, "made": made }));
+        }
+        // Several items moved and turned at once: one edit.
+        if op == "move_many" {
+            let moves = req["moves"].as_array().ok_or("no moves")?;
+            if moves.len() > MOST_AT_ONCE {
+                return Err(format!("한 번에 {MOST_AT_ONCE}개까지입니다"));
+            }
+            let mut next = self.items.clone();
+            for m in moves {
+                let id = m["item"].as_u64().ok_or("no item")?;
+                let item = next.iter_mut().find(|i| i.id == id).ok_or("no such item")?;
+                item.at = point(&m["at"]).ok_or("no at")?;
+                if let Some(yaw) = m["yaw"].as_f64() {
+                    item.yaw = yaw;
+                }
+            }
+            self.items = next;
+            self.items_changed = true;
+            return Ok(json!({ "ok": true }));
+        }
+        // Several removed at once.
+        if op == "remove" && req["items"].is_array() {
+            let ids = ids(&req["items"])?;
+            if ids.iter().any(|id| !self.items.iter().any(|i| i.id == *id)) {
+                return Err("no such item".into());
+            }
+            for id in ids {
+                let at = self.items.iter().position(|i| i.id == id).expect("checked");
+                let item = self.items.remove(at);
+                self.built.remove(&item.id);
+                if let Some(gone) = self.shown.remove(&item.id) {
+                    roles.removed.extend(gone.iter().copied());
+                    self.removed.extend(gone);
+                }
+            }
+            self.items_changed = true;
+            return Ok(json!({ "ok": true }));
         }
         // Equipment of the user's own taken out of the library, if none
         // placed is of it.
@@ -2066,7 +2181,10 @@ fn fence(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
 
 /// The requests [`Library`] takes.
 pub fn is_op(op: &str) -> bool {
-    matches!(op, "place" | "move" | "resize" | "remove" | "delete_custom")
+    matches!(
+        op,
+        "place" | "move" | "move_many" | "duplicate" | "resize" | "remove" | "delete_custom"
+    )
 }
 
 #[cfg(test)]

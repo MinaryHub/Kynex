@@ -101,10 +101,18 @@ export class LibraryPanel {
     this.handle.addEventListener('dragging-changed', (e) => {
       ctx.controls.enabled = !e.value;
       this.dragging = e.value;
+      // The group as it stood when the drag began: it moves with the item
+      // the handle is on, and turns about it.
+      const handled = this.handleItem != null && this.itemById(this.handleItem);
+      const items = this.groupItems();
+      this.dragFrom = e.value && handled && items.length > 1 && items.some((i) => i.id === handled.id)
+        ? { at: [...handled.at], yaw: handled.yaw, items: items.map((i) => ({ id: i.id, at: [...i.at], yaw: i.yaw })) }
+        : null;
       if (!e.value) {
         this.draggedAt = performance.now();
-        // Let go: onto what it connects to, if near (unless Alt is held).
-        if (this.handleItem != null && !this.alt) {
+        // Let go: onto what it connects to, if near (unless Alt is held) —
+        // one item alone.
+        if (this.handleItem != null && !this.alt && this.groupItems().length <= 1) {
           const z = new THREE.Euler().setFromQuaternion(this.proxy.quaternion, 'ZYX').z;
           this.send({ op: 'move', item: this.handleItem, at: this.proxy.position.toArray(), yaw: z, snap: true }, (a) => this.saySnapped(a));
         }
@@ -118,6 +126,7 @@ export class LibraryPanel {
       // Turned about Z only: the floor stays the floor.
       const e = new THREE.Euler().setFromQuaternion(this.proxy.quaternion, 'ZYX');
       this.proxy.quaternion.setFromEuler(new THREE.Euler(0, 0, e.z, 'ZYX'));
+      if (this.dragFrom) return this.moveGroup(this.proxy.position.toArray(), e.z);
       this.move(this.handleItem, this.proxy.position.toArray(), e.z);
     });
 
@@ -135,7 +144,10 @@ export class LibraryPanel {
       const t = e.target.closest('[data-template]');
       if (t) return this.arm(this.armed === t.dataset.template ? null : t.dataset.template);
       const item = e.target.closest('[data-item]');
-      if (item) this.ctx.select(this.itemById(Number(item.dataset.item))?.root, { frame: true });
+      const root = item && this.itemById(Number(item.dataset.item))?.root;
+      // Ctrl or Shift: into the group, or out of it.
+      if (root != null && (e.ctrlKey || e.metaKey || e.shiftKey)) this.ctx.toggleGroup(root);
+      else if (root != null) this.ctx.select(root, { frame: true });
     });
     ctx.canvas.addEventListener('dragover', (e) => {
       if (e.dataTransfer.types.includes('text/kynex-template')) e.preventDefault();
@@ -153,9 +165,9 @@ export class LibraryPanel {
       const item = this.selectedItem();
       if (!item) return;
       if (act === 'remove') {
-        this.showHandle(null);
-        this.send({ op: 'remove', item: item.id });
-        this.ctx.select(null);
+        this.removeSelected();
+      } else if (act === 'duplicate') {
+        this.duplicate();
       } else if (act === 'handle') {
         this.showHandle(this.handleItem === item.id ? null : item.id);
       }
@@ -172,8 +184,95 @@ export class LibraryPanel {
     }
   }
 
-  async move(item, at, yaw) {
-    const request = { op: 'move', item, at, yaw };
+  // The selected equipment: the item selected and the group with it.
+  groupItems() {
+    const items = [];
+    const add = (item) => item && !items.some((i) => i.id === item.id) && items.push(item);
+    add(this.selectedItem());
+    for (const root of this.ctx.group()) add(this.library?.items.find((i) => i.root === root));
+    return items;
+  }
+
+  // The group changed: the inspector says so.
+  groupChanged() {
+    this.markGroup();
+    const s = this.ctx.selected();
+    if (s != null) this.showFor(s);
+  }
+
+  // The list's placed equipment: those of the group marked.
+  markGroup() {
+    const ids = new Set(this.ctx.group().size ? this.groupItems().map((i) => i.id) : []);
+    for (const li of this.list.querySelectorAll('[data-item]')) li.classList.toggle('grouped', ids.has(Number(li.dataset.item)));
+  }
+
+  // The group moved as the handle's item has from where the drag began:
+  // carried along, and turned about it.
+  moveGroup(at, yaw) {
+    const from = this.dragFrom;
+    const turn = yaw - from.yaw;
+    const [c, s] = [Math.cos(turn), Math.sin(turn)];
+    const moves = from.items.map((i) => {
+      const [dx, dy, dz] = [i.at[0] - from.at[0], i.at[1] - from.at[1], i.at[2] - from.at[2]];
+      return { item: i.id, at: [at[0] + c * dx - s * dy, at[1] + s * dx + c * dy, at[2] + dz], yaw: i.yaw + turn };
+    });
+    this.move(null, null, null, { op: 'move_many', moves });
+  }
+
+  // Delete: the selected equipment, all of it. Whether there was any.
+  removeSelected() {
+    const items = this.groupItems();
+    if (!items.length) return false;
+    this.showHandle(null);
+    this.send(items.length > 1 ? { op: 'remove', items: items.map((i) => i.id) } : { op: 'remove', item: items[0].id });
+    this.ctx.select(null);
+    return true;
+  }
+
+  // Ctrl+D: the selected equipment copied beside itself, the copies
+  // selected in its place.
+  duplicate(ids = this.groupItems().map((i) => i.id), offset = [0.5, 0.5, 0]) {
+    if (!ids.length) return this.ctx.toast('복제할 장비를 고르세요 (라이브러리에서 놓은 장비)');
+    this.send({ op: 'duplicate', items: ids, offset }, (a) => {
+      const roots = a.made.map((m) => m.root);
+      this.ctx.toast(`장비 ${roots.length}개를 복제했습니다`);
+      this.selectWhenHere(roots);
+    });
+  }
+
+  // The copies selected in place of what they copy, once the page has
+  // them (the scene and the library come in their own time).
+  selectWhenHere(roots, tries = 40) {
+    const here = roots.every((root) => this.ctx.records.has(root) && this.library?.items.some((i) => i.root === root));
+    if (!here) {
+      if (tries > 0) setTimeout(() => this.selectWhenHere(roots, tries - 1), 50);
+      return;
+    }
+    const handled = this.handleItem != null;
+    this.ctx.select(roots[0], { keep: roots.length > 1 ? roots : [] });
+    if (handled) this.showHandle(this.itemOf(roots[0])?.id ?? null);
+  }
+
+  // Ctrl+C: kept to paste. Whether there was anything to keep.
+  copy() {
+    const ids = this.groupItems().map((i) => i.id);
+    if (!ids.length) return false;
+    this.clipboard = { ids, pasted: 0 };
+    this.ctx.toast(`장비 ${ids.length}개를 복사했습니다 (Ctrl+V로 붙여넣기)`);
+    return true;
+  }
+
+  // Ctrl+V: what was copied, again, each paste a step further along.
+  paste() {
+    const clip = this.clipboard;
+    if (!clip) return this.ctx.toast('복사한 장비가 없습니다 (Ctrl+C)');
+    const ids = clip.ids.filter((id) => this.itemById(id));
+    if (!ids.length) return this.ctx.toast('복사한 장비가 지워졌습니다');
+    clip.pasted += 1;
+    this.duplicate(ids, [0.5 * clip.pasted, 0.5 * clip.pasted, 0]);
+  }
+
+  async move(item, at, yaw, request = { op: 'move', item, at, yaw }) {
     if (this.moving.busy) {
       this.moving.next = request;
       return;
@@ -286,6 +385,7 @@ export class LibraryPanel {
       }
     }
     this.list.innerHTML = html;
+    this.markGroup();
   }
 
   // The selected object's item, in the inspector.
@@ -306,6 +406,7 @@ export class LibraryPanel {
       })
       .join('');
     const [x, y, z] = item.at.map((v) => Math.round(v * 1000));
+    const many = this.groupItems().length;
     this.box.innerHTML = `
       <div class="insp-item-head"><span class="insp-kind">장비</span><span>${escapeHtml(item.name)}</span></div>
       <div class="insp-props">
@@ -315,10 +416,13 @@ export class LibraryPanel {
         <label class="insp-field">회전<input type="number" class="num" data-yaw value="${Math.round(deg(item.yaw))}" step="15"><span>°</span></label>
         ${params}
       </div>
+      ${many > 1 ? `<div class="muted insp-group">함께 선택: 장비 ${many}개 · 핸들로 함께 옮기고 돌립니다</div>` : ''}
       <div class="insp-actions">
         <button class="text-btn" data-item-act="handle">${this.handleItem === item.id ? '핸들 끄기' : '이동 핸들'}</button>
-        <button class="text-btn quiet danger" data-item-act="remove">삭제</button>
-      </div>`;
+        <button class="text-btn quiet" data-item-act="duplicate" title="옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V">복제</button>
+        <button class="text-btn quiet danger" data-item-act="remove" title="삭제 (Delete)">${many > 1 ? `${many}개 삭제` : '삭제'}</button>
+      </div>
+      <div class="muted insp-hint">Ctrl·Shift+클릭: 장비 여러 개 선택</div>`;
   }
 
   edited(e) {

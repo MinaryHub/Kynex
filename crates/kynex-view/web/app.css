@@ -897,3 +897,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .project-list li.current { color: var(--accent); cursor: default; }
 .project-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-dir { font-size: 11px; overflow-wrap: anywhere; }
+.toolbar button:disabled { opacity: 0.35; cursor: default; }
+.toolbar button:disabled:hover { background: transparent; }
+.insp-group { font-size: 11.5px; margin-top: 6px; color: var(--accent); }
+.insp-hint { font-size: 10.5px; margin-top: 4px; }
+.lib-item.grouped { color: var(--accent); background: var(--accent-soft); }

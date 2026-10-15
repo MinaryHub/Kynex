@@ -890,3 +890,116 @@ fn the_fanuc_robot_is_as_its_description_has_it() {
     );
     assert!((face.matrix3.z_axis - DVec3::X).length() < 1e-6);
 }
+
+/// Two items copied at once beside themselves: same template, size and
+/// turn, new names, their roles paired with the originals'; moved
+/// together; removed together; a name freed is used again.
+#[test]
+fn items_are_copied_moved_and_removed_together() {
+    let mut library = Library::default();
+    let (a, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "cnc_lathe", "at": [1.0, 0.0, 0.0], "yaw": 0.5}),
+    );
+    let first = a["item"].as_u64().unwrap();
+    ask(
+        &mut library,
+        json!({"op": "resize", "item": first, "params": {"width": 2.2}}),
+    );
+    let (b, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "fence", "at": [3.0, 0.0, 0.0]}),
+    );
+    let second = b["item"].as_u64().unwrap();
+
+    let (copied, roles) = ask(
+        &mut library,
+        json!({"op": "duplicate", "items": [first, second], "offset": [0.0, 2.0, 0.0]}),
+    );
+    assert_eq!(copied["ok"], true, "{copied}");
+    let made: Vec<u64> = copied["made"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["item"].as_u64().unwrap())
+        .collect();
+    assert_eq!(made.len(), 2);
+    let copy = library
+        .items()
+        .iter()
+        .find(|i| i.id == made[0])
+        .unwrap()
+        .clone();
+    let original = library
+        .items()
+        .iter()
+        .find(|i| i.id == first)
+        .unwrap()
+        .clone();
+    assert_eq!(copy.name, "CNC 선반 2");
+    assert_eq!(
+        (copy.template.as_str(), copy.yaw, copy.params.clone()),
+        (
+            original.template.as_str(),
+            original.yaw,
+            original.params.clone()
+        )
+    );
+    assert!((copy.at - DVec3::new(1.0, 2.0, 0.0)).length() < 1e-12);
+    // The lathe's role, paired: original's root to the copy's.
+    assert!(
+        roles
+            .copied
+            .contains(&(original.root_uid(), copy.root_uid())),
+        "{:?}",
+        roles.copied
+    );
+    assert!(roles
+        .added
+        .iter()
+        .any(|(uid, _, _)| *uid == copy.root_uid()));
+
+    let (moved, _) = ask(
+        &mut library,
+        json!({"op": "move_many", "moves": [
+            {"item": made[0], "at": [5.0, 5.0, 0.0], "yaw": 1.0},
+            {"item": made[1], "at": [6.0, 5.0, 0.0]},
+        ]}),
+    );
+    assert_eq!(moved["ok"], true, "{moved}");
+    let at = |l: &Library, id: u64| l.items().iter().find(|i| i.id == id).unwrap().at;
+    assert!((at(&library, made[1]) - DVec3::new(6.0, 5.0, 0.0)).length() < 1e-12);
+    // One unknown: none moved.
+    let (bad, _) = ask(
+        &mut library,
+        json!({"op": "move_many", "moves": [
+            {"item": made[0], "at": [9.0, 9.0, 0.0]}, {"item": 999, "at": [0.0, 0.0, 0.0]},
+        ]}),
+    );
+    assert_eq!(bad["ok"], false);
+    assert!((at(&library, made[0]) - DVec3::new(5.0, 5.0, 0.0)).length() < 1e-12);
+
+    let (removed, roles) = ask(
+        &mut library,
+        json!({"op": "remove", "items": [first, made[1]]}),
+    );
+    assert_eq!(removed["ok"], true, "{removed}");
+    assert_eq!(library.items().len(), 2);
+    let _ = roles;
+    // "CNC 선반 1" is free again: the next lathe takes it, not a second "2".
+    let (c, _) = ask(
+        &mut library,
+        json!({"op": "place", "template": "cnc_lathe", "at": [0.0, 0.0, 0.0]}),
+    );
+    let lathe = library
+        .items()
+        .iter()
+        .find(|i| i.id == c["item"].as_u64().unwrap())
+        .unwrap();
+    assert_eq!(lathe.name, "CNC 선반 1");
+    let (twice, _) = ask(
+        &mut library,
+        json!({"op": "duplicate", "items": [second, second]}),
+    );
+    assert_eq!(twice["ok"], false);
+}

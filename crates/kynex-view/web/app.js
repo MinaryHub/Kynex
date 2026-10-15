@@ -21,6 +21,9 @@ const records = new Map();    // uid -> object record from KYNEX
 let robots = [];
 const jointKinds = new Map(); // joint uid -> kind
 let selected = null;
+// Placed equipment selected along with it (Ctrl or Shift and a click), by
+// root: moved, copied and removed together.
+let group = new Set();
 let framedOnce = false;
 let lastUpdate = 0;
 // Benchmark mode (`/?bench`): `kynex bench --browser` opens the page so,
@@ -475,6 +478,7 @@ function connect() {
   source.addEventListener('scenarios', (e) => timelinePanel.setScenarios(JSON.parse(e.data)));
   source.addEventListener('plc', (e) => plcPanel.setState(JSON.parse(e.data)));
   source.addEventListener('project', (e) => projectPanel.setState(JSON.parse(e.data)));
+  source.addEventListener('history', (e) => setHistory(JSON.parse(e.data)));
   source.addEventListener('cell', (e) => {
     const cell = JSON.parse(e.data);
     cellPanel.setCell(cell);
@@ -674,6 +678,8 @@ const libraryPanel = new LibraryPanel({
   canvas,
   controls,
   selected: () => selected,
+  group: () => group,
+  toggleGroup: (uid) => toggleGroup(uid),
   select,
   pick,
   toast,
@@ -703,7 +709,44 @@ document.getElementById('robots').addEventListener('dblclick', (e) => {
 function tintOf(rec) {
   if (contacted.has(rec.uid)) return colorOf(rec).lerp(CONTACT, 0.75);
   if (selected === rec.uid) return colorOf(rec).lerp(ACCENT, 0.55);
+  if (group.size && underGroup(rec.uid)) return colorOf(rec).lerp(ACCENT, 0.4);
   return null;
+}
+
+// Whether `uid` is in, or below, equipment of the group.
+function underGroup(uid) {
+  for (let at = uid, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) {
+    if (group.has(at)) return true;
+  }
+  return false;
+}
+
+// The group anew: what was in it and what is now shown as it is.
+function setGroup(roots) {
+  const was = group;
+  group = new Set(roots);
+  if (!was.size && !group.size) return;
+  for (const uid of records.keys()) {
+    let at = uid;
+    for (let n = 0; at != null && n < 64 && !was.has(at) && !group.has(at); n++) at = records.get(at)?.parent;
+    if (at != null && (was.has(at) || group.has(at))) highlight(uid);
+  }
+  libraryPanel.groupChanged();
+}
+
+// A Ctrl- or Shift-click on equipment: into the group, or out of it. The
+// one selected stays the one the inspector and the handle are for.
+function toggleGroup(uid) {
+  const item = libraryPanel.itemOf(uid);
+  if (!item) return toast('여러 개 선택은 라이브러리에서 놓은 장비만 됩니다');
+  const primary = libraryPanel.selectedItem();
+  if (!primary) return select(uid);
+  if (primary.root === item.root) return;
+  const next = new Set(group);
+  next.add(primary.root);
+  if (next.has(item.root)) next.delete(item.root);
+  else next.add(item.root);
+  setGroup(next.size > 1 ? next : []);
 }
 
 function highlight(uid) {
@@ -721,9 +764,11 @@ function setContacts(list) {
   robotPanel.setContacts(list);
 }
 
-function select(uid, { frame: andFrame = false } = {}) {
+function select(uid, { frame: andFrame = false, keep = [] } = {}) {
   const was = selected;
   selected = uid != null && records.has(uid) ? uid : null;
+  // Anything chosen anew: the group goes, unless it is kept.
+  setGroup(keep);
   // The selected part is kept whole and in view: see Batch.updateLevels.
   levelsDirty = true;
   if (was != null) highlight(was);
@@ -814,6 +859,7 @@ canvas.addEventListener('pointerup', (e) => {
     if (shape) cellPanel.pickPoint(shape.point);
     return;
   }
+  if ((e.ctrlKey || e.metaKey || e.shiftKey) && hit) return toggleGroup(uidOf(hit));
   select(hit ? uidOf(hit) : null);
 });
 
@@ -1028,9 +1074,51 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
     plcPanel.panel.hidden = true;
     projectPanel.toggle();
   }
+  if (b.dataset.action === 'undo') history('undo');
+  if (b.dataset.action === 'redo') history('redo');
   if (b.dataset.action === 'frame') frame();
   if (b.dataset.view) frame(selected, b.dataset.view);
   if (b.dataset.toggle) setToggle(b.dataset.toggle, !view[b.dataset.toggle]);
+});
+
+// Undoing and redoing the project's edits (the `history` event says what
+// they would do).
+async function history(op) {
+  try {
+    const response = await fetch('/robot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op }),
+    });
+    const answer = await response.json();
+    toast(answer.ok ? `${op === 'undo' ? '되돌림' : '다시 함'}: ${answer.edit}` : answer.error);
+  } catch (e) {
+    toast(`${op === 'undo' ? '되돌리기' : '다시 하기'}: ${e.message}`);
+  }
+}
+
+function setHistory(h) {
+  const undo = document.getElementById('undo-btn');
+  const redo = document.getElementById('redo-btn');
+  undo.disabled = !h.undo;
+  redo.disabled = !h.redo;
+  undo.title = h.undo ? `되돌리기: ${h.undo} (Ctrl+Z)` : '되돌리기 (Ctrl+Z)';
+  redo.title = h.redo ? `다시 하기: ${h.redo} (Ctrl+Y)` : '다시 하기 (Ctrl+Y)';
+}
+
+// Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z — but in a field, the field's own.
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.target.matches('input, textarea, select')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) history('undo');
+  else if (k === 'y' || (k === 'z' && e.shiftKey)) history('redo');
+  // The selected equipment copied beside itself, kept to paste, pasted.
+  else if (k === 'd') libraryPanel.duplicate();
+  else if (k === 'c') {
+    if (!libraryPanel.copy()) return;
+  } else if (k === 'v') libraryPanel.paste();
+  else return;
+  e.preventDefault();
 });
 
 window.addEventListener('keydown', (e) => {
@@ -1046,6 +1134,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === '1') frame(selected, 'front');
   else if (k === '3') frame(selected, 'right');
   else if (libraryPanel.key(k)) return e.preventDefault();
+  else if (k === 'delete' && libraryPanel.removeSelected()) return e.preventDefault();
   else if (k === 'escape') {
     libraryPanel.arm(null);
     if (view.measure) setToggle('measure', false);

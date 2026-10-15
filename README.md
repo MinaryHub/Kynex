@@ -319,6 +319,26 @@ is written straight away. A program records its robot, joints and tool by
 identity and by name. When Kreate builds the scene again and numbers the
 objects anew, the program finds them again by name.
 
+**Undo.** Ctrl+Z undoes the last edit to the project and Ctrl+Y (or
+Ctrl+Shift+Z) redoes it; so do the arrows beside the project button,
+which say what they would undo or redo. Edits are equipment placed,
+moved, sized, copied or removed, cell roles and their settings, program
+steps and routines, and PLC wiring; a handle dragged or a number typed
+is one edit, not one per frame or key. Up to 100 are kept, until another
+project is opened. What runs stops on an undo; the robots stay as posed.
+Like loading a scenario, only the computer KYNEX runs on can undo.
+
+**Several at once.** Ctrl- or Shift-click on placed equipment, in the
+scene or in the library's list, adds it to the selection or takes it out;
+the inspector says how many are selected. The handle then moves all of
+them, and turns them about the one it is on; Delete removes them all;
+Ctrl+D copies them half a metre aside and selects the copies; Ctrl+C and
+Ctrl+V copy and paste them, each paste a step further along. A copy
+takes its original's size, turn and cell settings (cycle time, door,
+grid), not its PLC wiring or the real machine it follows. Each of these
+is one edit to undo. A new item takes the first number its kind's names
+do not have, so no two names are alike.
+
 **Projects.** The folder button at the left of the toolbar shows the
 project open; it opens the project panel. **새로 만들기** makes an empty
 project under the name typed and opens it. **다른 이름으로 저장** saves

@@ -91,7 +91,8 @@ impl RobotModel {
         Some(Self {
             key: v["key"].as_str()?.to_string(),
             name: v["name"].as_str()?.to_string(),
-            urdf: v["urdf"].as_str()?.to_string(),
+            // A path within the zip, as one was found there: nothing else.
+            urdf: v["urdf"].as_str().filter(|u| within(u))?.to_string(),
             zip: base64::engine::general_purpose::STANDARD
                 .decode(v["zip"].as_str()?)
                 .ok()?,
@@ -101,12 +102,31 @@ impl RobotModel {
     /// The robot, made from its description: its root link the robot's root,
     /// its grip points (`grip_a`, `grip_b`) grippers, as the library's are.
     pub(super) fn build(&self) -> Result<Built, String> {
+        // Only the robot's own folder is read: its description, and the
+        // meshes it names — never a file elsewhere, whatever a project file
+        // or a description says (`../`, `file://`, a package found above).
         let dir = self.folder()?;
-        let path = dir.join(&self.urdf);
+        let root = dir
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        let inside = |path: &Path| -> Result<PathBuf, String> {
+            let real = path
+                .canonicalize()
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            if real.starts_with(&root) {
+                Ok(real)
+            } else {
+                Err(format!(
+                    "{}: 로봇 폴더 밖의 파일은 읽지 않습니다",
+                    path.display()
+                ))
+            }
+        };
+        let path = inside(&dir.join(&self.urdf))?;
         let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", self.urdf))?;
-        let base = path.parent().unwrap_or(&dir);
-        let scene = kreate_io::urdf::parse_urdf(&text, base, &kreate_io::scene_file::read_part)
-            .map_err(|e| e.to_string())?;
+        let base = path.parent().unwrap_or(&root).to_path_buf();
+        let load = |part: &Path| kreate_io::scene_file::read_part(&inside(part)?);
+        let scene = kreate_io::urdf::parse_urdf(&text, &base, &load).map_err(|e| e.to_string())?;
         let mut doc = Document::new();
         kreate_io::build::build_into(&scene, &mut doc);
         let root_link = doc
@@ -150,6 +170,14 @@ impl RobotModel {
         std::fs::write(dir.join(".done"), b"").map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(dir)
     }
+}
+
+/// Whether `path` names a file within a folder: relative, with no `..`.
+fn within(path: &str) -> bool {
+    let p = Path::new(path);
+    !path.is_empty()
+        && p.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 /// The robot description in a zip: the `.urdf` nearest its top, if there
@@ -318,6 +346,57 @@ mod tests {
             .unwrap()
             .join("escape.txt")
             .exists());
+    }
+
+    /// A description naming a mesh outside its folder — by `../`, or by an
+    /// absolute `file://` path — and a project naming a description outside
+    /// it: nothing outside is read.
+    #[test]
+    fn nothing_outside_the_robot_s_folder_is_read() {
+        let outside = std::env::temp_dir().join(format!("kynex-secret-{}.stl", std::process::id()));
+        std::fs::write(
+            &outside,
+            "solid s
+ facet normal 0 0 0
+  outer loop
+   vertex 0 0 0
+   vertex 1 0 0
+   vertex 0 1 0
+  endloop
+ endfacet
+endsolid s
+",
+        )
+        .unwrap();
+        let url = format!("file://{}", outside.display()).replace('\\', "/");
+        for mesh in ["../../../../../../secret.stl".to_string(), url] {
+            let urdf = format!(
+                r#"<robot name="sneaky"><link name="a"><visual><geometry><mesh filename="{mesh}"/></geometry></visual></link><link name="b"/>
+                <joint name="j" type="revolute"><parent link="a"/><child link="b"/><axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/></joint></robot>"#
+            );
+            let model = RobotModel::from_file("r".into(), "sneaky.urdf", urdf.as_bytes());
+            // Refused, or made without the file: never with it.
+            if let Ok(model) = model {
+                let built = model.build().unwrap();
+                assert_eq!(
+                    built
+                        .doc
+                        .objects()
+                        .filter(|(_, o)| o.mesh().is_some())
+                        .count(),
+                    0,
+                    "{mesh}"
+                );
+            }
+        }
+        let mut v = RobotModel::from_file("r".into(), "arm2.zip", &arm_zip(false))
+            .unwrap()
+            .to_json();
+        for bad in ["../../secret.urdf", "C:/Windows/win.ini", "/etc/passwd", ""] {
+            v["urdf"] = json!(bad);
+            assert!(RobotModel::of_json(&v).is_none(), "{bad}");
+        }
+        let _ = std::fs::remove_file(&outside);
     }
 
     #[test]

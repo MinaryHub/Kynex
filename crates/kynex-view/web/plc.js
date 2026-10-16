@@ -38,7 +38,7 @@ export class PlcPanel {
     });
     // OPC UA's usual port in place of Modbus's, as the protocol changes.
     this.protocol.addEventListener('change', () => {
-      const usual = { modbus: '502', opcua: '4840', s7: '102' };
+      const usual = { modbus: '502', opcua: '4840', s7: '102', xgt: '2004' };
       if (Object.values(usual).includes(this.port.value)) this.port.value = usual[this.protocol.value];
       this.showFields();
     });

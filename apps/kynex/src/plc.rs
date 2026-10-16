@@ -1,7 +1,8 @@
 //! A PLC on the network: virtual commissioning. KYNEX is the client, as
 //! Visual Components is to a PLC's server; the PLC's program runs the
 //! cell's machines as it would the real ones. Over Modbus TCP, OPC UA
-//! (see [`opcua`]) or Siemens S7 (see [`s7`]).
+//! (see [`opcua`]), Siemens S7 (see [`s7`]) or LS ELECTRIC XGT (see
+//! [`xgt`]).
 //!
 //! The cell's machines are wired to the PLC's addresses (see
 //! `Component::plc`): a command — a door to open, a cycle to start — is
@@ -9,7 +10,8 @@
 //! cycle done — is written to its address as it changes. Over Modbus an
 //! address is a coil, counted from 0 as Modbus addresses them (coil 00001
 //! is address 0); over OPC UA it is a Boolean variable's node id
-//! (`ns=2;s=Lathe.Open`); over S7, a CPU's address (`DB1.DBX0.0`, `M10.0`).
+//! (`ns=2;s=Lathe.Open`); over S7, a CPU's address (`DB1.DBX0.0`, `M10.0`);
+//! over XGT, a direct variable (`%MX100`, `%DW100`).
 //!
 //! The link runs on a thread of its own, exchanging every [`EVERY`]: it
 //! reads the commands (Modbus function 1, OPC UA Read) and writes each
@@ -19,6 +21,7 @@
 pub mod opcua;
 pub mod s7;
 pub mod secure;
+pub mod xgt;
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -39,6 +42,7 @@ pub enum Protocol {
     Modbus,
     OpcUa,
     S7,
+    Xgt,
 }
 
 impl Protocol {
@@ -47,6 +51,7 @@ impl Protocol {
             Protocol::Modbus => "modbus",
             Protocol::OpcUa => "opcua",
             Protocol::S7 => "s7",
+            Protocol::Xgt => "xgt",
         }
     }
 }
@@ -103,6 +108,7 @@ impl Settings {
         let protocol = match v["protocol"].as_str() {
             Some("opcua") => Protocol::OpcUa,
             Some("s7") => Protocol::S7,
+            Some("xgt") => Protocol::Xgt,
             _ => Protocol::Modbus,
         };
         Self {
@@ -508,6 +514,7 @@ enum Conn {
     },
     OpcUa(opcua::Session),
     S7(s7::Client),
+    Xgt(xgt::Client),
 }
 
 /// Modbus addresses of one kind, read in spans of at most `most`: each
@@ -545,6 +552,10 @@ impl Conn {
     /// server's certificate, when the channel is kept with it.
     fn open(settings: &Settings) -> Result<(Self, Option<String>), String> {
         let stream = connect(settings)?;
+        if settings.protocol == Protocol::Xgt {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+            return Ok((Conn::Xgt(xgt::Client::open(stream)), None));
+        }
         if settings.protocol == Protocol::S7 {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
             return Ok((
@@ -635,6 +646,31 @@ impl Conn {
                     }
                 }
             }
+            Conn::Xgt(client) => {
+                let mut named = Vec::new();
+                for (a, kind) in addresses {
+                    match xgt::parse(a) {
+                        Ok(v) => named.push((a, kind, v)),
+                        Err(e) => problems.push(e),
+                    }
+                }
+                let vars: Vec<xgt::Variable> = named.iter().map(|n| n.2.clone()).collect();
+                if !vars.is_empty() {
+                    for ((a, kind, _), value) in named.into_iter().zip(client.read(&vars)?) {
+                        match value {
+                            Ok(v) => {
+                                let v = if *kind == Kind::Bit {
+                                    i64::from(v != 0)
+                                } else {
+                                    v
+                                };
+                                got.insert(a.clone(), v);
+                            }
+                            Err(e) => problems.push(format!("{a}: {e}")),
+                        }
+                    }
+                }
+            }
             Conn::OpcUa(session) => {
                 let mut nodes = Vec::new();
                 let mut named = Vec::new();
@@ -690,6 +726,15 @@ impl Conn {
                     Err(e) if e.starts_with("Modbus 예외") => Ok(Err(format!("{address}: {e}"))),
                     Err(e) => Err(e),
                 }
+            }
+            Conn::Xgt(client) => {
+                let var = match xgt::parse(address) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(Err(e)),
+                };
+                Ok(client
+                    .write(&var, value)?
+                    .map_err(|e| format!("{address}: {e}")))
             }
             Conn::S7(client) => {
                 let at = match s7::parse(address) {

@@ -828,7 +828,7 @@ cargo run -p kynex -- view 127.0.0.1:7878 --key demo --open
 The cell's machines can be run by a PLC's program instead of the robot's,
 to try the PLC's logic before the machines exist (`apps/kynex/src/plc.rs`).
 KYNEX is a client of the PLC, as Visual Components is, over **Modbus TCP**,
-**OPC UA** or **Siemens S7**:
+**OPC UA**, **Siemens S7** or **LS ELECTRIC XGT**:
 
 - **PLC** in the toolbar: Modbus TCP or OPC UA, the PLC's address and
   port (502 or 4840 by default), Modbus's unit or the OPC UA endpoint's
@@ -867,6 +867,15 @@ KYNEX is a client of the PLC, as Visual Components is, over **Modbus TCP**,
   step within 0.12 s of the lathe's own time. That server writes a bit as
   its whole byte, unlike a CPU, so that check uses a byte per signal.
   Single bits are checked against a test CPU in the unit tests.
+- LS ELECTRIC XGT: KYNEX's own client (`apps/kynex/src/plc/xgt.rs`) for
+  the XGT dedicated protocol of the FEnet Ethernet modules and the XGB's
+  built-in Ethernet (TCP port 2004): XGK, XGI, XGR and XGB. Addresses are
+  direct variables as XG5000 writes them: `%MX100` (a bit), `%MB10`,
+  `%MW10` and `%DW100` (words, signed), `%MD20` (a double word),
+  `%QX0.0.1` on XGI. Up to 16 of one size go in one request. A variable
+  the PLC refuses is shown with its error code. Not yet checked on a real
+  PLC: there is no free LS simulator. The frames and their answers are
+  checked against a test PLC in the unit tests.
 - OPC UA: KYNEX's own client (`apps/kynex/src/plc/opcua.rs`). **보안**:
   none (the `None` policy), or Basic256Sha256 signed, or signed and
   encrypted (`plc/secure.rs`, on the RustCrypto crates: RSA-OAEP and RSA

@@ -4,10 +4,13 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 
+/// The test PLC's variables: each one's bytes, by name.
+type Memory = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
+
 /// A PLC of the user's own making: variables by name, each its bytes, as
 /// last written. A name of device `Z` it does not have.
-fn plc() -> (String, Arc<Mutex<BTreeMap<String, Vec<u8>>>>) {
-    let memory: Arc<Mutex<BTreeMap<String, Vec<u8>>>> = Arc::default();
+fn plc() -> (String, Memory) {
+    let memory: Memory = Arc::default();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let mem = memory.clone();

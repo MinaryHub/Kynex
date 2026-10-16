@@ -107,6 +107,11 @@ impl Cell {
         self.flow_on
     }
 
+    /// Whether the cell has a process flow to run: a source.
+    pub fn has_flow(&self) -> bool {
+        self.components.iter().any(|c| c.kind == Kind::Source)
+    }
+
     /// Sets where the parts of component `object` go next.
     pub fn set_flow_next(&mut self, object: u64, next: Vec<u64>) -> Result<(), String> {
         let c = self
@@ -485,7 +490,7 @@ impl Cell {
     }
 
     /// The flow as a whole: running or not, what reached the sinks.
-    pub(super) fn flow_summary(&self) -> Value {
+    pub fn flow_summary(&self) -> Value {
         let st = &self.flow_stats;
         let now = self.last_tick.unwrap_or(0.0);
         let elapsed = st.from.map_or(0.0, |f| (now - f).max(0.0));

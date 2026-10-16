@@ -369,9 +369,13 @@ many parts an hour with one CNC machine, and with two?"
    gripper, and save again under another name. The same name saves over.
 3. **▶ 모두 실행** runs every scenario for 1, 8 or 24 hours on the
    simulation's clock, away from the view. The table shows each one's
-   parts finished, parts an hour (the best is marked), CNC utilization,
-   and the robot's work and waiting time. A program that stops on an
-   alarm shows why.
+   parts finished, parts an hour (the best is marked), the utilization of
+   its machines, stations, AMRs and operators, and the robots' share at
+   work. For a process flow it also shows lead time. It names the
+   bottleneck: what was at work the most. A program that stops on an
+   alarm shows why. A scenario with a process flow runs the flow
+   alongside the programs, or alone if it has none. `kynex compare`
+   prints the same table. **CSV** downloads it.
 4. **불러오기** puts a scenario's equipment, roles and programs back, to
    change it further.
 

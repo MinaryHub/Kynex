@@ -1016,7 +1016,10 @@ impl Stage {
         serde_json::json!({
             "list": self.scenarios.iter().map(|s| serde_json::json!({
                 "name": s["name"],
-                "machines": count(s, "cell", "cnc"),
+                // What works on parts: machines and stations.
+                "machines": count(s, "cell", "cnc")
+                    + count(s, "cell", "molder")
+                    + count(s, "cell", "station"),
                 "programs": count(s, "programs", ""),
                 "equipment": count(s, "library", ""),
             })).collect::<Vec<_>>(),

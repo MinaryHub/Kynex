@@ -168,14 +168,15 @@ export class TimelinePanel {
         const r = byName.get(s.name);
         const cells = r
           ? r.ok === false
-            ? `<td colspan="5"></td><td class="sc-alarm">${escapeHtml(r.alarm || '')}</td>`
+            ? `<td colspan="6"></td><td class="sc-alarm">${escapeHtml(r.alarm || '')}</td>`
             : `<td>${r.parts}</td>
                <td class="sc-rate"><span class="sc-bar-rate" style="width:${best ? Math.round((r.per_hour / best) * 60) : 0}px"></span>${r.per_hour.toFixed(1)}</td>
                <td title="${escapeHtml(r.machine_lanes.map((m) => `${m.name} ${pct(m.utilization)}`).join(', '))}">${pct(mean(r.machine_lanes, 'utilization'))}</td>
-               <td>${pct(mean(r.robot_lanes, 'work'))}</td>
-               <td>${pct(mean(r.robot_lanes, 'wait'))}</td>
+               <td>${r.robot_lanes.length ? pct(mean(r.robot_lanes, 'work')) : '—'}</td>
+               <td>${r.lead_mean != null ? `${r.lead_mean.toFixed(0)} s` : '—'}</td>
+               <td>${r.bottleneck ? `${escapeHtml(r.bottleneck.name)} ${pct(r.bottleneck.busy)}` : '—'}</td>
                <td class="sc-alarm">${r.alarm ? escapeHtml(r.alarm) : ''}</td>`
-          : '<td colspan="6" class="muted">아직 실행하지 않음</td>';
+          : '<td colspan="7" class="muted">아직 실행하지 않음</td>';
         const top = r && r.ok !== false && best > 0 && r.per_hour === best && compared.length > 1;
         return `<tr data-index="${i}" class="${top ? 'best' : ''}">
           <td>${escapeHtml(s.name)}</td><td>${s.machines}</td>${cells}
@@ -184,7 +185,7 @@ export class TimelinePanel {
       })
       .join('');
     box.innerHTML = `<table class="sc-table">
-      <thead><tr><th>시나리오</th><th>CNC</th><th>완성</th><th>시간당</th><th>CNC 가동률</th><th>로봇 작업</th><th>로봇 대기</th><th>알람</th><th></th></tr></thead>
+      <thead><tr><th>시나리오</th><th>장비</th><th>완성</th><th>시간당</th><th>장비 가동률</th><th>로봇 작업</th><th>리드타임</th><th>병목</th><th>알람</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
 
@@ -226,7 +227,7 @@ export class TimelinePanel {
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const byName = new Map(compared.map((r) => [r.name, r]));
-    const lines = [['시나리오', 'CNC', '완성', '시간당', 'CNC 가동률 (%)', '로봇 작업 (%)', '로봇 대기 (%)', '알람'].map(q).join(',')];
+    const lines = [['시나리오', '장비', '완성', '시간당', '장비 가동률 (%)', '로봇 작업 (%)', '로봇 대기 (%)', '리드타임 (s)', '병목', '병목 작업 (%)', '알람'].map(q).join(',')];
     for (const s of list) {
       const r = byName.get(s.name);
       if (!r) continue;
@@ -240,6 +241,9 @@ export class TimelinePanel {
           ok ? (mean(r.machine_lanes, 'utilization') * 100).toFixed(1) : '',
           ok ? (mean(r.robot_lanes, 'work') * 100).toFixed(1) : '',
           ok ? (mean(r.robot_lanes, 'wait') * 100).toFixed(1) : '',
+          ok && r.lead_mean != null ? r.lead_mean.toFixed(1) : '',
+          ok && r.bottleneck ? r.bottleneck.name : '',
+          ok && r.bottleneck ? (r.bottleneck.busy * 100).toFixed(1) : '',
           r.alarm || '',
         ]
           .map(q)

@@ -3,16 +3,24 @@
 // as charts on the page, a CSV file for a spreadsheet, or a page to print
 // or keep as a PDF.
 
+// What counts as at work: moving, gripping, machining, driving, turning,
+// walking, working. Waiting, blocked and idle do not.
+const BUSY = ['move', 'grip', 'cut', 'drive', 'turn', 'walk', 'work'];
+
 // What a timeline says, worked out: each lane's seconds and share per
-// activity, and the moments parts were made (a machine's cut that ended).
+// activity and at work, the moments parts were made (a machine's cut that
+// ended), and the bottleneck: what was at work the most.
 export function figures(d, activities) {
   const elapsed = Math.max(d?.elapsed || 0, 0);
   const lanes = (d?.lanes || []).map((l) => {
     const totals = l.totals || {};
     const order = Object.keys(activities).filter((a) => a in totals);
     for (const a of Object.keys(totals)) if (!order.includes(a)) order.push(a);
-    return { key: l.key, name: l.name, group: l.group, totals, shares: l.shares || {}, order };
+    const shares = l.shares || {};
+    const busy = BUSY.reduce((s, a) => s + (shares[a] || 0), 0);
+    return { key: l.key, name: l.name, group: l.group, totals, shares, order, busy };
   });
+  const bottleneck = lanes.reduce((best, l) => (l.busy > (best?.busy ?? 0) ? l : best), null);
   // A cut followed by something else is a part made, when it ended.
   const made = [];
   for (const l of d?.lanes || []) {
@@ -29,6 +37,7 @@ export function figures(d, activities) {
     perHour: elapsed > 0 ? (made.length / elapsed) * 3600 : 0,
     lanes,
     made,
+    bottleneck,
     gaps: gaps.length
       ? { mean: sum / gaps.length, min: Math.min(...gaps), max: Math.max(...gaps), count: gaps.length }
       : null,
@@ -101,20 +110,51 @@ export function throughputChart(f, { width = 560, height = 160 } = {}) {
   </svg>`;
 }
 
-// The summary as figures to show.
-export function summary(f) {
-  return [
-    ['경과 시간', secs(f.elapsed)],
-    ['완성', `${f.parts}개`],
-    ['시간당', `${f.perHour.toFixed(1)}개`],
-    ['완성 간격 (평균)', f.gaps ? secs(f.gaps.mean) : '—'],
-    ['간격 최소 / 최대', f.gaps ? `${secs(f.gaps.min)} / ${secs(f.gaps.max)}` : '—'],
-  ];
+// Whether a process flow ran: its figures say more than machines' cuts.
+const flowed = (flow) => flow && (flow.sunk > 0 || flow.on || flow.wip > 0);
+
+// The summary as figures to show: a process flow's, if one ran — parts
+// out, an hour, in process, lead time — else the machines'; and the
+// bottleneck.
+export function summary(f, flow) {
+  const out = [['경과 시간', secs(f.elapsed)]];
+  if (flowed(flow)) {
+    out.push(
+      ['배출', `${flow.sunk}개`],
+      ['시간당', `${flow.per_hour.toFixed(1)}개`],
+      ['공정 중 (WIP)', `${flow.wip}개`],
+      ['리드타임 평균', flow.lead_mean != null ? secs(flow.lead_mean) : '—'],
+      ['리드타임 최소 / 최대', flow.lead_min != null ? `${secs(flow.lead_min)} / ${secs(flow.lead_max)}` : '—'],
+    );
+  } else {
+    out.push(
+      ['완성', `${f.parts}개`],
+      ['시간당', `${f.perHour.toFixed(1)}개`],
+      ['완성 간격 (평균)', f.gaps ? secs(f.gaps.mean) : '—'],
+      ['간격 최소 / 최대', f.gaps ? `${secs(f.gaps.min)} / ${secs(f.gaps.max)}` : '—'],
+    );
+  }
+  out.push(['병목', f.bottleneck ? `${f.bottleneck.name} (${pct(f.bottleneck.busy)})` : '—']);
+  return out;
+}
+
+// Each lane's shares: at work, blocked, waiting, idle — the table.
+export function laneTable(f, escapeHtml) {
+  const row = (l) => {
+    const s = l.shares;
+    const wait = (s.wait || 0) + (s.pause || 0);
+    const top = f.bottleneck && l.key === f.bottleneck.key;
+    return `<tr${top ? ' class="st-top"' : ''}><td>${escapeHtml(l.name)}${top ? ' <span class="st-tag">병목</span>' : ''}</td><td>${pct(l.busy)}</td><td>${pct(s.blocked)}</td><td>${pct(wait)}</td><td>${pct(s.idle)}</td></tr>`;
+  };
+  return `<table class="st-table"><thead><tr><th>장비·사람</th><th>작업</th><th>막힘</th><th>대기</th><th>쉼</th></tr></thead><tbody>${[...f.lanes]
+    .sort((a, b) => b.busy - a.busy)
+    .map(row)
+    .join('')}</tbody></table>`;
 }
 
 // The whole of it as CSV: the summary, each lane's seconds and share per
 // activity, the parts made, and every span — for a spreadsheet.
-export function csv(d, activities) {
+export function csv(d, activities, flow) {
   const f = figures(d, activities);
   const q = (v) => {
     const s = csvText(v);
@@ -131,12 +171,24 @@ export function csv(d, activities) {
     row('완성 간격 평균 (s)', f.gaps ? f.gaps.mean.toFixed(2) : ''),
     row('완성 간격 최소 (s)', f.gaps ? f.gaps.min.toFixed(2) : ''),
     row('완성 간격 최대 (s)', f.gaps ? f.gaps.max.toFixed(2) : ''),
+    row('병목', f.bottleneck ? f.bottleneck.name : '', f.bottleneck ? (f.bottleneck.busy * 100).toFixed(1) : ''),
+    ...(flowed(flow)
+      ? [
+          row('공정 흐름 배출 (개)', flow.sunk),
+          row('공정 흐름 시간당 (개)', flow.per_hour.toFixed(2)),
+          row('공정 중 (개)', flow.wip),
+          row('리드타임 평균 (s)', flow.lead_mean != null ? flow.lead_mean.toFixed(2) : ''),
+          row('리드타임 최소 (s)', flow.lead_min != null ? flow.lead_min.toFixed(2) : ''),
+          row('리드타임 최대 (s)', flow.lead_max != null ? flow.lead_max.toFixed(2) : ''),
+        ]
+      : []),
     '',
-    row('장비', '구분', ...used.flatMap((a) => [`${label(a)} (s)`, `${label(a)} (%)`])),
+    row('장비', '구분', '작업 (%)', ...used.flatMap((a) => [`${label(a)} (s)`, `${label(a)} (%)`])),
     ...f.lanes.map((l) =>
       row(
         l.name,
         l.group === 'machine' ? '장비' : '로봇',
+        (l.busy * 100).toFixed(1),
         ...used.flatMap((a) => [(l.totals[a] || 0).toFixed(2), ((l.shares[a] || 0) * 100).toFixed(1)]),
       ),
     ),
@@ -154,7 +206,7 @@ export function csv(d, activities) {
 }
 
 // A page of it to print, or keep as a PDF.
-export function reportHtml(d, activities, escapeHtml, title) {
+export function reportHtml(d, activities, escapeHtml, title, flow) {
   const f = figures(d, activities);
   const legend = Object.entries(activities)
     .filter(([a]) => f.lanes.some((l) => (l.shares[a] || 0) > 0))
@@ -188,13 +240,15 @@ export function reportHtml(d, activities, escapeHtml, title) {
   .st-axis { stroke: #9aa3ad; } .st-grid { stroke: #e6e9ed; }
   table { border-collapse: collapse; width: 100%; } th, td { border-bottom: 1px solid #e3e7ec; padding: 4px 6px; text-align: left; }
   td small { color: #6b7380; }
+  .st-top td { font-weight: 600; }
+  .st-tag { font-size: 11px; color: #b4441f; border: 1px solid #b4441f; border-radius: 3px; padding: 0 4px; }
   .print { position: fixed; top: 16px; right: 24px; padding: 6px 14px; }
   @media print { .print { display: none; } body { margin: 10mm; } h2 { break-after: avoid; } tr { break-inside: avoid; } }
 </style></head><body>
 <button class="print" onclick="print()">인쇄 / PDF로 저장</button>
 <h1>${escapeHtml(title)}</h1>
 <p class="muted">KYNEX 시뮬레이션 통계 · ${escapeHtml(when)}</p>
-<div class="cards">${summary(f)
+<div class="cards">${summary(f, flow)
     .map(([k, v]) => `<div><span class="muted">${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`)
     .join('')}</div>
 <h2>장비별 상태</h2>
@@ -203,6 +257,8 @@ ${stateChart(f, activities, escapeHtml)}
 <h2>누적 완성 수</h2>
 ${throughputChart(f, { width: 680, height: 200 })}
 <p class="muted">점선: 처음부터 지금까지의 평균 속도</p>
+<h2>작업·막힘·대기</h2>
+${laneTable(f, escapeHtml)}
 <h2>장비별 시간</h2>
 <table><thead><tr><th>장비</th>${used.map((a) => `<th>${escapeHtml(activities[a]?.[0] ?? a)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
 </body></html>`;

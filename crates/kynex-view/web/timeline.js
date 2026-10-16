@@ -7,7 +7,7 @@
 // one CNC machine, two, another gripper — run for hours away from the view
 // and compared (the `scenarios` event).
 
-import { csv, csvText, figures, reportHtml, stateChart, summary, throughputChart } from './stats.js';
+import { csv, csvText, figures, laneTable, reportHtml, stateChart, summary, throughputChart } from './stats.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -98,13 +98,13 @@ export class TimelinePanel {
     });
     document.getElementById('st-csv').addEventListener('click', () => {
       if (!this.data?.lanes?.length) return this.ctx.toast('먼저 프로그램을 실행하세요');
-      download(`kynex-통계-${stamp()}.csv`, csv(this.data, ACTIVITIES), 'text/csv;charset=utf-8');
+      download(`kynex-통계-${stamp()}.csv`, csv(this.data, ACTIVITIES, this.flowState), 'text/csv;charset=utf-8');
     });
     document.getElementById('st-report').addEventListener('click', () => {
       if (!this.data?.lanes?.length) return this.ctx.toast('먼저 프로그램을 실행하세요');
       const win = window.open('', '_blank');
       if (!win) return this.ctx.toast('새 창을 열 수 없습니다. 팝업 차단을 확인하세요');
-      win.document.write(reportHtml(this.data, ACTIVITIES, this.ctx.escapeHtml, 'KYNEX 통계 보고서'));
+      win.document.write(reportHtml(this.data, ACTIVITIES, this.ctx.escapeHtml, 'KYNEX 통계 보고서', this.flowState));
       win.document.close();
     });
     document.getElementById('sc-csv').addEventListener('click', () => this.scenariosCsv());
@@ -264,13 +264,14 @@ export class TimelinePanel {
     const f = figures(d, ACTIVITIES);
     stats.textContent = `경과 ${clock(d.elapsed)} · 완성 ${f.parts}개 · 시간당 ${f.perHour.toFixed(1)}개`;
     body.innerHTML = `
-      <div class="st-cards">${summary(f)
+      <div class="st-cards">${summary(f, this.flowState)
         .map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b class="num">${escapeHtml(v)}</b></div>`)
         .join('')}</div>
       <div class="st-cols">
         <section><h3>장비별 상태</h3>${stateChart(f, ACTIVITIES, escapeHtml)}</section>
         <section><h3>누적 완성 수 <span class="muted">· 점선: 평균 속도</span></h3>${throughputChart(f)}</section>
-      </div>`;
+      </div>
+      <section><h3>작업·막힘·대기 <span class="muted">· 작업이 가장 많은 곳이 병목</span></h3>${laneTable(f, escapeHtml)}</section>`;
   }
 
   render() {

@@ -349,6 +349,14 @@ while the program ran, as a Gantt chart (`apps/kynex/src/timeline.rs`):
 - **보고서 (PDF)** opens the charts and a table on one page, to print or
   save as a PDF.
 - The scenario comparison has a **CSV** button too.
+- With a process flow run, the figures are the flow's: parts out, an
+  hour, in process (WIP) and lead time (mean, least, most).
+- **병목**: the robot, machine, station, AMR or operator at work the
+  greatest share of the time. Work is moving, gripping, machining,
+  driving, walking or working. The table **작업·막힘·대기** lists each
+  one's share at work, blocked, waiting and idle, the bottleneck first.
+  A station often blocked points to what comes after it. The CSV and the
+  report carry the same.
 
 **시나리오 비교** (the panel's third tab) answers questions such as "how
 many parts an hour with one CNC machine, and with two?"

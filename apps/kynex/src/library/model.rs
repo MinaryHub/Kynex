@@ -105,28 +105,33 @@ impl RobotModel {
         // Only the robot's own folder is read: its description, and the
         // meshes it names — never a file elsewhere, whatever a project file
         // or a description says (`../`, `file://`, a package found above).
+        // All judged by the paths' text alone: nothing a file names is asked
+        // of the system — a network path asked about would have Windows
+        // offer this computer's credentials to whoever answers.
         let dir = self.folder()?;
-        let root = dir
-            .canonicalize()
-            .map_err(|e| format!("{}: {e}", dir.display()))?;
-        let inside = |path: &Path| -> Result<PathBuf, String> {
-            let real = path
-                .canonicalize()
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-            if real.starts_with(&root) {
-                Ok(real)
+        let at = Path::new(&self.urdf)
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_path_buf();
+        let text = std::fs::read_to_string(dir.join(&self.urdf))
+            .map_err(|e| format!("{}: {e}", self.urdf))?;
+        let text = confine_meshes(&text, &dir, &at);
+        let load = |part: &Path| {
+            let ok = part.starts_with(&dir)
+                && part
+                    .components()
+                    .all(|c| !matches!(c, std::path::Component::ParentDir));
+            if ok {
+                kreate_io::scene_file::read_part(part)
             } else {
                 Err(format!(
                     "{}: 로봇 폴더 밖의 파일은 읽지 않습니다",
-                    path.display()
+                    part.display()
                 ))
             }
         };
-        let path = inside(&dir.join(&self.urdf))?;
-        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", self.urdf))?;
-        let base = path.parent().unwrap_or(&root).to_path_buf();
-        let load = |part: &Path| kreate_io::scene_file::read_part(&inside(part)?);
-        let scene = kreate_io::urdf::parse_urdf(&text, &base, &load).map_err(|e| e.to_string())?;
+        let scene =
+            kreate_io::urdf::parse_urdf(&text, &dir.join(&at), &load).map_err(|e| e.to_string())?;
         let mut doc = Document::new();
         kreate_io::build::build_into(&scene, &mut doc);
         let root_link = doc
@@ -170,6 +175,101 @@ impl RobotModel {
         std::fs::write(dir.join(".done"), b"").map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(dir)
     }
+}
+
+/// What a mesh is not found as: nothing anywhere, so nothing is read.
+const MISSING: &str = "kynex-not-in-the-robot-s-folder.stl";
+
+/// The description `text` (at `at` within the robot's folder `dir`) with
+/// every mesh it names found by KYNEX itself, within `dir` alone, and named
+/// by its whole path there: `package://pkg/x` as `pkg/x` or `x` up from the
+/// description, a relative path from it (its `..` not leading out of
+/// `dir`). An absolute path, a network one, `file://` or any other scheme
+/// is named as nothing.
+fn confine_meshes(text: &str, dir: &Path, at: &Path) -> String {
+    let find = |name: &str| -> Option<PathBuf> {
+        if let Some(rest) = name.strip_prefix("package://") {
+            let (package, inside) = rest.split_once('/')?;
+            let inside = normal(Path::new(inside))?;
+            // Up from the description, within the folder: the package as a
+            // folder there, or that folder the package itself.
+            let mut up = Some(at.to_path_buf());
+            while let Some(here) = up {
+                let candidates = [
+                    here.join(package).join(&inside),
+                    if here.file_name().is_some_and(|n| n == package) {
+                        here.join(&inside)
+                    } else {
+                        PathBuf::from(MISSING)
+                    },
+                ];
+                for c in candidates {
+                    if dir.join(&c).is_file() {
+                        return Some(dir.join(c));
+                    }
+                }
+                up = here
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .filter(|_| !here.as_os_str().is_empty());
+            }
+            return dir.join(&inside).is_file().then(|| dir.join(inside));
+        }
+        // Relative, and no more: no drive, no root, no scheme.
+        if name.contains(':') || name.starts_with(['/', '\\']) {
+            return None;
+        }
+        let rel = normal(&at.join(name))?;
+        dir.join(&rel).is_file().then(|| dir.join(rel))
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("filename=") {
+        let (head, tail) = rest.split_at(i + "filename=".len());
+        out.push_str(head);
+        let Some(quote) = tail.chars().next().filter(|q| *q == '"' || *q == '\'') else {
+            rest = tail;
+            continue;
+        };
+        let Some(end) = tail[1..].find(quote) else {
+            rest = tail;
+            break;
+        };
+        let name = &tail[1..1 + end];
+        let to = match find(name) {
+            Some(path) => format!("file://{}", path.display())
+                .replace('&', "&amp;")
+                .replace('"', "&quot;")
+                .replace('\'', "&apos;")
+                .replace('<', "&lt;"),
+            None => MISSING.to_string(),
+        };
+        out.push(quote);
+        out.push_str(&to);
+        out.push(quote);
+        rest = &tail[2 + end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `path` with its `.` and `..` taken out, if it stays within where it
+/// starts: relative, its components plain names.
+fn normal(path: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::Normal(n) => out.push(n),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 /// Whether `path` names a file within a folder: relative, with no `..`.
@@ -397,6 +497,42 @@ endsolid s
             assert!(RobotModel::of_json(&v).is_none(), "{bad}");
         }
         let _ = std::fs::remove_file(&outside);
+    }
+
+    /// Mesh names a description gives, as KYNEX finds them: within the
+    /// robot's folder by their text alone, or as nothing — a network path
+    /// never asked of the system.
+    #[test]
+    fn mesh_names_are_found_within_the_folder_or_not_at_all() {
+        let model = RobotModel::from_file("r".into(), "arm2.zip", &arm_zip(false)).unwrap();
+        let dir = model.folder().unwrap();
+        let at = Path::new("arm2/urdf");
+        let text = |name: &str| format!(r#"<mesh filename="{name}"/>"#);
+        let found = |name: &str| confine_meshes(&text(name), &dir, at);
+        let inside = |rel: &str| {
+            let path = rel.split('/').fold(dir.clone(), |p, part| p.join(part));
+            text(&format!("file://{}", path.display()))
+        };
+        assert_eq!(
+            found("package://arm2/meshes/base.stl"),
+            inside("arm2/meshes/base.stl")
+        );
+        assert_eq!(
+            found("../meshes/upper.stl"),
+            inside("arm2/meshes/upper.stl")
+        );
+        for outside in [
+            r"\\server\share\x.stl",
+            "//server/share/x.stl",
+            "file:///C:/Windows/x.stl",
+            "C:/Windows/x.stl",
+            "/etc/x.stl",
+            "../../../../x.stl",
+            "package://arm2/../../x.stl",
+            "http://example.com/x.stl",
+        ] {
+            assert_eq!(found(outside), text(MISSING), "{outside}");
+        }
     }
 
     #[test]

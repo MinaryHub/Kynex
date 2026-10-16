@@ -659,9 +659,11 @@ mod tests {
             body.len()
         )
         .unwrap();
-        let mut out = String::new();
-        s.read_to_string(&mut out).unwrap();
-        out
+        // What came before a reset: a server answering a request it turns
+        // away before reading its body may close on what is left of it.
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        String::from_utf8_lossy(&out).into_owned()
     }
 
     #[test]

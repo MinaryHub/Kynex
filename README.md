@@ -585,7 +585,8 @@ hand over them, and the view stays still meanwhile. The layout does not
 change: a door is left part open where it is let go (and a cycle will not
 start until it is opened or closed), a robot is posed. **초기 상태로**
 puts what was dragged back: doors shut, robots as placed. Changing where a
-part is within its equipment — Visual Components' Modeling — is to come.
+part is within its equipment — Visual Components' Modeling — is left to a
+modeling program: the model made there comes in by **모델 가져오기**.
 The inspector sets its position, turn and sizes by number too, and
 **기즈모 끄기** turns the gizmo off (kept for the browser). Locked
 equipment has none. Sizes change the item's shape, and the item keeps its

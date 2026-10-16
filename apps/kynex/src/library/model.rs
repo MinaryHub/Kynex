@@ -116,13 +116,35 @@ impl RobotModel {
         let text = std::fs::read_to_string(dir.join(&self.urdf))
             .map_err(|e| format!("{}: {e}", self.urdf))?;
         let text = confine_meshes(&text, &dir, &at);
+        // As the reader will read it — spaces round `=`, entities and all —
+        // every file it names must now be nothing, or within the folder.
+        let root = kreate_io::xml::parse(&text).map_err(|e| format!("URDF: {e}"))?;
+        for e in root.descendants() {
+            for (key, value) in &e.attributes {
+                if key != "filename" {
+                    continue;
+                }
+                let ok = value == MISSING
+                    || value.strip_prefix("file://").is_some_and(|p| {
+                        let p = Path::new(p);
+                        p.starts_with(&dir)
+                            && p.components()
+                                .all(|c| !matches!(c, std::path::Component::ParentDir))
+                    });
+                if !ok {
+                    return Err(format!(
+                        "URDF: 메시 경로를 로봇 폴더 안에서 확인할 수 없습니다 ({value})"
+                    ));
+                }
+            }
+        }
         let load = |part: &Path| {
             let ok = part.starts_with(&dir)
                 && part
                     .components()
                     .all(|c| !matches!(c, std::path::Component::ParentDir));
             if ok {
-                kreate_io::scene_file::read_part(part)
+                read_mesh(part, &dir)
             } else {
                 Err(format!(
                     "{}: 로봇 폴더 밖의 파일은 읽지 않습니다",
@@ -190,6 +212,13 @@ fn confine_meshes(text: &str, dir: &Path, at: &Path) -> String {
     let find = |name: &str| -> Option<PathBuf> {
         if let Some(rest) = name.strip_prefix("package://") {
             let (package, inside) = rest.split_once('/')?;
+            // A package is a name: one plain component, nothing that could
+            // make the path it is joined to another (a drive, a share).
+            let plain = normal(Path::new(package))
+                .is_some_and(|p| p.components().count() == 1 && p.as_os_str() == package);
+            if !plain || package.contains([':', '\\']) {
+                return None;
+            }
             let inside = normal(Path::new(inside))?;
             // Up from the description, within the folder: the package as a
             // folder there, or that folder the package itself.
@@ -251,6 +280,57 @@ fn confine_meshes(text: &str, dir: &Path, at: &Path) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// A mesh of the robot's, at `part` within its folder `dir`, reading
+/// nothing else but what lies in `dir` too: a COLLADA file's pictures by
+/// names checked here, a glTF only whole in itself, and no USD, whose
+/// references could lead anywhere.
+fn read_mesh(part: &Path, dir: &Path) -> Result<kreate_io::ir::ImportScene, String> {
+    let lower = part
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let read = || std::fs::read(part).map_err(|e| format!("{}: {e}", part.display()));
+    let scene = match lower.as_str() {
+        "stl" | "obj" | "ply" => return kreate_io::scene_file::read_part(part),
+        "dae" => {
+            let base = part.parent().unwrap_or(dir).to_path_buf();
+            let text = String::from_utf8_lossy(&read()?).into_owned();
+            kreate_io::dae::parse_dae(&text, &|name: &str| {
+                let name = name.strip_prefix("./").unwrap_or(name);
+                if name.contains([':', '%']) || name.starts_with(['/', '\\']) {
+                    return None;
+                }
+                let rel = normal(Path::new(name))?;
+                let at = base.join(rel);
+                let inside = at.starts_with(dir)
+                    && at
+                        .components()
+                        .all(|c| !matches!(c, std::path::Component::ParentDir));
+                inside.then(|| std::fs::read(at).ok()).flatten()
+            })
+            .map_err(|e| e.to_string())?
+        }
+        // From its bytes alone: a buffer or picture it names elsewhere is
+        // an error, not a read.
+        "gltf" | "glb" => {
+            kreate_io::parse_gltf(&read()?, &Default::default()).map_err(|e| e.to_string())?
+        }
+        other => return Err(format!("로봇 메시로 `.{other}` 파일은 읽지 않습니다 (STL, OBJ, PLY, DAE, glTF)")),
+    };
+    let mut scene = scene.baked_to_kreate();
+    let name = part
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "part".to_string());
+    let single = scene.meshes.len() == 1;
+    for m in &mut scene.meshes {
+        if single || m.name.is_empty() || m.name == "Import" {
+            m.name = name.clone();
+        }
+    }
+    Ok(scene)
 }
 
 /// `path` with its `.` and `..` taken out, if it stays within where it
@@ -452,6 +532,27 @@ mod tests {
     /// absolute `file://` path — and a project naming a description outside
     /// it: nothing outside is read.
     #[test]
+    fn a_mesh_reads_nothing_it_names_elsewhere() {
+        let dir = std::env::temp_dir().join(format!("kynex-mesh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A glTF whose buffer is a share: refused, not followed.
+        let gltf = dir.join("a.gltf");
+        std::fs::write(
+            &gltf,
+            r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"%5C%5Cserver%5Cshare%5Cx.bin","byteLength":4}]}"#,
+        )
+        .unwrap();
+        assert!(read_mesh(&gltf, &dir).is_err());
+        // USD may reference any file at all: not read as a robot's mesh.
+        let usd = dir.join("a.usda");
+        std::fs::write(&usd, "#usda 1.0
+").unwrap();
+        assert!(read_mesh(&usd, &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn nothing_outside_the_robot_s_folder_is_read() {
         let outside = std::env::temp_dir().join(format!("kynex-secret-{}.stl", std::process::id()));
         std::fs::write(
@@ -530,8 +631,45 @@ endsolid s
             "../../../../x.stl",
             "package://arm2/../../x.stl",
             "http://example.com/x.stl",
+            r"package://\\server\share/x.stl",
+            "package://C:/x.stl",
+            "package://../x.stl",
         ] {
             assert_eq!(found(outside), text(MISSING), "{outside}");
+        }
+    }
+
+    /// A description that the scan would not see as the reader does — a
+    /// space round `=`, a path in entities — is refused whole: nothing it
+    /// names is looked for.
+    #[test]
+    fn a_description_read_otherwise_than_scanned_is_refused() {
+        for mesh in [
+            r#"filename = "\\server\share\x.stl""#,
+            r#"filename="&#92;&#92;server&#92;share&#92;x.stl""#,
+            "filename\n=\"//server/share/x.stl\"",
+        ] {
+            let urdf = format!(
+                r#"<robot name="odd"><link name="a"><visual><geometry><mesh {mesh}/></geometry></visual></link><link name="b"/>
+                <joint name="j" type="revolute"><parent link="a"/><child link="b"/><axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/></joint></robot>"#
+            );
+            let made = RobotModel::from_file("r".into(), "odd.urdf", urdf.as_bytes());
+            match made {
+                Err(e) => assert!(e.contains("메시 경로") || e.contains("URDF"), "{mesh}: {e}"),
+                // An entity the scan turned into nothing is fine too.
+                Ok(m) => {
+                    let built = m.build().unwrap();
+                    assert_eq!(
+                        built
+                            .doc
+                            .objects()
+                            .filter(|(_, o)| o.mesh().is_some())
+                            .count(),
+                        0,
+                        "{mesh}"
+                    );
+                }
+            }
         }
     }
 

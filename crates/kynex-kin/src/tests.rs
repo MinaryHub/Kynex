@@ -436,3 +436,121 @@ fn an_arm_at_rest_is_dexterous_and_one_with_its_wrist_straight_is_not() {
         .unwrap();
     assert!(straight.least < 1e-6, "{straight:?}");
 }
+
+/// A program with a counted loop and a test of an input in it, as each
+/// controller's language has it: blocks that close, the move within them
+/// with them.
+#[test]
+fn branches_and_variables_go_to_every_controller() {
+    use crate::path::{MoveKind, Waypoint};
+    use crate::post::{Cond, Export, Move, Op, Writer};
+    let doc = load(UR5E);
+    let (_, root) = find(&doc, "base_link");
+    let (_, base) = find(&doc, "base");
+    let (_, flange) = find(&doc, "tool0");
+    let kin = Kinematics::of(&doc, root).unwrap();
+    let tool = kin.tool(flange, DAffine3::IDENTITY).unwrap();
+    let wp = |q: [f64; 6]| Waypoint {
+        kind: MoveKind::Joint,
+        positions: q.to_vec(),
+        speed: 0.5,
+        blend: 0.0,
+        via: None,
+    };
+    let (a, b) = (
+        wp([0.3, -1.2, 1.4, -1.6, -1.5, 0.2]),
+        wp([0.5, -1.0, 1.2, -1.7, -1.5, 0.4]),
+    );
+    let n = |cmp: &'static str, value: i64| Cond::Var {
+        name: "n".into(),
+        cmp,
+        value,
+    };
+    let export = Export {
+        name: "count",
+        moves: vec![
+            Move {
+                name: "P1",
+                waypoint: &a,
+                before: Vec::new(),
+                place: None,
+            },
+            Move {
+                name: "P2",
+                waypoint: &b,
+                before: vec![
+                    Op::SetVar {
+                        name: "n".into(),
+                        value: 0,
+                        add: false,
+                    },
+                    Op::While(n("<", 3)),
+                    Op::If(Cond::Input { port: 2, on: true }),
+                    Op::Set { port: 1, on: true },
+                    Op::Else,
+                    Op::Sleep(0.5),
+                    Op::End,
+                ],
+                place: None,
+            },
+        ],
+        close: false,
+        base,
+        flange,
+        trailing: vec![
+            Op::SetVar {
+                name: "n".into(),
+                value: 1,
+                add: true,
+            },
+            Op::End,
+        ],
+        pallets: Vec::new(),
+        markers: false,
+    };
+    let writers: [&dyn Writer; 4] = [
+        &crate::urscript::Ur,
+        &crate::rapid::Abb,
+        &crate::drl::Doosan,
+        &crate::fanuc::Fanuc,
+    ];
+    for w in writers {
+        let text = w.write(&kin, &tool, &export).unwrap();
+        let has = |s: &str| assert!(text.contains(s), "{}: no {s:?} in\n{text}", w.vendor());
+        match w.extension() {
+            "script" => {
+                has("  kv_n = 0");
+                has("  while (kv_n < 3):");
+                has("    if (get_standard_digital_in(2)):");
+                has("      set_standard_digital_out(1, True)");
+                has("    else:");
+                has("      sleep(0.50)");
+                // P2 within the loop, and the count in it too.
+                has("    movej(");
+                has("    kv_n = kv_n + 1");
+            }
+            "mod" => {
+                has("VAR num kv_n := 0;");
+                has("WHILE kv_n < 3 DO");
+                has("IF DInput(DI_KYNEX_2) = 1 THEN");
+                has("ELSE");
+                has("ENDIF");
+                has("ENDWHILE");
+                has("kv_n := kv_n + 1;");
+            }
+            "drl" => {
+                has("kv_n = 0");
+                has("while kv_n < 3:");
+                has("    if get_digital_input(3) == ON:");
+                has("    else:");
+                has("    kv_n = kv_n + 1");
+            }
+            _ => {
+                has("R[61]=0");
+                has("IF R[61]>=(3),JMP LBL[");
+                has("IF DI[3]=OFF,JMP LBL[");
+                has("R[61]=R[61]+(1)");
+            }
+        }
+    }
+}

@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 
 use crate::cell::{Cell, Signal};
 use crate::pose::Posing;
-use crate::program::{Action, Point, Program, Step};
+use crate::program::{Action, Cond, Point, Program, Step};
 
 /// How often a moving robot is shown at a new pose, in real time.
 const FRAME: Duration = Duration::from_millis(33);
@@ -99,6 +99,11 @@ pub struct Runner {
     /// Where each step comes from, its calls replaced: the program's name
     /// and the step's own index in it.
     pub origin: Vec<(String, usize)>,
+    /// Where each block step leads (see [`crate::program::blocks`]).
+    jumps: Vec<Option<usize>>,
+    /// The program's variables, 0 until set: kept from cycle to cycle, as
+    /// a controller keeps them.
+    vars: BTreeMap<String, i64>,
 }
 
 impl Runner {
@@ -109,6 +114,7 @@ impl Runner {
         }
         let kin = Kinematics::of(scene, root).ok_or("no such robot")?;
         let tool = program.tool(&kin).ok_or("툴이 정해지지 않았습니다")?;
+        let jumps = crate::program::blocks(&program.steps)?;
         Ok(Self {
             root,
             program,
@@ -122,7 +128,29 @@ impl Runner {
             last_frame: None,
             places: BTreeMap::new(),
             origin: Vec::new(),
+            jumps,
+            vars: BTreeMap::new(),
         })
+    }
+
+    /// Whether `cond` holds now.
+    fn holds(&self, cond: &Cond, cell: &Cell, scene: &Document) -> Result<bool, String> {
+        Ok(match cond {
+            Cond::Machine { machine, signal } => cell.signal(scene, *machine, *signal),
+            Cond::Plc { name, value } => {
+                cell.signal_value(name)
+                    .ok_or_else(|| format!("{name}: PLC 신호가 없습니다"))?
+                    == *value
+            }
+            Cond::Var { name, cmp, value } => {
+                cmp.holds(self.vars.get(name).copied().unwrap_or(0), *value)
+            }
+        })
+    }
+
+    /// The step after where block step `self.step` leads.
+    fn past(&self) -> usize {
+        self.jumps[self.step].map_or(self.step, |j| j) + 1
     }
 
     /// Whether its program runs round and round.
@@ -326,6 +354,35 @@ impl Runner {
             // call (`Program::flatten`).
             Step::Do(Action::Call { routine, .. }) => {
                 return Err(format!("{routine} 호출이 펼쳐지지 않았습니다"))
+            }
+            Step::Do(Action::SetVar {
+                ref name,
+                value,
+                add,
+            }) => {
+                let v = self.vars.entry(name.clone()).or_default();
+                *v = if add { v.saturating_add(value) } else { value };
+                self.step += 1;
+                State::Begin
+            }
+            // In, or past its `Else` or `End`.
+            Step::Do(Action::If(ref cond) | Action::While(ref cond)) => {
+                self.step = if self.holds(cond, cell, scene)? {
+                    self.step + 1
+                } else {
+                    self.past()
+                };
+                State::Begin
+            }
+            // Come to from an `If`'s steps: past its `End`.
+            Step::Do(Action::Else) => {
+                self.step = self.past();
+                State::Begin
+            }
+            // A `While`'s goes back to test again.
+            Step::Do(Action::End) => {
+                self.step = self.jumps[self.step].unwrap_or(self.step + 1);
+                State::Begin
             }
             Step::Do(Action::Next { pallet }) => {
                 let count = cell.pallet_slots(scene, pallet).len();

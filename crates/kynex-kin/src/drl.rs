@@ -29,7 +29,7 @@ use std::fmt::Write;
 use kreate_math::{DAffine3, DMat3};
 
 use crate::path::{self, MoveKind};
-use crate::post::{comment, Export, Move, Op, Place, Writer};
+use crate::post::{comment, Cond, Export, Move, Op, Place, Writer};
 use crate::{Kinematics, Tool};
 
 /// Doosan Robotics: DRL.
@@ -105,6 +105,70 @@ fn wait_in(n: u32, on: bool) -> String {
     match n {
         0..=15 => format!("wait_digital_input({}, {on})", n + 1),
         _ => format!("wait_tool_digital_input({}, {on})", n - 15),
+    }
+}
+
+/// DRL reading digital input `n`: on or off.
+fn get_in(n: u32) -> String {
+    match n {
+        0..=15 => format!("get_digital_input({})", n + 1),
+        _ => format!("get_tool_digital_input({})", n - 15),
+    }
+}
+
+/// A condition as DRL (Python) tests it.
+fn cond(c: &Cond) -> String {
+    match c {
+        Cond::Input { port, on } => {
+            format!("{} == {}", get_in(*port), if *on { "ON" } else { "OFF" })
+        }
+        Cond::Var { name, cmp, value } => format!("kv_{name} {cmp} {value}"),
+    }
+}
+
+/// How deep in its blocks (`if`, `while`) the program is — Python's
+/// indentation is its blocks — and whether the one last opened has had a
+/// statement yet (an empty one is `pass`).
+#[derive(Default)]
+struct Blocks {
+    depth: std::cell::Cell<usize>,
+    empty: std::cell::Cell<bool>,
+}
+
+impl Blocks {
+    fn pad(&self, indent: &str) -> String {
+        format!("{indent}{}", "    ".repeat(self.depth.get()))
+    }
+
+    /// A statement written: the block it is in is not empty.
+    fn said(&self) {
+        self.empty.set(false);
+    }
+
+    /// `op`, at `indent` and the depth reached.
+    fn op(&self, out: &mut String, indent: &str, op: &Op, export: &Export) {
+        if matches!(op, Op::Else | Op::End) {
+            if self.empty.get() {
+                let _ = writeln!(out, "{}pass", self.pad(indent));
+            }
+            self.depth.set(self.depth.get().saturating_sub(1));
+        }
+        let lines = match op {
+            Op::If(c) => vec![format!("if {}:", cond(c))],
+            Op::While(c) => vec![format!("while {}:", cond(c))],
+            Op::Else => vec!["else:".to_string()],
+            Op::End => Vec::new(),
+            _ => op_lines(op, export),
+        };
+        for line in lines {
+            let _ = writeln!(out, "{}{line}", self.pad(indent));
+        }
+        if matches!(op, Op::If(_) | Op::While(_) | Op::Else) {
+            self.depth.set(self.depth.get() + 1);
+            self.empty.set(true);
+        } else if !matches!(op, Op::Note(_) | Op::End) {
+            self.said();
+        }
     }
 }
 
@@ -227,13 +291,18 @@ pub fn drl(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, Str
     }
     let _ = writeln!(out);
 
+    // The program's variables, each at 0.
+    for v in crate::post::variables(export.ops()) {
+        let _ = writeln!(out, "kv_{v} = 0");
+    }
     let mut mark = 0;
+    let blocks = Blocks::default();
     let mut body = |out: &mut String, indent: &str, k: usize, m: &Move, kind: MoveKind| {
         for op in &m.before {
-            for line in op_lines(op, export) {
-                let _ = writeln!(out, "{indent}{line}");
-            }
+            blocks.op(out, indent, op, export);
         }
+        let indent = &blocks.pad(indent);
+        blocks.said();
         let w = m.waypoint;
         let n = k + 1;
         if export.markers {
@@ -321,9 +390,7 @@ pub fn drl(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, Str
         body(&mut out, indent, k + 1, m, m.waypoint.kind);
     }
     for op in &export.trailing {
-        for line in op_lines(op, export) {
-            let _ = writeln!(out, "{indent}{line}");
-        }
+        blocks.op(&mut out, indent, op, export);
     }
     if export.close {
         body(&mut out, indent, 0, first, first.waypoint.kind);
@@ -358,6 +425,13 @@ fn op_lines(op: &Op, export: &Export) -> Vec<String> {
                 "kynex_place_{pallet} = (kynex_place_{pallet} + 1) % {n}"
             )]
         }
+        Op::SetVar { name, value, add } => vec![if *add {
+            format!("kv_{name} = kv_{name} + {value}")
+        } else {
+            format!("kv_{name} = {value}")
+        }],
+        // Blocks are `Blocks::op`'s.
+        Op::If(_) | Op::Else | Op::While(_) | Op::End => Vec::new(),
     }
 }
 

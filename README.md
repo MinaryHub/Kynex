@@ -261,6 +261,24 @@ KYNEX times the moves (`kynex_kin::path`):
     with an alarm saying so.
   - ▶ 실행 runs the program shown; a scenario comparison runs each
     robot's main program.
+- **Branches, loops and variables**: under **+ 동작 → 흐름**, **만약**
+  runs the steps up to its **끝** only if its condition holds (with an
+  **아니면** for the other case), and **반복** runs them again and again
+  while it holds. Each comes with its **끝**, and the next steps go
+  inside it; the steps within are set in. A condition tests a machine's
+  signal (문 열림, 가공 완료 …), a PLC signal, or a variable against a
+  number (=, ≠, <, >, ≤, ≥). **변수 정하기** sets a variable, or adds to
+  it with `+=`. Variables start at 0 and keep their values from cycle to
+  cycle, as a controller keeps them.
+  - A block left without its **끝**, or an **아니면** or **끝** without
+    its **만약**, stops the run before it starts, saying which step.
+  - Exported, the blocks go as the controller's own: `if`/`while` in
+    URScript and DRL, `IF`/`WHILE` in RAPID, and labelled jumps in TP,
+    with variables as `kv_<name>` (TP: `R[61]` on, sixteen at most).
+    A machine's signal goes as the input it is wired to; a PLC signal,
+    or a machine signal not wired, is refused, since a test the
+    controller cannot make would change what it does. The first move
+    must lie outside every block: the controller starts there.
 - **Order**: a picked step, or a span picked with Shift-click, moves up
   or down past its neighbour with ↑ and ↓ under the add buttons. Tending
   two machines in turn is laid out this way: load one, load the other,

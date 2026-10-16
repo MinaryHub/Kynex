@@ -26,17 +26,100 @@ pub enum Op {
         speed: f64,
     },
     /// Digital output `port` on or off.
-    Set { port: u32, on: bool },
+    Set {
+        port: u32,
+        on: bool,
+    },
     /// Digital output `port` on for `seconds`, then off again: a command to
     /// a machine.
-    Pulse { port: u32, seconds: f64 },
+    Pulse {
+        port: u32,
+        seconds: f64,
+    },
     /// Wait until digital input `port` is on (or off).
-    Wait { port: u32, on: bool },
+    Wait {
+        port: u32,
+        on: bool,
+    },
     /// Wait this many seconds.
     Sleep(f64),
     /// Move pallet `pallet`'s count (by its index in [`Export::pallets`])
     /// on to its next place, from its last back to its first.
-    Next { pallet: usize },
+    Next {
+        pallet: usize,
+    },
+    /// Variable `name` (an identifier, see [`Cond::Var`]) set to `value`,
+    /// or `value` added to it.
+    SetVar {
+        name: String,
+        value: i64,
+        add: bool,
+    },
+    /// What follows, to its `Else` or `End`, only if `Cond` holds.
+    If(Cond),
+    Else,
+    /// What follows, to its `End`, again while `Cond` holds.
+    While(Cond),
+    /// The end of an `If` or a `While`.
+    End,
+}
+
+/// What an `If` or a `While` tests, as a controller can.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Cond {
+    /// Digital input `port` on (or off).
+    Input { port: u32, on: bool },
+    /// Variable `name` compared with `value`: `cmp` one of `==`, `!=`,
+    /// `<`, `>`, `<=`, `>=`. The name is a letter, then letters, digits or
+    /// `_`, up to 16: one every controller takes.
+    Var {
+        name: String,
+        cmp: &'static str,
+        value: i64,
+    },
+}
+
+impl Cond {
+    /// The condition that holds when this does not.
+    pub fn not(&self) -> Cond {
+        match self {
+            Cond::Input { port, on } => Cond::Input {
+                port: *port,
+                on: !*on,
+            },
+            Cond::Var { name, cmp, value } => Cond::Var {
+                name: name.clone(),
+                cmp: match *cmp {
+                    "==" => "!=",
+                    "!=" => "==",
+                    "<" => ">=",
+                    ">=" => "<",
+                    ">" => "<=",
+                    _ => ">",
+                },
+                value: *value,
+            },
+        }
+    }
+}
+
+/// The variables `ops` set or test, each once, in the order first met: to
+/// be made, at 0, before the program starts.
+pub fn variables<'a>(ops: impl Iterator<Item = &'a Op>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for op in ops {
+        let name = match op {
+            Op::SetVar { name, .. } => Some(name),
+            Op::If(Cond::Var { name, .. }) | Op::While(Cond::Var { name, .. }) => Some(name),
+            _ => None,
+        };
+        if let Some(n) = name {
+            if !out.contains(n) {
+                out.push(n.clone());
+            }
+        }
+    }
+    out
 }
 
 impl From<&str> for Op {
@@ -89,6 +172,17 @@ pub struct Export<'a> {
     /// done, for timing them on a controller or a simulator (see
     /// `tools/ursim`), where the writer can.
     pub markers: bool,
+}
+
+impl Export<'_> {
+    /// Every op of the program, in order: each move's before it, then the
+    /// trailing ones.
+    pub fn ops(&self) -> impl Iterator<Item = &Op> {
+        self.moves
+            .iter()
+            .flat_map(|m| m.before.iter())
+            .chain(self.trailing.iter())
+    }
 }
 
 /// A vendor's writer: a program in its controller's language.

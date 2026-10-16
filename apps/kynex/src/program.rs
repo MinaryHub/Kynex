@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use kreate_math::{DAffine3, DVec3};
 use kreate_scene::Document;
 use kynex_kin::path::{self, MoveKind, Plan, Problem, Waypoint};
-use kynex_kin::post::{Export, Move, Op, Place, Places, Writer};
+use kynex_kin::post::{self, Export, Move, Op, Place, Places, Writer};
 use kynex_kin::{Goal, Kinematics, Options, Tool};
 use serde_json::{json, Value};
 
@@ -157,6 +157,128 @@ pub enum Action {
     SetSignal { name: String, value: i64 },
     /// Wait until the PLC signal `name` reads `value`.
     WaitSignal { name: String, value: i64 },
+    /// Variable `name` set to `value`, or `value` added to it.
+    SetVar { name: String, value: i64, add: bool },
+    /// What follows, to its `Else` or `End`, only if the condition holds.
+    If(Cond),
+    /// What follows, to its `End`, only if its `If`'s condition did not.
+    Else,
+    /// What follows, to its `End`, again and again while the condition holds.
+    While(Cond),
+    /// The end of an `If` or a `While`.
+    End,
+}
+
+/// What an `If` or a `While` tests.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Cond {
+    /// Machine `machine` says `signal`.
+    Machine { machine: u64, signal: Signal },
+    /// The PLC signal `name` reads `value`.
+    Plc { name: String, value: i64 },
+    /// Variable `name` (0 until set) compared with `value`.
+    Var { name: String, cmp: Cmp, value: i64 },
+}
+
+/// How a variable is compared with a number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cmp {
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
+impl Cmp {
+    pub const ALL: [Cmp; 6] = [Cmp::Eq, Cmp::Ne, Cmp::Lt, Cmp::Gt, Cmp::Le, Cmp::Ge];
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Cmp::Eq => "==",
+            Cmp::Ne => "!=",
+            Cmp::Lt => "<",
+            Cmp::Gt => ">",
+            Cmp::Le => "<=",
+            Cmp::Ge => ">=",
+        }
+    }
+
+    pub fn of(tag: &str) -> Option<Cmp> {
+        Cmp::ALL.into_iter().find(|c| c.tag() == tag)
+    }
+
+    pub fn holds(self, a: i64, b: i64) -> bool {
+        match self {
+            Cmp::Eq => a == b,
+            Cmp::Ne => a != b,
+            Cmp::Lt => a < b,
+            Cmp::Gt => a > b,
+            Cmp::Le => a <= b,
+            Cmp::Ge => a >= b,
+        }
+    }
+}
+
+/// A variable's name: a letter, then letters, digits or `_`, up to 16 —
+/// one every controller's language takes.
+pub fn var_name(v: &Value) -> Result<String, String> {
+    let name = v.as_str().map(str::trim).unwrap_or("");
+    let ok = name.len() <= 16
+        && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if ok {
+        Ok(name.to_string())
+    } else {
+        Err("변수 이름은 영문자로 시작하는 영문자·숫자·_ 16자까지입니다".into())
+    }
+}
+
+/// Where each block step leads: for an `If`, its `Else` or else its `End`;
+/// for an `Else`, its `End`; for a `While`, its `End`; for a `While`'s
+/// `End`, the `While`. Or why the blocks do not close.
+pub fn blocks(steps: &[Step]) -> Result<Vec<Option<usize>>, String> {
+    let mut to = vec![None; steps.len()];
+    // Open blocks: the `If` or `While`, and an `If`'s `Else` once met.
+    let mut open: Vec<(usize, Option<usize>)> = Vec::new();
+    for (i, s) in steps.iter().enumerate() {
+        match s {
+            Step::Do(Action::If(_) | Action::While(_)) => open.push((i, None)),
+            Step::Do(Action::Else) => match open.last_mut() {
+                Some((at, els @ None)) if matches!(steps[*at], Step::Do(Action::If(_))) => {
+                    to[*at] = Some(i);
+                    *els = Some(i);
+                }
+                _ => {
+                    return Err(format!(
+                        "{}단계: 짝이 되는 '만약'이 없는 '아니면'입니다",
+                        i + 1
+                    ))
+                }
+            },
+            Step::Do(Action::End) => {
+                let (at, els) = open.pop().ok_or_else(|| {
+                    format!("{}단계: 짝이 되는 '만약'·'반복'이 없는 '끝'입니다", i + 1)
+                })?;
+                match els {
+                    Some(e) => to[e] = Some(i),
+                    None => to[at] = Some(i),
+                }
+                if matches!(steps[at], Step::Do(Action::While(_))) {
+                    to[i] = Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some((at, _)) = open.last() {
+        return Err(format!(
+            "{}단계의 블록이 '끝'으로 닫히지 않았습니다",
+            at + 1
+        ));
+    }
+    Ok(to)
 }
 
 /// One line of a program: a move to a point, or an action.
@@ -628,7 +750,25 @@ impl Program {
                     routine: text(&s["routine"])?,
                     times: s["times"].as_u64().unwrap_or(1).clamp(1, MAX_TIMES as u64) as u32,
                 }),
-                "signal_set" | "signal_wait" => Step::Do(action_of(s).ok()?),
+                "signal_set" | "signal_wait" | "var_set" | "else" | "end" => {
+                    Step::Do(action_of(s).ok()?)
+                }
+                "if" | "while" => {
+                    let c = &s["cond"];
+                    let cond = if c["kind"] == "machine" {
+                        Cond::Machine {
+                            machine: object(c, "machine")?,
+                            signal: Signal::of(c["signal"].as_str()?)?,
+                        }
+                    } else {
+                        cond_of(c).ok()?
+                    };
+                    Step::Do(if s["type"] == "if" {
+                        Action::If(cond)
+                    } else {
+                        Action::While(cond)
+                    })
+                }
                 _ => continue,
             };
             steps.push(step);
@@ -759,6 +899,25 @@ impl Program {
             Some(Place { pallet: k, from })
         };
 
+        // Blocks that close, and the first move — where the controller
+        // starts from, whatever else it does — in none of them.
+        blocks(&self.steps)?;
+        if let Some(first) = self.steps.iter().position(|s| matches!(s, Step::Move(_))) {
+            let depth: i64 = self.steps[..first]
+                .iter()
+                .map(|s| match s {
+                    Step::Do(Action::If(_) | Action::While(_)) => 1,
+                    Step::Do(Action::End) => -1,
+                    _ => 0,
+                })
+                .sum();
+            if depth != 0 {
+                return Err(format!(
+                    "첫 이동({}단계)은 '만약'·'반복' 블록 밖에 있어야 컨트롤러로 내보낼 수 있습니다",
+                    first + 1
+                ));
+            }
+        }
         let mut moves = Vec::new();
         let mut ops = Vec::new();
         let mut next = waypoints.iter();
@@ -770,7 +929,11 @@ impl Program {
                     before: std::mem::take(&mut ops),
                     place: place(p),
                 }),
-                Step::Do(a) => ops.extend(action_ops(a, cell, &pallets, &name)),
+                Step::Do(a) => ops.extend(action_ops(a, cell, &pallets, &name)?),
+            }
+            // An `Else` with nothing in it says nothing.
+            if matches!(ops.as_slice(), [.., Op::Else, Op::End]) {
+                ops.remove(ops.len() - 2);
             }
         }
         let script = writer.write(
@@ -1034,7 +1197,57 @@ const PULSE: f64 = 0.2;
 
 /// Action `a` as the controller does it where the cell is wired for it,
 /// or as a comment.
-fn action_ops(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) -> String) -> Vec<Op> {
+fn action_ops(
+    a: &Action,
+    cell: &CellIo,
+    pallets: &[u64],
+    name: &dyn Fn(u64) -> String,
+) -> Result<Vec<Op>, String> {
+    // A test the controller cannot make would change what it does, not
+    // only leave a line out: refused, not a comment.
+    let cond = |c: &Cond| -> Result<post::Cond, String> {
+        match c {
+            Cond::Machine { machine, signal } => cell
+                .port(*machine, signal.tag())
+                .map(|port| post::Cond::Input { port, on: true })
+                .ok_or_else(|| {
+                    format!(
+                        "조건 '{} {}'의 입력이 연결되지 않아 내보낼 수 없습니다",
+                        name(*machine),
+                        crate::run::signal_label(*signal)
+                    )
+                }),
+            Cond::Plc { name, .. } => Err(format!(
+                "조건 'PLC {name}'은 로봇 컨트롤러가 읽을 수 없어 내보낼 수 없습니다: 장비 신호나 변수로 바꿔 주세요"
+            )),
+            Cond::Var { name, cmp, value } => Ok(post::Cond::Var {
+                name: name.clone(),
+                cmp: cmp.tag(),
+                value: *value,
+            }),
+        }
+    };
+    Ok(match a {
+        Action::SetVar { name, value, add } => vec![Op::SetVar {
+            name: name.clone(),
+            value: *value,
+            add: *add,
+        }],
+        Action::If(c) => vec![Op::If(cond(c)?)],
+        Action::While(c) => vec![Op::While(cond(c)?)],
+        Action::Else => vec![Op::Else],
+        Action::End => vec![Op::End],
+        _ => action_ops_plain(a, cell, pallets, name),
+    })
+}
+
+/// An action other than a variable's or a block's, as [`action_ops`].
+fn action_ops_plain(
+    a: &Action,
+    cell: &CellIo,
+    pallets: &[u64],
+    name: &dyn Fn(u64) -> String,
+) -> Vec<Op> {
     let note = |what: String| {
         vec![Op::Note(format!(
             "KYNEX, not exported until its I/O is mapped: {what}"
@@ -1100,6 +1313,9 @@ fn action_ops(a: &Action, cell: &CellIo, pallets: &[u64], name: &dyn Fn(u64) -> 
         // wired to the controller's I/O there.
         Action::SetSignal { name, value } => note(format!("set PLC signal {name} to {value}")),
         Action::WaitSignal { name, value } => note(format!("wait for PLC signal {name} = {value}")),
+        Action::SetVar { .. } | Action::If(_) | Action::While(_) | Action::Else | Action::End => {
+            unreachable!("action_ops's own")
+        }
     }
 }
 
@@ -1183,7 +1399,70 @@ fn action_json(a: &Action, name: &dyn Fn(u64) -> String) -> Value {
             "stop": stop.to_string(),
             "stop_name": name(*stop),
         }),
+        Action::SetVar { name, value, add } => {
+            json!({ "type": "var_set", "name": name, "value": value, "add": add })
+        }
+        Action::If(c) => json!({ "type": "if", "cond": cond_json(c, name) }),
+        Action::While(c) => json!({ "type": "while", "cond": cond_json(c, name) }),
+        Action::Else => json!({ "type": "else" }),
+        Action::End => json!({ "type": "end" }),
     }
+}
+
+/// A condition, as saved and as the viewer reads it.
+fn cond_json(c: &Cond, name: &dyn Fn(u64) -> String) -> Value {
+    match c {
+        Cond::Machine { machine, signal } => json!({
+            "kind": "machine",
+            "machine": machine.to_string(),
+            "machine_name": name(*machine),
+            "signal": signal.tag(),
+        }),
+        Cond::Plc { name, value } => json!({ "kind": "plc", "name": name, "value": value }),
+        Cond::Var { name, cmp, value } => {
+            json!({ "kind": "var", "name": name, "cmp": cmp.tag(), "value": value })
+        }
+    }
+}
+
+/// A condition from the page.
+fn cond_of(v: &Value) -> Result<Cond, String> {
+    Ok(match v["kind"].as_str().ok_or("no condition")? {
+        "machine" => Cond::Machine {
+            machine: v["machine"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or("no machine")?,
+            signal: v["signal"]
+                .as_str()
+                .and_then(Signal::of)
+                .ok_or("unknown signal")?,
+        },
+        "plc" => Cond::Plc {
+            name: signal_name(&v["name"])?,
+            value: v["value"].as_i64().unwrap_or(1),
+        },
+        "var" => Cond::Var {
+            name: var_name(&v["name"])?,
+            cmp: v["cmp"]
+                .as_str()
+                .and_then(Cmp::of)
+                .ok_or("unknown comparison")?,
+            value: v["value"].as_i64().unwrap_or(0),
+        },
+        other => return Err(format!("unknown condition {other:?}")),
+    })
+}
+
+/// A PLC signal's name: trimmed, not empty, 40 characters at most.
+fn signal_name(v: &Value) -> Result<String, String> {
+    Ok(v.as_str()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .ok_or("no signal")?
+        .chars()
+        .take(40)
+        .collect())
 }
 
 /// An action from the page: the step `v` describes.
@@ -1242,15 +1521,17 @@ pub fn action_of(v: &Value) -> Result<Action, String> {
                 .to_string(),
             times: v["times"].as_u64().unwrap_or(1).clamp(1, MAX_TIMES as u64) as u32,
         },
+        "var_set" => Action::SetVar {
+            name: var_name(&v["name"])?,
+            value: v["value"].as_i64().unwrap_or(0),
+            add: v["add"] == true,
+        },
+        "if" => Action::If(cond_of(&v["cond"])?),
+        "while" => Action::While(cond_of(&v["cond"])?),
+        "else" => Action::Else,
+        "end" => Action::End,
         "signal_set" | "signal_wait" => {
-            let name = v["name"]
-                .as_str()
-                .map(str::trim)
-                .filter(|n| !n.is_empty())
-                .ok_or("no signal")?
-                .chars()
-                .take(40)
-                .collect();
+            let name = signal_name(&v["name"])?;
             let value = v["value"].as_i64().unwrap_or(1);
             if v["type"] == "signal_set" {
                 Action::SetSignal { name, value }

@@ -317,7 +317,11 @@ fn read_mesh(part: &Path, dir: &Path) -> Result<kreate_io::ir::ImportScene, Stri
         "gltf" | "glb" => {
             kreate_io::parse_gltf(&read()?, &Default::default()).map_err(|e| e.to_string())?
         }
-        other => return Err(format!("로봇 메시로 `.{other}` 파일은 읽지 않습니다 (STL, OBJ, PLY, DAE, glTF)")),
+        other => {
+            return Err(format!(
+                "로봇 메시로 `.{other}` 파일은 읽지 않습니다 (STL, OBJ, PLY, DAE, glTF)"
+            ))
+        }
     };
     let mut scene = scene.baked_to_kreate();
     let name = part
@@ -546,8 +550,12 @@ mod tests {
         assert!(read_mesh(&gltf, &dir).is_err());
         // USD may reference any file at all: not read as a robot's mesh.
         let usd = dir.join("a.usda");
-        std::fs::write(&usd, "#usda 1.0
-").unwrap();
+        std::fs::write(
+            &usd,
+            "#usda 1.0
+",
+        )
+        .unwrap();
         assert!(read_mesh(&usd, &dir).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

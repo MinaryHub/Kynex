@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::cell::Cell;
 use crate::collide::{self, Collider};
-use crate::program::{self, Program, Step};
+use crate::program::{self, Action, Program, Step};
 
 /// What the viewer has asked of the robots and not let go.
 #[derive(Debug, Default)]
@@ -764,7 +764,15 @@ impl Posing {
             "add" => {
                 let action = program::action_of(&req["step"])?;
                 let after = req["after"].as_u64().map(|i| i as usize);
+                // A block comes with its end, to put steps into.
+                let block = matches!(action, Action::If(_) | Action::While(_));
                 program.insert(Step::Do(action), after);
+                if block {
+                    let at = after.map_or(program.steps.len() - 1, |i| {
+                        (i + 1).min(program.steps.len() - 1)
+                    });
+                    program.insert(Step::Do(Action::End), Some(at));
+                }
             }
             "retouch" if req["via"] == true => {
                 let point = program.point_mut(index()?).ok_or_else(not_a_move)?;

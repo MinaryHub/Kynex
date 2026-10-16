@@ -33,7 +33,7 @@ use std::fmt::Write;
 use kreate_math::{DAffine3, DQuat, DVec3};
 
 use crate::path::MoveKind;
-use crate::post::{axes, comment, identifier, Export, Move, Op, Place, Writer};
+use crate::post::{axes, comment, identifier, Cond, Export, Move, Op, Place, Writer};
 use crate::{Kinematics, Tool};
 
 /// ABB: RAPID.
@@ -182,7 +182,9 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
             Op::Set { port, .. } | Op::Pulse { port, .. } => {
                 outputs.insert(*port);
             }
-            Op::Wait { port, .. } => {
+            Op::Wait { port, .. }
+            | Op::If(Cond::Input { port, .. })
+            | Op::While(Cond::Input { port, .. }) => {
                 inputs.insert(*port);
             }
             Op::Turn { unit, speed, .. } => {
@@ -319,6 +321,10 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
         let _ = writeln!(out, "  PERS num kynex_mark := 0;");
         let _ = writeln!(out, "  PERS num kynex_done := 0;");
     }
+    // The program's variables, each at 0.
+    for v in crate::post::variables(export.ops()) {
+        let _ = writeln!(out, "  VAR num kv_{v} := 0;");
+    }
     out.push_str(&targets);
     let _ = writeln!(out);
     let _ = writeln!(out, "  PROC main()");
@@ -341,11 +347,13 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
         units: &units,
         at: q,
     };
+    let blocks = Blocks::default();
     let mut body = |out: &mut String, indent: &str, k: usize, m: &Move, kind: MoveKind| {
         let e = ext(before(k));
         for op in &m.before {
-            op_lines(out, indent, op, export, &e);
+            blocks.op(out, indent, op, export, &e);
         }
+        let indent = &blocks.pad(indent);
         let w = m.waypoint;
         let zone = if w.blend > 0.0 {
             format!("kynex_z{}", (w.blend * 1000.0).round().max(1.0) as u32)
@@ -436,7 +444,7 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
         }
         let e = ext(before(0));
         for op in &export.trailing {
-            op_lines(&mut out, "      ", op, export, &e);
+            blocks.op(&mut out, "      ", op, export, &e);
         }
         body(&mut out, "      ", 0, first, first.waypoint.kind);
         let _ = writeln!(out, "    ENDWHILE");
@@ -446,7 +454,7 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
         }
         let e = ext(before(0));
         for op in &export.trailing {
-            op_lines(&mut out, "    ", op, export, &e);
+            blocks.op(&mut out, "    ", op, export, &e);
         }
         if export.markers {
             mark += 1;
@@ -464,6 +472,81 @@ struct Ext<'a> {
     axes: &'a Axes,
     units: &'a [String],
     at: Vec<f64>,
+}
+
+/// How deep in its blocks the program is, and which each open one is (a
+/// `WHILE` or an `IF`): what is in one is set in by two more, and its end
+/// is the one it closes.
+#[derive(Default)]
+struct Blocks {
+    open: std::cell::RefCell<Vec<bool>>,
+}
+
+impl Blocks {
+    fn pad(&self, indent: &str) -> String {
+        format!("{indent}{}", "  ".repeat(self.open.borrow().len()))
+    }
+
+    /// `op`, at `indent` and the depth the blocks have reached.
+    fn op(&self, out: &mut String, indent: &str, op: &Op, export: &Export, ext: &Ext) {
+        let mut open = self.open.borrow_mut();
+        match op {
+            Op::If(c) => {
+                let _ = writeln!(
+                    out,
+                    "{indent}{}IF {} THEN",
+                    "  ".repeat(open.len()),
+                    cond(c)
+                );
+                open.push(false);
+            }
+            Op::While(c) => {
+                let _ = writeln!(
+                    out,
+                    "{indent}{}WHILE {} DO",
+                    "  ".repeat(open.len()),
+                    cond(c)
+                );
+                open.push(true);
+            }
+            Op::Else => {
+                let _ = writeln!(
+                    out,
+                    "{indent}{}ELSE",
+                    "  ".repeat(open.len().saturating_sub(1))
+                );
+            }
+            Op::End => {
+                let looped = open.pop().unwrap_or(false);
+                let _ = writeln!(
+                    out,
+                    "{indent}{}{}",
+                    "  ".repeat(open.len()),
+                    if looped { "ENDWHILE" } else { "ENDIF" }
+                );
+            }
+            _ => {
+                let pad = format!("{indent}{}", "  ".repeat(open.len()));
+                drop(open);
+                op_lines(out, &pad, op, export, ext);
+            }
+        }
+    }
+}
+
+/// A condition as RAPID tests it.
+fn cond(c: &Cond) -> String {
+    match c {
+        Cond::Input { port, on } => format!("DInput(DI_KYNEX_{port}) = {}", u8::from(*on)),
+        Cond::Var { name, cmp, value } => {
+            let cmp = match *cmp {
+                "==" => "=",
+                "!=" => "<>",
+                c => c,
+            };
+            format!("kv_{name} {cmp} {value}")
+        }
+    }
 }
 
 /// `op` as RAPID, at `indent`.
@@ -512,6 +595,15 @@ fn op_lines(out: &mut String, indent: &str, op: &Op, export: &Export, ext: &Ext)
                 "{indent}kynex_place_{pallet} := (kynex_place_{pallet} + 1) MOD {n};"
             )
         }
+        Op::SetVar { name, value, add } => {
+            if *add {
+                writeln!(out, "{indent}kv_{name} := kv_{name} + {value};")
+            } else {
+                writeln!(out, "{indent}kv_{name} := {value};")
+            }
+        }
+        // Blocks are `Blocks::op`'s.
+        Op::If(_) | Op::Else | Op::While(_) | Op::End => Ok(()),
     };
 }
 

@@ -161,6 +161,16 @@ impl Cell1 {
         assert_eq!(a["ok"], true, "{a}");
     }
 
+    /// The step `step`, put in after step `after`.
+    fn act_after(&mut self, after: usize, step: serde_json::Value) {
+        let a = ask_posing(
+            &mut self.posing,
+            &self.doc,
+            json!({"op": "add", "robot": self.robot.to_string(), "step": step, "after": after}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+    }
+
     fn act(&mut self, step: serde_json::Value) {
         let a = ask_posing(
             &mut self.posing,
@@ -1879,4 +1889,111 @@ fn a_program_sets_and_waits_for_plc_signals() {
         "{}",
         runner.to_json(t)
     );
+}
+
+/// A loop counted on a variable, and a branch on it once the loop is
+/// done: the run goes round as often as counted, takes the branch whose
+/// test holds, and the program reads back as it was saved.
+#[test]
+fn a_program_loops_while_a_variable_counts_and_branches_on_it() {
+    let mut c = cell1();
+    let seat = c.seat();
+    c.teach(seat + DVec3::new(0.0, -0.6, 0.15), "joint");
+    let var =
+        |cmp: &str, value: i64| json!({"kind": "var", "name": "n", "cmp": cmp, "value": value});
+    c.act(json!({"type": "var_set", "name": "n", "value": 0}));
+    // A block comes with its end; its steps go in after it.
+    c.act(json!({"type": "while", "cond": var("<", 3)}));
+    c.act_after(2, json!({"type": "delay", "seconds": 1.0}));
+    c.act_after(
+        3,
+        json!({"type": "var_set", "name": "n", "value": 1, "add": true}),
+    );
+    c.act(json!({"type": "if", "cond": var("==", 3)}));
+    c.act_after(6, json!({"type": "delay", "seconds": 2.0}));
+    c.act_after(7, json!({"type": "else"}));
+    c.act_after(8, json!({"type": "delay", "seconds": 30.0}));
+    let program = c.posing.program(c.robot).unwrap();
+    let types: Vec<String> = program
+        .steps
+        .iter()
+        .map(|s| match s {
+            Step::Move(_) => "move".to_string(),
+            Step::Do(a) => format!("{a:?}")
+                .split([' ', '(', '{'])
+                .next()
+                .unwrap()
+                .to_string(),
+        })
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "move", "SetVar", "While", "Delay", "SetVar", "End", "If", "Delay", "Else", "Delay",
+            "End"
+        ]
+    );
+    let (runner, t) = c.run(60.0);
+    assert!(runner.finished(), "{}", runner.to_json(t));
+    // Three rounds of 1 s, then the 2 s branch: not the 30 s one.
+    assert!(t > 5.0 && t < 10.0, "{t}");
+
+    // Saved and read back, the same steps.
+    let program = c.posing.program(c.robot).unwrap().clone();
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let saved = program.to_saved(c.robot, &c.doc, &kin);
+    let (_, back) = Program::from_saved(&saved, &c.doc).unwrap();
+    assert_eq!(back.steps, program.steps);
+
+    // To a controller: the variable's test goes as it is.
+    let (script, _) = program
+        .urscript(
+            c.robot,
+            &c.doc,
+            &kin,
+            false,
+            &crate::program::CellIo::default(),
+        )
+        .unwrap();
+    assert!(script.contains("while (kv_n < 3):"), "{script}");
+    assert!(script.contains("if (kv_n == 3):"), "{script}");
+}
+
+#[test]
+fn blocks_that_do_not_close_or_tests_a_controller_cannot_make_are_refused() {
+    let mut c = cell1();
+    let seat = c.seat();
+    c.teach(seat + DVec3::new(0.0, -0.6, 0.15), "joint");
+    c.act(json!({"type": "if", "cond": {"kind": "plc", "name": "READY", "value": 1}}));
+    c.act_after(1, json!({"type": "delay", "seconds": 1.0}));
+    let program = c.posing.program(c.robot).unwrap().clone();
+    let mut open = program.clone();
+    open.steps.pop();
+    let err = Runner::new(c.robot, open, &c.doc, 0.0).unwrap_err();
+    assert!(err.contains("닫히지"), "{err}");
+    let kin = kynex_kin::Kinematics::of(&c.doc, c.robot).unwrap();
+    let io = crate::program::CellIo::default();
+    // A PLC's signal is the cell's, not the controller's.
+    let err = program
+        .urscript(c.robot, &c.doc, &kin, false, &io)
+        .unwrap_err();
+    assert!(err.contains("PLC READY"), "{err}");
+    // Nor can the first move be in a block: the controller starts there.
+    let blocks = crate::program::blocks(&program.steps).unwrap();
+    assert_eq!(blocks[1], Some(3));
+    use crate::program::{Action, Cmp, Cond, Step};
+    let mut first_inside = program.clone();
+    first_inside.steps = vec![
+        Step::Do(Action::If(Cond::Var {
+            name: "n".into(),
+            cmp: Cmp::Eq,
+            value: 0,
+        })),
+        program.steps[0].clone(),
+        Step::Do(Action::End),
+    ];
+    let err = first_inside
+        .urscript(c.robot, &c.doc, &kin, false, &io)
+        .unwrap_err();
+    assert!(err.contains("첫 이동"), "{err}");
 }

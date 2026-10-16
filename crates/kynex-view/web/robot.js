@@ -54,6 +54,10 @@ const SIGNALS_OF = {
   amr: [['arrived', 'AMR 도착']],
 };
 const SPEEDS = [1, 2, 5, 10, 20];
+// How a variable is compared, as a condition's row offers it.
+const CMPS = [['==', '='], ['!=', '≠'], ['<', '<'], ['>', '>'], ['<=', '≤'], ['>=', '≥']];
+// A variable's name: what every controller's language takes.
+const VAR_NAME = /^[A-Za-z][A-Za-z0-9_]{0,15}$/;
 
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
 
@@ -475,6 +479,12 @@ export class RobotPanel {
               <option value="call">서브루틴 호출</option>
               <option value="signal_set">PLC 신호 쓰기</option>
               <option value="signal_wait">PLC 신호 대기</option>
+              <optgroup label="흐름">
+                <option value="if">만약 (조건)</option>
+                <option value="else">아니면</option>
+                <option value="while">반복 (조건)</option>
+                <option value="var_set">변수 정하기</option>
+              </optgroup>
             </select>
           </div>
           <div class="copy-bar" hidden></div>
@@ -550,8 +560,17 @@ export class RobotPanel {
             : [ui.cursor, ui.cursor];
       const inRange = (i) => !!span && span[1] > span[0] && i >= span[0] && i <= span[1];
       this.renderCopyBar(section, span);
+      // How deep in blocks (만약, 반복) each step is: set in that far.
+      let open = 0;
+      const depth = points.map((p) => {
+        if (p.type === 'else' || p.type === 'end') open = Math.max(0, open - 1);
+        const d = open;
+        if (p.type === 'if' || p.type === 'while' || p.type === 'else') open += 1;
+        return d;
+      });
+      const indent = (i) => (depth[i] ? ` style="margin-left:${depth[i] * 14}px"` : '');
       const rows = points.map((p, i) => {
-        if (p.type !== 'move') return this.actionRow(r, p, i, i === ui.cursor, inRange(i));
+        if (p.type !== 'move') return this.actionRow(r, p, i, i === ui.cursor, inRange(i), indent(i));
         const linear = p.kind !== 'joint';
         const circular = p.kind === 'circular';
         const speed = linear ? Math.round(p.speed * 1000) : Math.round(p.speed * 100);
@@ -560,7 +579,7 @@ export class RobotPanel {
         // unless the program comes back round to it.
         const into = i > firstMove || program.close;
         return `
-          <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}" draggable="true">
+          <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}" draggable="true"${indent(i)}>
             <span class="pidx num">${i + 1}</span>
             <span class="pname">${escapeHtml(p.name)}${p.blend ? ` <span class="pblend" title="블렌드 반경: 멈추지 않고 지나감">◠${Math.round(p.blend * 1000)}</span>` : ''}</span>
             <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${circular ? '원호 이동 (MoveC) · 눌러서 직선 이동으로' : linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${circular ? 'C' : linear ? 'L' : 'J'}</button>
@@ -595,7 +614,7 @@ export class RobotPanel {
 
   // An action's row: what it is, and what it is for, to be changed in
   // place.
-  actionRow(r, step, i, cursor, inrange) {
+  actionRow(r, step, i, cursor, inrange, indent = '') {
     const { escapeHtml } = this.ctx;
     const pick = (field, options, value) =>
       `<select data-field="${field}">${options
@@ -658,6 +677,26 @@ export class RobotPanel {
           `<span class="unit">=</span><input class="pspeed num" type="number" data-field="value" value="${step.value}" step="1" aria-label="값">`;
         break;
       }
+      case 'var_set':
+        icon = '변수';
+        body =
+          `<input class="var-name" type="text" data-field="name" value="${escapeHtml(step.name)}" maxlength="16" spellcheck="false" aria-label="변수 이름">` +
+          pick('add', [['false', '='], ['true', '+=']], String(!!step.add)) +
+          `<input class="pspeed num" type="number" data-field="value" value="${step.value}" step="1" aria-label="값">`;
+        break;
+      case 'if':
+      case 'while':
+        icon = step.type === 'if' ? '만약' : '반복';
+        body = this.condFields(step.cond, pick, keep, sensed);
+        break;
+      case 'else':
+        icon = '아니면';
+        body = '<span class="unit">조건이 아닐 때</span>';
+        break;
+      case 'end':
+        icon = '끝';
+        body = '';
+        break;
       case 'turn':
         icon = '회전';
         body =
@@ -666,7 +705,7 @@ export class RobotPanel {
         break;
     }
     return `
-          <li class="point action${cursor ? ' cursor' : ''}${inrange ? ' inrange' : ''}" data-index="${i}" data-type="${step.type}" draggable="true">
+          <li class="point action${cursor ? ' cursor' : ''}${inrange ? ' inrange' : ''}" data-index="${i}" data-type="${step.type}"${step.cond ? ` data-cond="${step.cond.kind}"` : ''} draggable="true"${indent}>
             <span class="pidx num">${i + 1}</span>
             <span class="act-icon act-${step.type}">${icon}</span>
             <span class="act-body">${body}</span>
@@ -674,11 +713,64 @@ export class RobotPanel {
           </li>`;
   }
 
+  // A condition's fields: what it tests — a machine's signal, a PLC
+  // signal, a variable — and against what.
+  condFields(cond, pick, keep, sensed) {
+    const { escapeHtml } = this.ctx;
+    const kinds = [['machine', '장비'], ['plc', 'PLC'], ['var', '변수']];
+    let fields = '';
+    if (cond.kind === 'machine') {
+      const kind = this.cell.components.find((c) => c.object === cond.machine)?.kind ?? 'cnc';
+      fields =
+        pick('c_machine', keep(sensed, cond.machine, cond.machine_name), cond.machine) +
+        pick('c_signal', SIGNALS_OF[kind] ?? SIGNALS, cond.signal);
+    } else if (cond.kind === 'plc') {
+      fields =
+        pick('c_name', keep(this.plcSignals(true), cond.name, cond.name), cond.name) +
+        `<span class="unit">=</span><input class="pspeed num" type="number" data-field="c_value" value="${cond.value}" step="1" aria-label="값">`;
+    } else {
+      fields =
+        `<input class="var-name" type="text" data-field="c_name" value="${escapeHtml(cond.name)}" maxlength="16" spellcheck="false" aria-label="변수 이름">` +
+        pick('c_cmp', CMPS, cond.cmp) +
+        `<input class="pspeed num" type="number" data-field="c_value" value="${cond.value}" step="1" aria-label="값">`;
+    }
+    return pick('c_kind', kinds, cond.kind) + fields;
+  }
+
+  // A new condition of `kind`, on the cell's first machine or PLC signal,
+  // or on a variable.
+  newCond(kind) {
+    if (kind === 'machine') {
+      const c = this.cell.components.find((c) => c.kind in SIGNALS_OF);
+      return c ? { kind, machine: c.object, signal: SIGNALS_OF[c.kind][0][0] } : null;
+    }
+    if (kind === 'plc') {
+      const name = this.plcSignals(true)[0]?.[0];
+      return name ? { kind, name, value: 1 } : null;
+    }
+    return { kind: 'var', name: 'n', cmp: '<', value: 3 };
+  }
+
   // The action in row `row`, as its fields have it now.
   actionOf(row) {
     const step = { type: row.dataset.type };
+    const numbers = ['seconds', 'times', 'degrees', 'value', 'c_value'];
     for (const field of row.querySelectorAll('[data-field]')) {
-      step[field.dataset.field] = ['seconds', 'times', 'degrees', 'value'].includes(field.dataset.field) ? Number(field.value) : field.value;
+      step[field.dataset.field] = numbers.includes(field.dataset.field) ? Number(field.value) : field.value;
+    }
+    if ('add' in step) step.add = step.add === 'true';
+    if (step.c_kind) {
+      // Another kind picked: a new condition of it, the rest as it was.
+      const fresh = this.newCond(step.c_kind) ?? this.newCond('var');
+      const cond = { ...fresh };
+      if (fresh.kind === step.c_kind && row.dataset.cond === step.c_kind) {
+        for (const [k, v] of Object.entries(step)) if (k.startsWith('c_') && k !== 'c_kind') cond[k.slice(2)] = v;
+      }
+      // Another machine picked: a signal it says.
+      const kind = this.cell.components.find((c) => c.object === cond.machine)?.kind;
+      if (cond.signal && SIGNALS_OF[kind] && !SIGNALS_OF[kind].some(([v]) => v === cond.signal)) cond.signal = SIGNALS_OF[kind][0][0];
+      for (const k of Object.keys(step)) if (k.startsWith('c_')) delete step[k];
+      step.cond = cond;
     }
     // Another machine picked: what it takes and says, if the old does not fit.
     const kind = this.cell.components.find((c) => c.object === step.machine)?.kind;
@@ -862,6 +954,14 @@ export class RobotPanel {
         const name = this.plcSignals(type === 'signal_wait')[0]?.[0];
         return name ? { type, name, value: 1 } : null;
       }
+      // On a machine's signal if there is one to test, else a count.
+      case 'if':
+      case 'while':
+        return { type, cond: type === 'if' ? (this.newCond('machine') ?? this.newCond('var')) : this.newCond('var') };
+      case 'else':
+        return { type };
+      case 'var_set':
+        return { type, name: 'n', value: 0, add: false };
     }
     return null;
   }
@@ -1544,6 +1644,8 @@ export class RobotPanel {
       }
       this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });
       if (ui.cursor != null) ui.cursor += 1;
+      // Into a block just made: what is added next goes inside it.
+      else if (type === 'if' || type === 'while') ui.cursor = (this.programs[r.root]?.steps.length ?? 0);
     }
     if (e.target.dataset.field) {
       const row = e.target.closest('.point.action');

@@ -25,7 +25,7 @@ use kreate_math::{DAffine3, DQuat};
 
 use crate::path::{self, MoveKind};
 pub use crate::post::{comment, Export, Move, Op, Place, Places};
-use crate::post::{identifier, Writer};
+use crate::post::{identifier, Cond, Writer};
 use crate::{Kinematics, Tool};
 
 /// Universal Robots: URScript.
@@ -96,6 +96,24 @@ fn op_lines(op: &Op, pallets: &[Places]) -> Vec<String> {
                 "kynex_place_{pallet} = (kynex_place_{pallet} + 1) % {n}"
             )]
         }
+        Op::SetVar { name, value, add } => vec![if *add {
+            format!("kv_{name} = kv_{name} + {value}")
+        } else {
+            format!("kv_{name} = {value}")
+        }],
+        Op::If(c) => vec![format!("if ({}):", cond(c))],
+        Op::Else => vec!["else:".to_string()],
+        Op::While(c) => vec![format!("while ({}):", cond(c))],
+        Op::End => vec!["end".to_string()],
+    }
+}
+
+/// A condition as URScript tests it.
+fn cond(c: &Cond) -> String {
+    match c {
+        Cond::Input { port, on: true } => get_in(*port),
+        Cond::Input { port, on: false } => format!("not {}", get_in(*port)),
+        Cond::Var { name, cmp, value } => format!("kv_{name} {cmp} {value}"),
     }
 }
 
@@ -148,10 +166,33 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
         let _ = writeln!(out, "  kynex_places_{k} = [{}]", places.join(", "));
         let _ = writeln!(out, "  kynex_place_{k} = 0");
     }
+    // The program's variables, each at 0.
+    for v in crate::post::variables(export.ops()) {
+        let _ = writeln!(out, "  kv_{v} = 0");
+    }
+    // How deep in its blocks (if, while) the program is: what is in one is
+    // set in by two more.
+    let depth = std::cell::Cell::new(0usize);
+    // Whether the block last opened has had a statement yet: an empty one
+    // is given `sync()`, a control cycle's wait, URScript having no `pass`.
+    let empty = std::cell::Cell::new(false);
+    let pad = |indent: &str| format!("{indent}{}", "  ".repeat(depth.get()));
     let notes = |out: &mut String, indent: &str, ops: &[Op]| {
         for op in ops {
+            if matches!(op, Op::Else | Op::End) {
+                if empty.get() {
+                    let _ = writeln!(out, "{}sync()", pad(indent));
+                }
+                depth.set(depth.get().saturating_sub(1));
+            }
             for line in op_lines(op, &export.pallets) {
-                let _ = writeln!(out, "{indent}{line}");
+                let _ = writeln!(out, "{}{line}", pad(indent));
+            }
+            if matches!(op, Op::If(_) | Op::While(_) | Op::Else) {
+                depth.set(depth.get() + 1);
+                empty.set(true);
+            } else if !matches!(op, Op::Note(_) | Op::End) {
+                empty.set(false);
             }
         }
     };
@@ -180,6 +221,7 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
         }
     };
     let step = |out: &mut String, indent: &str, m: &Move, kind: MoveKind| {
+        empty.set(false);
         let w = m.waypoint;
         let _ = writeln!(out, "{indent}# {}", comment(m.name));
         // Passed without stopping, within the blend radius.
@@ -262,34 +304,34 @@ pub fn urscript(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String
     let first = &export.moves[0];
     notes(&mut out, "  ", &first.before);
     let _ = writeln!(out, "  # To the start");
-    marker(&mut out, "  ");
-    step(&mut out, "  ", first, MoveKind::Joint);
-    ended(&mut out, "  ");
+    marker(&mut out, &pad("  "));
+    step(&mut out, &pad("  "), first, MoveKind::Joint);
+    ended(&mut out, &pad("  "));
     let rest = &export.moves[1..];
     if export.close {
         let _ = writeln!(out, "  while (True):");
         for m in rest {
             notes(&mut out, "    ", &m.before);
-            marker(&mut out, "    ");
-            step(&mut out, "    ", m, m.waypoint.kind);
-            ended(&mut out, "    ");
+            marker(&mut out, &pad("    "));
+            step(&mut out, &pad("    "), m, m.waypoint.kind);
+            ended(&mut out, &pad("    "));
         }
         notes(&mut out, "    ", &export.trailing);
         // Round again: what came before the first move comes again too.
         notes(&mut out, "    ", &first.before);
-        marker(&mut out, "    ");
-        step(&mut out, "    ", first, first.waypoint.kind);
-        ended(&mut out, "    ");
+        marker(&mut out, &pad("    "));
+        step(&mut out, &pad("    "), first, first.waypoint.kind);
+        ended(&mut out, &pad("    "));
         let _ = writeln!(out, "  end");
     } else {
         for m in rest {
             notes(&mut out, "  ", &m.before);
-            marker(&mut out, "  ");
-            step(&mut out, "  ", m, m.waypoint.kind);
-            ended(&mut out, "  ");
+            marker(&mut out, &pad("  "));
+            step(&mut out, &pad("  "), m, m.waypoint.kind);
+            ended(&mut out, &pad("  "));
         }
         notes(&mut out, "  ", &export.trailing);
-        marker(&mut out, "  ");
+        marker(&mut out, &pad("  "));
     }
     let _ = writeln!(out, "end");
     let _ = writeln!(out, "{name}()");

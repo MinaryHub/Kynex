@@ -180,7 +180,30 @@ impl Pos {
 struct Lines {
     lines: Vec<Vec<String>>,
     label: u32,
+    /// The program's variables, in order: `R[61]` on.
+    vars: Vec<String>,
+    /// The blocks open: a `WHILE`'s labels (top, past it), or an `IF`'s
+    /// (its `ELSE`, its end) and whether its `ELSE` has come.
+    blocks: Vec<Block>,
 }
+
+/// A block open, as TP labels it: TP's own `IF`… `ENDIF` is not on every
+/// controller, a jump to a label is.
+enum Block {
+    While {
+        top: u32,
+        past: u32,
+    },
+    If {
+        otherwise: u32,
+        end: u32,
+        had_else: bool,
+    },
+}
+
+/// The first register the program's variables are kept in, and how many.
+const VAR_R: u32 = 61;
+const MOST_VARS: usize = 16;
 
 impl Lines {
     /// An instruction that is not a move.
@@ -288,6 +311,18 @@ pub fn tp(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, Stri
 
     let mut lines = Lines::default();
     lines.say(remark(&format!("KYNEX: {}", export.name)));
+    // The program's variables, each in a register of its own, at 0.
+    let vars = crate::post::variables(export.ops());
+    if vars.len() > MOST_VARS {
+        return Err(format!(
+            "TP: 변수는 {MOST_VARS}개까지입니다 (R[{VAR_R}]부터)"
+        ));
+    }
+    for v in &vars {
+        let r = lines.register(v);
+        lines.say(remark(&format!("R[{r}] is {v}")));
+        lines.say(format!("R[{r}]=0"));
+    }
     // The tool, from the faceplate.
     let (_, tr, tt) = tcp.to_scale_rotation_translation();
     let t = (tt * 1000.0).to_array();
@@ -477,6 +512,94 @@ fn op_lines(lines: &mut Lines, op: &Op, export: &Export) {
             lines.say(format!("R[{r}]=0"));
             lines.say(format!("LBL[{past}]"));
         }
+        Op::SetVar { name, value, add } => {
+            let r = lines.register(name);
+            if *add {
+                lines.say(format!("R[{r}]=R[{r}]+({value})"));
+            } else {
+                lines.say(format!("R[{r}]=({value})"));
+            }
+        }
+        // A block: into it unless its condition does not hold, past it
+        // then.
+        Op::If(c) => {
+            let (otherwise, end) = (lines.next_label() + 200, lines.next_label() + 200);
+            let not = test(lines, &c.not());
+            lines.say(format!("IF {not},JMP LBL[{otherwise}]"));
+            lines.blocks.push(Block::If {
+                otherwise,
+                end,
+                had_else: false,
+            });
+        }
+        Op::Else => {
+            if let Some(Block::If {
+                otherwise,
+                end,
+                had_else,
+            }) = lines.blocks.last_mut()
+            {
+                *had_else = true;
+                let (otherwise, end) = (*otherwise, *end);
+                lines.say(format!("JMP LBL[{end}]"));
+                lines.say(format!("LBL[{otherwise}]"));
+            }
+        }
+        Op::While(c) => {
+            let (top, past) = (lines.next_label() + 200, lines.next_label() + 200);
+            lines.say(format!("LBL[{top}]"));
+            let not = test(lines, &c.not());
+            lines.say(format!("IF {not},JMP LBL[{past}]"));
+            lines.blocks.push(Block::While { top, past });
+        }
+        Op::End => match lines.blocks.pop() {
+            Some(Block::While { top, past }) => {
+                lines.say(format!("JMP LBL[{top}]"));
+                lines.say(format!("LBL[{past}]"));
+            }
+            Some(Block::If {
+                otherwise,
+                end,
+                had_else,
+            }) => {
+                if !had_else {
+                    lines.say(format!("LBL[{otherwise}]"));
+                }
+                lines.say(format!("LBL[{end}]"));
+            }
+            None => {}
+        },
+    }
+}
+
+/// A condition as TP's one-line `IF` tests it.
+fn test(lines: &mut Lines, c: &crate::post::Cond) -> String {
+    match c {
+        crate::post::Cond::Input { port, on } => {
+            format!("{}={}", io(*port, false), if *on { "ON" } else { "OFF" })
+        }
+        crate::post::Cond::Var { name, cmp, value } => {
+            let cmp = match *cmp {
+                "==" => "=",
+                "!=" => "<>",
+                c => c,
+            };
+            format!("R[{}]{cmp}({value})", lines.register(name))
+        }
+    }
+}
+
+impl Lines {
+    /// The register variable `name` is kept in.
+    fn register(&mut self, name: &str) -> u32 {
+        let k = match self.vars.iter().position(|v| v == name) {
+            Some(k) => k,
+            None => {
+                self.vars.push(name.to_string());
+                self.vars.len() - 1
+            }
+        };
+        VAR_R + k as u32
     }
 }
 

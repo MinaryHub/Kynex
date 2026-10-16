@@ -685,6 +685,7 @@ const libraryPanel = new LibraryPanel({
   toggleGroup: (uid) => toggleGroup(uid),
   boxUnder: (root) => boxUnder(root),
   hideUnder: (root, hidden) => hideUnder(root, hidden),
+  bounds: (uid) => bounds(uid),
   unhideAll: () => batch.hide([...batch.hidden], false),
   select,
   pick,

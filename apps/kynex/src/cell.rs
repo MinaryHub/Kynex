@@ -1470,6 +1470,28 @@ impl Cell {
             "role" => {
                 let object = uid("object")?;
                 let id = id_of(doc, object).ok_or("no such object")?;
+                // A part of a machine — its door, a panel — is not a machine
+                // of its own: the machine above it is.
+                if let Some(kind) = req["kind"].as_str().and_then(Kind::of) {
+                    if kind.machine() {
+                        let mut at = doc.object(id).and_then(|o| o.parent);
+                        for _ in 0..64 {
+                            let Some(up) = at else { break };
+                            let above = doc.object_uid(up).map(|u| u.raw());
+                            if let Some(m) = self
+                                .components
+                                .iter()
+                                .find(|c| Some(c.object) == above && c.kind.machine())
+                            {
+                                return Err(format!(
+                                    "이 부품은 이미 장비 \"{}\"의 일부입니다. 장비 전체를 고르세요",
+                                    m.name
+                                ));
+                            }
+                            at = doc.object(up).and_then(|o| o.parent);
+                        }
+                    }
+                }
                 // Its wiring stays while its kind does.
                 let was = self.components.iter().find(|c| c.object == object).cloned();
                 self.components.retain(|c| c.object != object);
@@ -3022,6 +3044,30 @@ mod tests {
     fn move_grip(doc: &mut Document, grip: u64, at: DVec3) {
         let id = id_of(doc, grip).unwrap();
         doc.object_mut(id).unwrap().transform.translation = at;
+    }
+
+    /// A machine's part — its chuck — is not made a machine of its own; a
+    /// part of nothing that is one, or another role on the part, still is.
+    #[test]
+    fn a_machine_s_part_is_not_a_machine_of_its_own() {
+        let (doc, plate, machine, _) = scene();
+        let chuck = doc
+            .objects()
+            .find(|(_, o)| o.name == "cnc_1_chuck")
+            .and_then(|(id, _)| doc.object_uid(id))
+            .unwrap()
+            .raw();
+        let mut cell = Cell::default();
+        let role = |object: u64, kind: &str| json!({"op": "role", "object": object.to_string(), "kind": kind});
+        assert_eq!(ask(&mut cell, &doc, role(machine, "cnc"))["ok"], true);
+        let refused = ask(&mut cell, &doc, role(chuck, "cnc"));
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(
+            refused["error"].as_str().unwrap().contains("cnc_1"),
+            "{refused}"
+        );
+        assert_eq!(cell.components().len(), 1);
+        assert_eq!(ask(&mut cell, &doc, role(plate, "cnc"))["ok"], true);
     }
 
     #[test]

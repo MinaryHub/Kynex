@@ -93,7 +93,8 @@ export class LibraryPanel {
     ctx.scene.add(this.proxy);
     this.handle = new TransformControls(ctx.camera, ctx.canvas);
     this.handle.setSize(0.8);
-    this.handle.setSpace('world');
+    // Its arrows and rings along the equipment's own axes, not the world's.
+    this.handle.setSpace('local');
     this.helper = this.handle.getHelper();
     this.handleItem = null;
     // The gizmo on the equipment selected, unless turned off in this browser.
@@ -126,7 +127,7 @@ export class LibraryPanel {
       const handled = this.handleItem != null && this.itemById(this.handleItem);
       const items = this.groupItems();
       this.dragFrom = e.value && handled && items.length > 1 && items.some((i) => i.id === handled.id)
-        ? { at: [...handled.at], yaw: handled.yaw, items: items.map((i) => ({ id: i.id, at: [...i.at], yaw: i.yaw })) }
+        ? { at: this.proxy.position.toArray(), yaw: handled.yaw, items: items.map((i) => ({ id: i.id, at: [...i.at], yaw: i.yaw })) }
         : null;
       if (!e.value) {
         this.draggedAt = performance.now();
@@ -134,7 +135,7 @@ export class LibraryPanel {
         // one item alone.
         if (this.handleItem != null && !this.alt && this.groupItems().length <= 1) {
           const z = new THREE.Euler().setFromQuaternion(this.proxy.quaternion, 'ZYX').z;
-          this.send({ op: 'move', item: this.handleItem, at: this.proxy.position.toArray(), yaw: z, snap: true }, (a) => this.saySnapped(a));
+          this.send({ op: 'move', item: this.handleItem, at: this.originAt(), yaw: z, snap: true }, (a) => this.saySnapped(a));
         }
       }
     });
@@ -151,7 +152,7 @@ export class LibraryPanel {
         this.proxy.quaternion.setFromEuler(new THREE.Euler(0, 0, e.z, 'ZYX'));
         return this.moveGroup(this.proxy.position.toArray(), e.z);
       }
-      const at = this.proxy.position.toArray();
+      const at = this.originAt();
       this.move(null, null, null, { op: 'move', item: this.handleItem, at, yaw: e.z, pitch: e.y, roll: e.x });
     });
 
@@ -764,6 +765,8 @@ export class LibraryPanel {
     const item = uid != null ? this.itemOf(uid) : null;
     const want = item && !item.locked && this.gizmo ? item.id : null;
     if (want !== this.handleItem) this.showHandle(want);
+    // Another part of the same equipment: the gizmo onto it.
+    else this.followHandle();
   }
 
   // The gizmo on selecting, or not; kept for this browser.
@@ -791,12 +794,29 @@ export class LibraryPanel {
   }
 
   // The handle onto its item, but not while it is being dragged.
+  // On the part selected, at its middle (the whole equipment's middle for
+  // its root), turned as the equipment is: the point the equipment moves
+  // with and turns about. Where the equipment's origin is from there, in
+  // its own axes, is kept to put the origin back (`originAt`).
   followHandle() {
     const item = this.handleItem != null && this.itemById(this.handleItem);
     if (!item || this.dragging) return;
-    this.proxy.position.fromArray(item.at);
-    this.proxy.quaternion.setFromEuler(new THREE.Euler(item.roll ?? 0, item.pitch ?? 0, item.yaw, 'ZYX'));
+    const turn = new THREE.Quaternion().setFromEuler(new THREE.Euler(item.roll ?? 0, item.pitch ?? 0, item.yaw, 'ZYX'));
+    const at = new THREE.Vector3().fromArray(item.at);
+    const s = this.ctx.selected();
+    const on = s != null && this.itemOf(s)?.id === item.id ? s : item.root;
+    const box = this.ctx.bounds(on);
+    const pivot = box.isEmpty() ? at.clone() : box.getCenter(new THREE.Vector3());
+    this.offset = pivot.clone().sub(at).applyQuaternion(turn.clone().invert());
+    this.proxy.position.copy(pivot);
+    this.proxy.quaternion.copy(turn);
     this.proxy.updateMatrixWorld();
+  }
+
+  // Where the equipment's origin is, the gizmo where it is now.
+  originAt() {
+    const off = (this.offset ?? new THREE.Vector3()).clone().applyQuaternion(this.proxy.quaternion);
+    return this.proxy.position.clone().sub(off).toArray();
   }
 
   // Keys while the gizmo is on: R turns, T moves.

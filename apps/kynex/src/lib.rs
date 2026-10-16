@@ -46,6 +46,7 @@ mod paths;
 mod plc;
 mod pose;
 mod program;
+mod rtde;
 mod run;
 mod scenario;
 pub mod studio;

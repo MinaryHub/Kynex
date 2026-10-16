@@ -234,7 +234,37 @@ export class RobotPanel {
       section.classList.toggle('held', held);
       section.querySelector('.robot-local').hidden = !held;
       this.showRun(section, this.runOf(root));
+      this.showFollow(section, pose.following?.[root]);
     }
+    this.following = pose.following ?? {};
+  }
+
+  // The address a robot was last followed at, in this browser.
+  followHost(root) {
+    try {
+      return localStorage.getItem(`kynex.follow.${root}`) ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  // A real robot followed: whether it is, and how it is going.
+  showFollow(section, f) {
+    const button = section.querySelector('[data-act="follow"]');
+    if (!button) return;
+    const input = section.querySelector('[data-opt="follow-host"]');
+    button.textContent = f ? '멈춤' : '따라가기';
+    button.setAttribute('aria-pressed', String(!!f));
+    input.disabled = !!f;
+    const state = section.querySelector('.follow-state');
+    state.className = `follow-state${f && !f.connected ? ' warn-text' : ''}`;
+    state.textContent = !f
+      ? ''
+      : f.connected
+        ? `연결됨 · 프로그램 ${f.state?.program ?? ''}`
+        : f.error
+          ? `연결 안 됨: ${f.error}`
+          : '연결 중…';
   }
 
   // A robot's run: its button, its state, and the step it is at.
@@ -460,6 +490,12 @@ export class RobotPanel {
           </div>
           <div class="tcp-status"></div>
           <div class="tcp-sing" hidden></div>
+        </div>
+        <div class="follow" title="실제 UR 로봇의 관절과 그리퍼 출력을 RTDE(포트 30004)로 받아 이 로봇을 똑같이 움직입니다. 로봇에는 아무것도 보내지 않습니다">
+          <span class="section-title">실제 로봇</span>
+          <input class="follow-host" type="text" data-opt="follow-host" maxlength="100" spellcheck="false" placeholder="UR 로봇 IP (예: 192.168.0.10)" aria-label="실제 로봇 주소" value="${escapeHtml(this.followHost(r.root))}">
+          <button class="chip-btn" data-act="follow">따라가기</button>
+          <span class="follow-state"></span>
         </div>
         <div class="program">
           <div class="prog-head">
@@ -1547,6 +1583,18 @@ export class RobotPanel {
         if (a.via) return this.ctx.toast('경유점을 저장했습니다. 끝 자세로 옮긴 뒤 + MoveC를 다시 누르세요');
         if (ui.cursor != null) ui.cursor += 1;
       });
+    } else if (act === 'follow') {
+      const section = e.target.closest('.robot');
+      if (this.following?.[r.root]) {
+        this.send(r, { op: 'follow', robot: r.root, host: '' });
+      } else {
+        const host = section.querySelector('[data-opt="follow-host"]').value.trim();
+        if (!host) return this.ctx.toast('실제 로봇의 IP 주소를 넣으세요');
+        try {
+          localStorage.setItem(`kynex.follow.${r.root}`, host);
+        } catch {}
+        this.send(r, { op: 'follow', robot: r.root, host });
+      }
     } else if (act === 'play') {
       const run = this.runOf(r.root);
       const going = run && !['done', 'alarm'].includes(run.state);

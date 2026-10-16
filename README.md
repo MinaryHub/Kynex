@@ -985,6 +985,30 @@ kynex view --empty --port 8101 --project target/umati/kynex-project.json
 target/plc/venv38/Scripts/python tools/umati/check.py
 ```
 
+## Real robots (UR RTDE)
+
+A UR robot in the scene can follow a real one (`apps/kynex/src/rtde.rs`).
+In the robot card, under **실제 로봇**, enter the robot's IP address and
+press **따라가기**:
+
+- KYNEX reads the robot over RTDE (port 30004, protocol 2) 25 times a
+  second: its joints, its digital outputs and its program's state. It
+  sends nothing to the robot. Any e-Series controller, and CB3 from
+  PolyScope 3.4 on, answers.
+- The robot in the scene stands as the real one does. The card says
+  **연결됨** and whether the robot's program is running. If the link
+  drops, KYNEX connects again every 2 s and shows why it could not.
+- A grip point whose 그리퍼 닫기 output is wired (I/O 연결) closes and
+  opens as that output of the real robot does, taking and letting go of
+  parts as it would in a run.
+- While a robot is followed, its program does not run in KYNEX. **멈춤**
+  lets it go. Following starts from the computer running KYNEX only, and
+  the address is remembered in the browser, not in the project.
+
+Checked on URSim (UR5e, free Docker image `universalrobots/ursim_e-series`).
+A `movej` sent to it was followed throughout, and KYNEX ended on the target
+joints to 0.1°.
+
 ## Installing KYNEX
 
 ```

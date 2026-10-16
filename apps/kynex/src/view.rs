@@ -277,6 +277,11 @@ struct Stage {
     plc_changed: bool,
     /// The real machines the cell's follow, by machine (`crate::mtconnect`).
     mirrors: std::collections::BTreeMap<u64, crate::mtconnect::Mirror>,
+    /// The real robots followed, by robot (`crate::rtde`): their joints as
+    /// last shown, and each grip point's output as last seen.
+    followers: std::collections::BTreeMap<u64, crate::rtde::Follow>,
+    followed: std::collections::BTreeMap<u64, [f64; 6]>,
+    follow_grips: std::collections::BTreeMap<u64, bool>,
     /// The project file, and whether another was just opened in its place.
     file: PathBuf,
     reset: bool,
@@ -375,6 +380,9 @@ impl Stage {
             }),
             plc_changed: false,
             mirrors: Default::default(),
+            followers: Default::default(),
+            followed: Default::default(),
+            follow_grips: Default::default(),
             file,
             reset: false,
             projects: crate::paths::projects_dir(),
@@ -475,6 +483,9 @@ impl Stage {
             } else if op == "scenario" {
                 touched = true;
                 self.scenario_op(doc, &request.body)
+            } else if op == "follow" {
+                touched = true;
+                self.follow_op(doc, &request.body)
             } else if matches!(op.as_str(), "play" | "stop" | "speed") {
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
@@ -581,6 +592,16 @@ impl Stage {
             }
         }
         touched |= self.cell.take_changed();
+        // Real robots followed: posed as they stand, their grippers as their
+        // outputs say.
+        touched |= {
+            // The scene lent while the posing and the cell change.
+            let base = self.base.take();
+            let moved = self.follow_on(base.as_ref().unwrap_or(doc));
+            self.base = base;
+            moved
+        };
+        let scene = self.base.as_ref().unwrap_or(doc);
         // A PLC's commands given, the machines' states handed back.
         let mut starts: Vec<u64> = Vec::new();
         if self.plc.on() {
@@ -692,6 +713,7 @@ impl Stage {
             || self.cell.is_running()
             || self.plc.on()
             || !self.mirrors.is_empty()
+            || !self.followers.is_empty()
             || self.comparing.is_some()
             || !self.importing.is_empty()
     }
@@ -700,6 +722,9 @@ impl Stage {
     /// programs go on: a cell runs together. With none going on, the run
     /// is a new one, with a new record.
     fn play(&mut self, doc: &Document, root: u64) -> Result<(), String> {
+        if self.followers.contains_key(&root) {
+            return Err("실제 로봇을 따라가는 중에는 프로그램을 실행하지 않습니다".into());
+        }
         // Its calls replaced by what they call.
         let (program, origin) = self.posing.runnable(root)?;
         let scene = self.base.as_ref().unwrap_or(doc);
@@ -747,6 +772,106 @@ impl Stage {
             Err(e) => serde_json::json!({ "ok": false, "error": e }),
         }
         .to_string()
+    }
+
+    /// Follows a real UR robot over RTDE (`host`), or stops (no host).
+    fn follow_op(&mut self, doc: &Document, body: &str) -> String {
+        let req: Value = serde_json::from_str(body).unwrap_or_default();
+        let scene = self.base.as_ref().unwrap_or(doc);
+        let answer = (|| -> Result<(), String> {
+            let root = req["robot"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or("no robot")?;
+            let host = req["host"].as_str().map(str::trim).unwrap_or("");
+            self.followers.remove(&root);
+            self.followed.remove(&root);
+            if host.is_empty() {
+                return Ok(());
+            }
+            let kin = kynex_kin::Kinematics::of(scene, root).ok_or("no such robot")?;
+            if kin.vars.len() != 6 {
+                return Err("실제 로봇 따라가기는 6축 UR 로봇만 됩니다 (RTDE)".into());
+            }
+            let plain = host.len() <= 100
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '_'));
+            if !plain {
+                return Err("로봇 주소는 IP나 호스트 이름입니다 (예: 192.168.0.10)".into());
+            }
+            // The program shown stops: the robot is the real one's now.
+            self.runners.retain(|r| r.root != root);
+            self.followers
+                .insert(root, crate::rtde::Follow::start(host));
+            Ok(())
+        })();
+        match answer {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+        }
+        .to_string()
+    }
+
+    /// Each robot followed posed as the real one stands, and its grip
+    /// points closed or opened as its outputs wired to them say. Returns
+    /// whether anything moved.
+    fn follow_on(&mut self, scene: &Document) -> bool {
+        let mut touched = false;
+        let io = if self.followers.is_empty() {
+            return false;
+        } else {
+            self.cell.export(scene)
+        };
+        let roots: Vec<u64> = self.followers.keys().copied().collect();
+        for root in roots {
+            let Some(state) = self.followers[&root].state() else {
+                continue;
+            };
+            let Some(kin) = kynex_kin::Kinematics::of(scene, root) else {
+                continue;
+            };
+            if self.followed.get(&root) != Some(&state.q) {
+                self.followed.insert(root, state.q);
+                self.posing.hold_at(&kin, root, &state.q);
+                crate::pose::mark(scene, root, &mut self.placed);
+                touched = true;
+            }
+            for gripper in io.grippers.iter().filter(|g| kin.contains(**g)) {
+                let Some(port) = io.port(*gripper, "close") else {
+                    continue;
+                };
+                let closed = state.output(port);
+                if self.follow_grips.get(gripper) == Some(&closed) {
+                    continue;
+                }
+                let first = !self.follow_grips.contains_key(gripper);
+                self.follow_grips.insert(*gripper, closed);
+                // Seen first: only noted, not acted on.
+                if first {
+                    continue;
+                }
+                let posed = self.posing.shown(scene);
+                let at = posed.as_ref().unwrap_or(scene);
+                let _ = if closed {
+                    self.cell.grip(at, *gripper)
+                } else {
+                    self.cell.release(at, *gripper)
+                };
+                touched |= self.cell.take_changed();
+            }
+        }
+        touched
+    }
+
+    /// The robots followed, and how it is going, for the page.
+    fn following_json(&self) -> Value {
+        Value::Object(
+            self.followers
+                .iter()
+                .map(|(root, f)| (root.to_string(), f.to_json()))
+                .collect(),
+        )
     }
 
     /// Saves the cell as it stands as a scenario, takes one back, removes
@@ -859,7 +984,11 @@ impl Stage {
                 .map(|r| r.to_json(self.clock.time))
                 .collect(),
         );
-        server.state("pose", &self.posing.to_json(running, self.clock.to_json()));
+        let mut pose: Value =
+            serde_json::from_str(&self.posing.to_json(running, self.clock.to_json()))
+                .unwrap_or_default();
+        pose["following"] = self.following_json();
+        server.state("pose", &pose.to_string());
         // At its pace while the run goes on; at once when it has ended, so
         // the last of it is shown.
         let ended = self.timeline.as_ref().is_some_and(|t| t.ended());
@@ -1324,7 +1453,7 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
     }
     if matches!(
         op,
-        "plc_link" | "plc" | "signals" | "scenario" | "mirror" | "undo" | "redo"
+        "plc_link" | "plc" | "signals" | "scenario" | "mirror" | "follow" | "undo" | "redo"
     ) {
         return Some(
             "PLC·MTConnect 설정, 시나리오 불러오기, 되돌리기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다",
@@ -1351,6 +1480,7 @@ fn undoable(op: &str) -> bool {
     !matches!(
         op,
         "" | "play"
+            | "follow"
             | "stop"
             | "speed"
             | "export"

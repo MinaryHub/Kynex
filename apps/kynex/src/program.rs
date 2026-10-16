@@ -1186,7 +1186,7 @@ pub struct CellIo {
 }
 
 impl CellIo {
-    fn port(&self, object: u64, key: &str) -> Option<u32> {
+    pub fn port(&self, object: u64, key: &str) -> Option<u32> {
         self.io.get(&(object, key.to_string())).copied()
     }
 }

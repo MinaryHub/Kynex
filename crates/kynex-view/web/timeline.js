@@ -7,7 +7,7 @@
 // one CNC machine, two, another gripper — run for hours away from the view
 // and compared (the `scenarios` event).
 
-import { csv, figures, reportHtml, stateChart, summary, throughputChart } from './stats.js';
+import { csv, csvText, figures, reportHtml, stateChart, summary, throughputChart } from './stats.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -191,7 +191,7 @@ export class TimelinePanel {
     const { list, compared } = this.scenarios;
     if (!compared?.length) return this.ctx.toast('먼저 시나리오를 실행하세요');
     const q = (v) => {
-      const s = String(v ?? '');
+      const s = csvText(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const byName = new Map(compared.map((r) => [r.name, r]));

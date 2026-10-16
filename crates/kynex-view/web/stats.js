@@ -35,6 +35,14 @@ export function figures(d, activities) {
   };
 }
 
+// A cell's text, never a formula: a name a spreadsheet would run as one
+// (=, +, -, @ first) is kept as text with a leading '. Numbers stay numbers.
+export function csvText(v) {
+  const s = String(v ?? '');
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) return `'${s}`;
+  return s;
+}
+
 const pct = (x) => `${Math.round((x || 0) * 100)}%`;
 const secs = (s) => (s >= 60 ? `${Math.floor(s / 60)}분 ${Math.round(s % 60)}초` : `${s.toFixed(1)}초`);
 
@@ -109,7 +117,7 @@ export function summary(f) {
 export function csv(d, activities) {
   const f = figures(d, activities);
   const q = (v) => {
-    const s = String(v ?? '');
+    const s = csvText(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const row = (...cells) => cells.map(q).join(',');

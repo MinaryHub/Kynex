@@ -7,6 +7,8 @@
 # (and the programs file it replaced).
 /kynex-project.json
 /kynex-project.json.new
+# Held while a KYNEX has the project open (unreadable to others meanwhile).
+*.json.lock
 /kynex-programs.json
 /kynex-programs.json.new
 __pycache__/

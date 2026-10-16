@@ -7,6 +7,26 @@
 // one CNC machine, two, another gripper — run for hours away from the view
 // and compared (the `scenarios` event).
 
+import { csv, figures, reportHtml, stateChart, summary, throughputChart } from './stats.js';
+
+// Hands `text` to the browser as a file called `name`.
+function download(name, text, type) {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([text], { type }));
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+// Today and now, for a file's name: 20261016-1530.
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+
 async function post(request) {
   const response = await fetch('/robot', {
     method: 'POST',
@@ -74,6 +94,18 @@ export class TimelinePanel {
         this.send({ action: 'load', index }, () => this.ctx.toast('시나리오의 장비, 셀 역할, 프로그램을 불러왔습니다'));
       }
     });
+    document.getElementById('st-csv').addEventListener('click', () => {
+      if (!this.data?.lanes?.length) return this.ctx.toast('먼저 프로그램을 실행하세요');
+      download(`kynex-통계-${stamp()}.csv`, csv(this.data, ACTIVITIES), 'text/csv;charset=utf-8');
+    });
+    document.getElementById('st-report').addEventListener('click', () => {
+      if (!this.data?.lanes?.length) return this.ctx.toast('먼저 프로그램을 실행하세요');
+      const win = window.open('', '_blank');
+      if (!win) return this.ctx.toast('새 창을 열 수 없습니다. 팝업 차단을 확인하세요');
+      win.document.write(reportHtml(this.data, ACTIVITIES, this.ctx.escapeHtml, 'KYNEX 통계 보고서'));
+      win.document.close();
+    });
+    document.getElementById('sc-csv').addEventListener('click', () => this.scenariosCsv());
     document.getElementById('tl-legend').innerHTML = Object.entries(ACTIVITIES)
       .map(([, [label, color]]) => `<span><i style="background:${color}"></i>${label}</span>`)
       .join('');
@@ -89,6 +121,7 @@ export class TimelinePanel {
     for (const b of this.box.querySelectorAll('[data-tl-tab]')) b.classList.toggle('on', b.dataset.tlTab === tab);
     document.getElementById('tl-view-timeline').hidden = tab !== 'timeline';
     document.getElementById('tl-view-scenarios').hidden = tab !== 'scenarios';
+    document.getElementById('tl-view-stats').hidden = tab !== 'stats';
     this.render();
   }
 
@@ -153,8 +186,65 @@ export class TimelinePanel {
     if (!this.box.hidden) this.render();
   }
 
+  // The scenarios compared, as CSV.
+  scenariosCsv() {
+    const { list, compared } = this.scenarios;
+    if (!compared?.length) return this.ctx.toast('먼저 시나리오를 실행하세요');
+    const q = (v) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const byName = new Map(compared.map((r) => [r.name, r]));
+    const lines = [['시나리오', 'CNC', '완성', '시간당', 'CNC 가동률 (%)', '로봇 작업 (%)', '로봇 대기 (%)', '알람'].map(q).join(',')];
+    for (const s of list) {
+      const r = byName.get(s.name);
+      if (!r) continue;
+      const ok = r.ok !== false;
+      lines.push(
+        [
+          s.name,
+          s.machines,
+          ok ? r.parts : '',
+          ok ? r.per_hour.toFixed(2) : '',
+          ok ? (mean(r.machine_lanes, 'utilization') * 100).toFixed(1) : '',
+          ok ? (mean(r.robot_lanes, 'work') * 100).toFixed(1) : '',
+          ok ? (mean(r.robot_lanes, 'wait') * 100).toFixed(1) : '',
+          r.alarm || '',
+        ]
+          .map(q)
+          .join(','),
+      );
+    }
+    download(`kynex-시나리오-${stamp()}.csv`, `\ufeff${lines.join('\r\n')}\r\n`, 'text/csv;charset=utf-8');
+  }
+
+  // The statistics of the last run: figures, each one's time by state,
+  // and parts made against time.
+  renderStats() {
+    const { escapeHtml } = this.ctx;
+    const d = this.data;
+    const body = document.getElementById('st-body');
+    const stats = document.getElementById('tl-stats');
+    if (!d || !d.lanes.length) {
+      stats.textContent = '';
+      body.innerHTML = '<p class="muted tl-empty">프로그램을 실행하면 장비별 상태와 생산 추이가 여기에 나옵니다.</p>';
+      return;
+    }
+    const f = figures(d, ACTIVITIES);
+    stats.textContent = `경과 ${clock(d.elapsed)} · 완성 ${f.parts}개 · 시간당 ${f.perHour.toFixed(1)}개`;
+    body.innerHTML = `
+      <div class="st-cards">${summary(f)
+        .map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b class="num">${escapeHtml(v)}</b></div>`)
+        .join('')}</div>
+      <div class="st-cols">
+        <section><h3>장비별 상태</h3>${stateChart(f, ACTIVITIES, escapeHtml)}</section>
+        <section><h3>누적 완성 수 <span class="muted">· 점선: 평균 속도</span></h3>${throughputChart(f)}</section>
+      </div>`;
+  }
+
   render() {
     if (this.tab === 'scenarios') return this.renderScenarios();
+    if (this.tab === 'stats') return this.renderStats();
     const { escapeHtml } = this.ctx;
     const d = this.data;
     const stats = document.getElementById('tl-stats');

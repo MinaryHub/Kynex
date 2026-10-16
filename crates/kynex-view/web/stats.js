@@ -1,0 +1,201 @@
+// Statistics of a run, from the timeline KYNEX records: how each robot and
+// machine spent its time, parts made over time and the time between them —
+// as charts on the page, a CSV file for a spreadsheet, or a page to print
+// or keep as a PDF.
+
+// What a timeline says, worked out: each lane's seconds and share per
+// activity, and the moments parts were made (a machine's cut that ended).
+export function figures(d, activities) {
+  const elapsed = Math.max(d?.elapsed || 0, 0);
+  const lanes = (d?.lanes || []).map((l) => {
+    const totals = l.totals || {};
+    const order = Object.keys(activities).filter((a) => a in totals);
+    for (const a of Object.keys(totals)) if (!order.includes(a)) order.push(a);
+    return { key: l.key, name: l.name, group: l.group, totals, shares: l.shares || {}, order };
+  });
+  // A cut followed by something else is a part made, when it ended.
+  const made = [];
+  for (const l of d?.lanes || []) {
+    l.spans.forEach(([, to, a], i) => {
+      if (a === 'cut' && i + 1 < l.spans.length) made.push({ at: to, lane: l.name });
+    });
+  }
+  made.sort((a, b) => a.at - b.at);
+  const gaps = made.slice(1).map((m, i) => m.at - made[i].at);
+  const sum = gaps.reduce((s, g) => s + g, 0);
+  return {
+    elapsed,
+    parts: made.length,
+    perHour: elapsed > 0 ? (made.length / elapsed) * 3600 : 0,
+    lanes,
+    made,
+    gaps: gaps.length
+      ? { mean: sum / gaps.length, min: Math.min(...gaps), max: Math.max(...gaps), count: gaps.length }
+      : null,
+  };
+}
+
+const pct = (x) => `${Math.round((x || 0) * 100)}%`;
+const secs = (s) => (s >= 60 ? `${Math.floor(s / 60)}분 ${Math.round(s % 60)}초` : `${s.toFixed(1)}초`);
+
+// Each lane's time as one bar, its activities side by side in their colours.
+export function stateChart(f, activities, escapeHtml) {
+  return f.lanes
+    .map((l) => {
+      const parts = l.order
+        .filter((a) => (l.shares[a] || 0) > 0)
+        .map((a) => {
+          const [label, color] = activities[a] || [a, '#555'];
+          const w = (l.shares[a] * 100).toFixed(2);
+          const text = l.shares[a] >= 0.08 ? pct(l.shares[a]) : '';
+          return `<span style="width:${w}%;background:${color}" title="${escapeHtml(label)} ${pct(l.shares[a])} · ${secs(l.totals[a] || 0)}">${text}</span>`;
+        })
+        .join('');
+      return `<div class="st-row"><span class="st-name" title="${escapeHtml(l.name)}">${escapeHtml(l.name)}</span><div class="st-bar">${parts}</div></div>`;
+    })
+    .join('');
+}
+
+// Parts made against time: a step for each, from the start to now.
+export function throughputChart(f, { width = 560, height = 160 } = {}) {
+  const pad = { l: 34, r: 10, t: 10, b: 22 };
+  const w = width - pad.l - pad.r;
+  const h = height - pad.t - pad.b;
+  const T = Math.max(f.elapsed, 1e-9);
+  const N = Math.max(f.parts, 1);
+  const x = (t) => pad.l + (t / T) * w;
+  const y = (n) => pad.t + h - (n / N) * h;
+  let path = `M${x(0)},${y(0)}`;
+  f.made.forEach((m, i) => {
+    path += ` H${x(m.at).toFixed(1)} V${y(i + 1).toFixed(1)}`;
+  });
+  path += ` H${x(T).toFixed(1)}`;
+  // The pace a whole run would keep: from the start to now, straight.
+  const pace = f.parts ? `<line x1="${x(0)}" y1="${y(0)}" x2="${x(T)}" y2="${y(f.parts)}" class="st-pace"/>` : '';
+  // Seconds for a short run, minutes for a longer one: six ticks or so.
+  const short = T < 120;
+  const unit = short ? 1 : 60;
+  const span = T / unit;
+  const step = (short ? [1, 2, 5, 10, 15, 30] : [1, 2, 5, 10, 15, 30, 60, 120, 240, 480]).find((s) => span / s <= 6) || 960;
+  let ticks = '';
+  for (let m = 0; m <= span + 1e-9; m += step) {
+    ticks += `<line x1="${x(m * unit)}" y1="${pad.t + h}" x2="${x(m * unit)}" y2="${pad.t + h + 4}" class="st-axis"/><text x="${x(m * unit)}" y="${height - 6}" text-anchor="middle">${m}${short ? '초' : '분'}</text>`;
+  }
+  const ny = [0, Math.ceil(N / 2), N];
+  for (const n of [...new Set(ny)]) {
+    ticks += `<text x="${pad.l - 6}" y="${y(n) + 4}" text-anchor="end">${n}</text><line x1="${pad.l}" y1="${y(n)}" x2="${pad.l + w}" y2="${y(n)}" class="st-grid"/>`;
+  }
+  return `<svg class="st-chart" viewBox="0 0 ${width} ${height}" width="100%" role="img" aria-label="시간에 따른 누적 완성 수">
+    ${ticks}
+    <line x1="${pad.l}" y1="${pad.t + h}" x2="${pad.l + w}" y2="${pad.t + h}" class="st-axis"/>
+    ${pace}
+    <path d="${path}" class="st-line"/>
+  </svg>`;
+}
+
+// The summary as figures to show.
+export function summary(f) {
+  return [
+    ['경과 시간', secs(f.elapsed)],
+    ['완성', `${f.parts}개`],
+    ['시간당', `${f.perHour.toFixed(1)}개`],
+    ['완성 간격 (평균)', f.gaps ? secs(f.gaps.mean) : '—'],
+    ['간격 최소 / 최대', f.gaps ? `${secs(f.gaps.min)} / ${secs(f.gaps.max)}` : '—'],
+  ];
+}
+
+// The whole of it as CSV: the summary, each lane's seconds and share per
+// activity, the parts made, and every span — for a spreadsheet.
+export function csv(d, activities) {
+  const f = figures(d, activities);
+  const q = (v) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const row = (...cells) => cells.map(q).join(',');
+  const label = (a) => activities[a]?.[0] ?? a;
+  const used = [...new Set(f.lanes.flatMap((l) => l.order))];
+  const lines = [
+    row('KYNEX 통계'),
+    row('경과 시간 (s)', f.elapsed.toFixed(2)),
+    row('완성 (개)', f.parts),
+    row('시간당 (개)', f.perHour.toFixed(2)),
+    row('완성 간격 평균 (s)', f.gaps ? f.gaps.mean.toFixed(2) : ''),
+    row('완성 간격 최소 (s)', f.gaps ? f.gaps.min.toFixed(2) : ''),
+    row('완성 간격 최대 (s)', f.gaps ? f.gaps.max.toFixed(2) : ''),
+    '',
+    row('장비', '구분', ...used.flatMap((a) => [`${label(a)} (s)`, `${label(a)} (%)`])),
+    ...f.lanes.map((l) =>
+      row(
+        l.name,
+        l.group === 'machine' ? '장비' : '로봇',
+        ...used.flatMap((a) => [(l.totals[a] || 0).toFixed(2), ((l.shares[a] || 0) * 100).toFixed(1)]),
+      ),
+    ),
+    '',
+    row('완성 시각 (s)', '장비'),
+    ...f.made.map((m) => row(m.at.toFixed(2), m.lane)),
+    '',
+    row('장비', '시작 (s)', '끝 (s)', '시간 (s)', '상태'),
+    ...(d?.lanes || []).flatMap((l) =>
+      l.spans.map(([from, to, a]) => row(l.name, from.toFixed(2), to.toFixed(2), (to - from).toFixed(2), label(a))),
+    ),
+  ];
+  // With its byte order mark, so a spreadsheet reads the Korean as such.
+  return `﻿${lines.join('\r\n')}\r\n`;
+}
+
+// A page of it to print, or keep as a PDF.
+export function reportHtml(d, activities, escapeHtml, title) {
+  const f = figures(d, activities);
+  const legend = Object.entries(activities)
+    .filter(([a]) => f.lanes.some((l) => (l.shares[a] || 0) > 0))
+    .map(([, [label, color]]) => `<span><i style="background:${color}"></i>${escapeHtml(label)}</span>`)
+    .join('');
+  const used = [...new Set(f.lanes.flatMap((l) => l.order))];
+  const rows = f.lanes
+    .map(
+      (l) =>
+        `<tr><td>${escapeHtml(l.name)}</td>${used.map((a) => `<td>${pct(l.shares[a])}<small> ${secs(l.totals[a] || 0)}</small></td>`).join('')}</tr>`,
+    )
+    .join('');
+  const when = new Date().toLocaleString('ko-KR');
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>
+  body { font: 13px/1.5 system-ui, 'Malgun Gothic', sans-serif; color: #1b1f24; margin: 24px; }
+  h1 { font-size: 20px; margin: 0 0 2px; } h2 { font-size: 15px; margin: 22px 0 8px; }
+  .muted { color: #6b7380; }
+  .cards { display: flex; flex-wrap: wrap; gap: 10px; }
+  .cards div { border: 1px solid #d8dde4; border-radius: 6px; padding: 8px 12px; min-width: 120px; }
+  .cards b { display: block; font-size: 17px; }
+  .st-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .st-name { width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st-bar { flex: 1; display: flex; height: 18px; border-radius: 3px; overflow: hidden; background: #eef1f4; }
+  .st-bar span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 10.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 12px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .st-chart text { font-size: 10px; fill: #6b7380; }
+  .st-line { fill: none; stroke: #2f7de1; stroke-width: 2; }
+  .st-pace { stroke: #9aa3ad; stroke-dasharray: 4 4; }
+  .st-axis { stroke: #9aa3ad; } .st-grid { stroke: #e6e9ed; }
+  table { border-collapse: collapse; width: 100%; } th, td { border-bottom: 1px solid #e3e7ec; padding: 4px 6px; text-align: left; }
+  td small { color: #6b7380; }
+  .print { position: fixed; top: 16px; right: 24px; padding: 6px 14px; }
+  @media print { .print { display: none; } body { margin: 10mm; } h2 { break-after: avoid; } tr { break-inside: avoid; } }
+</style></head><body>
+<button class="print" onclick="print()">인쇄 / PDF로 저장</button>
+<h1>${escapeHtml(title)}</h1>
+<p class="muted">KYNEX 시뮬레이션 통계 · ${escapeHtml(when)}</p>
+<div class="cards">${summary(f)
+    .map(([k, v]) => `<div><span class="muted">${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`)
+    .join('')}</div>
+<h2>장비별 상태</h2>
+${stateChart(f, activities, escapeHtml)}
+<div class="legend">${legend}</div>
+<h2>누적 완성 수</h2>
+${throughputChart(f, { width: 680, height: 200 })}
+<p class="muted">점선: 처음부터 지금까지의 평균 속도</p>
+<h2>장비별 시간</h2>
+<table><thead><tr><th>장비</th>${used.map((a) => `<th>${escapeHtml(activities[a]?.[0] ?? a)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
+</body></html>`;
+}

@@ -194,6 +194,7 @@
       <div class="tl-head">
         <div class="tl-tabs" role="tablist">
           <button class="on" data-tl-tab="timeline" role="tab">타임라인</button>
+          <button data-tl-tab="stats" role="tab">통계</button>
           <button data-tl-tab="scenarios" role="tab">시나리오 비교</button>
         </div>
         <span class="tl-stats num" id="tl-stats"></span>
@@ -202,6 +203,15 @@
       <div class="tl-view" id="tl-view-timeline">
         <div class="tl-lanes" id="tl-lanes"></div>
         <div class="tl-legend" id="tl-legend"></div>
+      </div>
+      <div class="tl-view" id="tl-view-stats" hidden>
+        <div class="sc-bar">
+          <span class="muted">마지막 실행의 통계입니다</span>
+          <span class="sc-gap"></span>
+          <button class="chip-btn" id="st-csv" title="요약, 장비별 상태 시간, 완성 시각, 전체 구간을 CSV로 내려받기 (엑셀에서 열림)">CSV 내보내기</button>
+          <button class="chip-btn" id="st-report" title="차트와 표를 한 장에: 인쇄하거나 PDF로 저장">보고서 (PDF)</button>
+        </div>
+        <div class="st-body" id="st-body"></div>
       </div>
       <div class="tl-view" id="tl-view-scenarios" hidden>
         <div class="sc-bar">
@@ -214,6 +224,7 @@
             <option value="24">24시간</option>
           </select>
           <button class="chip-btn" id="sc-run" title="저장한 시나리오를 모두 실행해 비교">▶ 모두 실행</button>
+          <button class="chip-btn" id="sc-csv" title="비교 결과를 CSV로 내려받기">CSV</button>
         </div>
         <div class="sc-list" id="sc-list"></div>
         <p class="sc-note muted">프로그램을 반복 실행하고, 작업자가 투입대를 계속 채우고 배출대의 완성품을 치운다고 봅니다.</p>

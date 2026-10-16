@@ -331,7 +331,23 @@ while the program ran, as a Gantt chart (`apps/kynex/src/timeline.rs`):
   Run with 순환 재생 for the rate of a steady cycle.
 - A new run starts a new timeline. The panel keeps the last one.
 
-**시나리오 비교** (the panel's second tab) answers questions such as "how
+**통계** (the panel's second tab) shows the last run's statistics
+(`crates/kynex-view/web/stats.js`):
+
+- Figures: the time run, the parts finished, the parts an hour, and the
+  time between finished parts (mean, least, most).
+- 장비별 상태: each robot's and machine's time as one bar, split by
+  state (moving, waiting, cutting, idle and so on), each with its share.
+- 누적 완성 수: the parts finished against time, a step for each. A
+  dashed line shows the average pace.
+- **CSV 내보내기** downloads a CSV file that a spreadsheet opens with its
+  Korean intact. It holds the figures, each lane's seconds and share per
+  state, when each part was finished, and every span of the timeline.
+- **보고서 (PDF)** opens the charts and a table on one page, to print or
+  save as a PDF.
+- The scenario comparison has a **CSV** button too.
+
+**시나리오 비교** (the panel's third tab) answers questions such as "how
 many parts an hour with one CNC machine, and with two?"
 (`apps/kynex/src/scenario.rs`):
 

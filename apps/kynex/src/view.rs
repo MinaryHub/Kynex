@@ -288,7 +288,7 @@ struct Stage {
     _lock: Option<std::fs::File>,
     /// Models being read, each with where its answer goes.
     importing: Vec<(
-        Receiver<Result<crate::import::Model, String>>,
+        Receiver<Result<crate::import::Imported, String>>,
         std::sync::mpsc::Sender<String>,
     )>,
 }
@@ -1044,7 +1044,7 @@ impl Stage {
         let unit = req["unit"].as_f64();
         let (send, read) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = send.send(crate::import::read(&name, &bytes, unit));
+            let _ = send.send(crate::import::read_any(&name, &bytes, unit));
         });
         self.importing.push((read, reply));
     }
@@ -1067,7 +1067,16 @@ impl Stage {
             };
             let answer = model.and_then(|m| {
                 let before = self.snapshot(doc);
-                let key = self.library.save_custom(&m.doc, m.root, &m.name, &[])?;
+                let (key, m) = match m {
+                    crate::import::Imported::Shape(m) => (
+                        self.library.save_custom(&m.doc, m.root, &m.name, &[])?,
+                        m.name_notes(),
+                    ),
+                    crate::import::Imported::Robot(r) => {
+                        let name = r.name.clone();
+                        (self.library.add_model(r), (name, Vec::new()))
+                    }
+                };
                 let placed = self.library_op(
                     doc,
                     &serde_json::json!({"op": "place", "template": key, "at": [0, 0, 0]})
@@ -1078,9 +1087,9 @@ impl Stage {
                 Ok(serde_json::json!({
                     "ok": true,
                     "key": key,
-                    "name": m.name,
+                    "name": m.0,
                     "item": placed["item"],
-                    "notes": m.notes,
+                    "notes": m.1,
                 }))
             });
             any = true;

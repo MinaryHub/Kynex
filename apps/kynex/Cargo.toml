@@ -27,6 +27,10 @@ pkcs8 = { version = "0.10", features = ["pem"] }
 cbc = { version = "0.1", features = ["alloc"] }
 x509-cert = { version = "0.2", features = ["builder", "hazmat"] }
 const-oid = "0.9"
+# Robots of the user's own: their description and meshes, imported as a zip
+# and kept in the project (base64).
+zip = { version = "6", default-features = false, features = ["deflate"] }
+base64 = "0.22"
 
 # KYNEX's own window (`studio`): the system's WebView2 in a window of its
 # own, on Windows.

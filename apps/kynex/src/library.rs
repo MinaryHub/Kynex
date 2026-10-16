@@ -668,6 +668,8 @@ pub struct Library {
     items: Vec<Item>,
     /// The user's own equipment, as saved from the scene.
     customs: Vec<Custom>,
+    /// The user's own robots, as imported (`model`).
+    models: Vec<RobotModel>,
     /// The `templates` event as last made: made again when the user's own
     /// equipment changes.
     thumbs: Option<String>,
@@ -688,13 +690,20 @@ impl Library {
                 .iter()
                 .filter_map(|v| Custom::of_json(&v["custom"]))
                 .collect(),
+            models: saved
+                .iter()
+                .filter_map(|v| RobotModel::of_json(&v["robot_model"]))
+                .collect(),
             ..Self::default()
         };
         for v in saved {
             let (Some(id), Some(key)) = (v["id"].as_u64(), v["template"].as_str()) else {
                 continue;
             };
-            if template(key).is_none() && !library.customs.iter().any(|c| c.key == key) {
+            if template(key).is_none()
+                && !library.customs.iter().any(|c| c.key == key)
+                && !library.models.iter().any(|m| m.key == key)
+            {
                 continue;
             }
             let at = match v["at"].as_array().map(Vec::as_slice) {
@@ -743,6 +752,11 @@ impl Library {
         self.customs
             .iter()
             .map(|c| json!({ "custom": c.to_json() }))
+            .chain(
+                self.models
+                    .iter()
+                    .map(|m| json!({ "robot_model": m.to_json() })),
+            )
             .chain(self.items.iter().map(|i| {
                 json!({
                     "id": i.id,
@@ -769,12 +783,34 @@ impl Library {
 
     /// The name of template `key`: a catalogue's, or the user's own.
     fn template_name(&self, key: &str) -> Option<String> {
-        template(key).map(|t| t.name.to_string()).or_else(|| {
-            self.customs
-                .iter()
-                .find(|c| c.key == key)
-                .map(|c| c.name.clone())
-        })
+        template(key)
+            .map(|t| t.name.to_string())
+            .or_else(|| {
+                self.customs
+                    .iter()
+                    .find(|c| c.key == key)
+                    .map(|c| c.name.clone())
+            })
+            .or_else(|| {
+                self.models
+                    .iter()
+                    .find(|m| m.key == key)
+                    .map(|m| m.name.clone())
+            })
+    }
+
+    /// A robot read (`RobotModel::from_file`) kept as a robot of the
+    /// user's own, under a key of its own. Returns that key.
+    pub fn add_model(&mut self, mut model: RobotModel) -> String {
+        let key = (self.models.len() + 1..)
+            .map(|k| format!("robot_{k}"))
+            .find(|k| !self.models.iter().any(|m| m.key == *k))
+            .expect("a free key");
+        model.key = key.clone();
+        self.models.push(model);
+        self.thumbs = None;
+        self.items_changed = true;
+        key
     }
 
     /// `named` numbered with the first number no item's name has: names
@@ -1004,9 +1040,10 @@ impl Library {
             if self.items.iter().any(|i| i.template == key) {
                 return Err("놓여 있는 장비가 있습니다: 먼저 지우세요".into());
             }
-            let before = self.customs.len();
+            let before = self.customs.len() + self.models.len();
             self.customs.retain(|c| c.key != key);
-            if self.customs.len() == before {
+            self.models.retain(|m| m.key != key);
+            if self.customs.len() + self.models.len() == before {
                 return Err("no such equipment".into());
             }
             self.thumbs = None;
@@ -1172,10 +1209,16 @@ impl Library {
     /// made once, the user's own as they are.
     pub fn thumbnails(&mut self) -> &str {
         let customs = &self.customs;
+        let models = &self.models;
         self.thumbs.get_or_insert_with(|| {
             let mut out = Self::builtin_thumbnails().clone();
             for c in customs {
                 out.insert(c.key.clone(), triangles(&c.build().doc));
+            }
+            for m in models {
+                if let Ok(built) = m.build() {
+                    out.insert(m.key.clone(), triangles(&built.doc));
+                }
             }
             Value::Object(out).to_string()
         })
@@ -1208,6 +1251,9 @@ impl Library {
 
     /// Item `item` as made: from the library's template, or the user's.
     fn build(&self, item: &Item) -> Result<Built, String> {
+        if let Some(m) = self.models.iter().find(|m| m.key == item.template) {
+            return m.build();
+        }
         match self.customs.iter().find(|c| c.key == item.template) {
             Some(c) => Ok(c.build()),
             None => build(item),
@@ -1302,6 +1348,12 @@ impl Library {
                 "key": c.key,
                 "name": c.name,
                 "group": "내 장비",
+                "params": [],
+                "custom": true,
+            }))).chain(self.models.iter().map(|m| json!({
+                "key": m.key,
+                "name": m.name,
+                "group": "내 로봇",
                 "params": [],
                 "custom": true,
             }))).collect::<Vec<_>>(),
@@ -2336,3 +2388,6 @@ pub fn is_op(op: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+mod model;
+pub use model::RobotModel;

@@ -51,7 +51,19 @@ STEP, STL, OBJ, glTF/GLB, 3MF and PLY. The model is kept as equipment of the
 user's own, standing on the floor at its middle, placed at the origin and
 selected; one edit to undo. STEP, glTF and 3MF name their units; for STL,
 OBJ and PLY the unit is chosen (자동: mm for STL, m for the others). A model
-over 2 million triangles, or over a kilometre, is refused. It is read on a
+over 2 million triangles, or over a kilometre, is refused. **Robots** come the
+same way, as a robot description: a `.zip` of its folder (the `.urdf`
+nearest the top, and the meshes it names — by `package://` or by a path
+beside it — STL, OBJ, COLLADA or glTF), or a lone `.urdf` drawn with
+shapes. It is read as the library's robots are, by Kreate's URDF reader,
+and must have a joint that moves; a `.xacro` alone is refused (make the
+URDF first). The robot goes under **내 로봇**, is placed at the origin
+and selected, and is programmed, jogged and exported as any robot; its
+grip points `grip_a` and `grip_b`, if it has them, are grippers. The zip
+is kept in the project as it came (so the project opens anywhere) and is
+unpacked once, by its hash, into `%APPDATA%\kynexobots`, at most
+5000 files and 512 MB, nothing written outside that folder whatever a
+name in it says. It is read on a
 thread of its own, so the viewer goes on meanwhile. Files go to `POST
 /import` as bytes, from this computer only, at most 256 MB.
 

@@ -23,6 +23,30 @@ pub struct Model {
     pub notes: Vec<String>,
 }
 
+impl Model {
+    /// Its name and what the reader had to guess, for the page.
+    pub fn name_notes(self) -> (String, Vec<String>) {
+        (self.name, self.notes)
+    }
+}
+
+/// What a file brings: a shape, kept as equipment of the user's own, or a
+/// robot (its description, as a zip of its folder or a `.urdf`).
+pub enum Imported {
+    Shape(Model),
+    Robot(crate::library::RobotModel),
+}
+
+/// File `name`'s bytes read as what it is (see [`read`] for shapes).
+pub fn read_any(name: &str, bytes: &[u8], unit: Option<f64>) -> Result<Imported, String> {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".zip") || lower.ends_with(".urdf") {
+        return crate::library::RobotModel::from_file(String::new(), name, bytes)
+            .map(Imported::Robot);
+    }
+    read(name, bytes, unit).map(Imported::Shape)
+}
+
 /// File `name`'s bytes read as a model. `unit` is metres per the file's
 /// unit, for a file that does not say (STL, OBJ, PLY): or the reader's own
 /// guess, millimetres for STL, metres for the others. A file that names its

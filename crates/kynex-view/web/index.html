@@ -50,9 +50,9 @@
     <div class="tab-page" data-page="library" hidden>
       <p class="muted pad lib-hint">장면으로 끌어 놓거나, 눌러서 고른 뒤 장면을 누르세요.</p>
       <div class="lib-import pad">
-        <button class="text-btn" id="import-model" title="CAD·메시 파일을 내 장비로 가져와 원점에 놓습니다. 파일을 3D 화면에 끌어다 놓아도 됩니다">모델 가져오기</button>
+        <button class="text-btn" id="import-model" title="CAD·메시 파일은 내 장비로, 로봇은 URDF 폴더를 묶은 ZIP(또는 URDF)으로 내 로봇에 가져와 원점에 놓습니다. 파일을 3D 화면에 끌어다 놓아도 됩니다">모델 가져오기</button>
         <label class="muted" title="단위가 적혀 있지 않은 파일(STL, OBJ, PLY)의 단위">단위<select id="import-unit"><option value="">자동</option><option value="0.001">mm</option><option value="1">m</option><option value="0.0254">inch</option></select></label>
-        <input type="file" id="import-file" accept=".step,.stp,.stl,.obj,.glb,.gltf,.3mf,.ply" hidden>
+        <input type="file" id="import-file" accept=".step,.stp,.stl,.obj,.glb,.gltf,.3mf,.ply,.zip,.urdf" hidden>
       </div>
       <ul class="library" id="library-list"></ul>
     </div>

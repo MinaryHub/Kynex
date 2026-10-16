@@ -41,15 +41,21 @@ pub enum Command {
     Clamp,
     Unclamp,
     Start,
+    /// An axis (a stopper, a lifter, a slide, a turn) to its far end.
+    Extend,
+    /// Back to where it was placed.
+    Retract,
 }
 
 impl Command {
-    pub const ALL: [Command; 5] = [
+    pub const ALL: [Command; 7] = [
         Command::Open,
         Command::Close,
         Command::Clamp,
         Command::Unclamp,
         Command::Start,
+        Command::Extend,
+        Command::Retract,
     ];
 
     pub fn tag(self) -> &'static str {
@@ -59,6 +65,8 @@ impl Command {
             Command::Clamp => "clamp",
             Command::Unclamp => "unclamp",
             Command::Start => "start",
+            Command::Extend => "extend",
+            Command::Retract => "retract",
         }
     }
 
@@ -83,10 +91,18 @@ pub enum Signal {
     PartAtEnd,
     /// An AMR at rest where it was sent.
     Arrived,
+    /// A sensor's beam broken by a part.
+    Detected,
+    /// An axis at its far end, or back where it was placed.
+    Extended,
+    Retracted,
 }
 
 impl Signal {
-    pub const ALL: [Signal; 8] = [
+    pub const ALL: [Signal; 11] = [
+        Signal::Detected,
+        Signal::Extended,
+        Signal::Retracted,
         Signal::Arrived,
         Signal::DoorOpen,
         Signal::DoorClosed,
@@ -107,6 +123,9 @@ impl Signal {
             Signal::Done => "done",
             Signal::PartAtEnd => "part_at_end",
             Signal::Arrived => "arrived",
+            Signal::Detected => "detected",
+            Signal::Extended => "extended",
+            Signal::Retracted => "retracted",
         }
     }
 
@@ -154,10 +173,21 @@ pub enum Kind {
     /// stands, where a conveyor's belt starts or ends, or where this
     /// stands on another's mount.
     Connector,
+    /// A photo sensor: a beam from the object's origin along its own axis
+    /// (`axis`), `travel` long, broken by a part across it.
+    Sensor,
+    /// An axis of its own: the object, with what is under it and the parts
+    /// standing on it, slides along (or turns about) an axis of its own as
+    /// a door does, to its far end when told to extend and back when told
+    /// to retract, over `door` seconds — a stopper, a lifter, a shuttle, a
+    /// rotary table. Raised across a belt, it holds the parts behind it.
+    Actuator,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 12] = [
+    pub const ALL: [Kind; 14] = [
+        Kind::Sensor,
+        Kind::Actuator,
         Kind::Amr,
         Kind::Stop,
         Kind::Cnc,
@@ -186,6 +216,8 @@ impl Kind {
             Kind::Positioner => "positioner",
             Kind::Door => "door",
             Kind::Connector => "connector",
+            Kind::Sensor => "sensor",
+            Kind::Actuator => "actuator",
         }
     }
 
@@ -288,6 +320,18 @@ impl Props {
             // A positioner turns some 90° a second: radians a second.
             Kind::Positioner => Self {
                 speed: std::f64::consts::FRAC_PI_2,
+                ..Self::default()
+            },
+            // A beam half a metre along the sensor's X.
+            Kind::Sensor => Self {
+                travel: 0.5,
+                ..Self::default()
+            },
+            // A stroke of 100 mm up its own Z in a second.
+            Kind::Actuator => Self {
+                door: 1.0,
+                axis: 2,
+                travel: 0.1,
                 ..Self::default()
             },
             _ => Self::default(),
@@ -406,6 +450,8 @@ pub fn io_points(kind: Kind) -> (&'static [&'static str], &'static [&'static str
             &["door_open", "door_closed", "idle", "done"],
         ),
         Kind::Conveyor => (&[], &["part_at_end"]),
+        Kind::Sensor => (&[], &["detected"]),
+        Kind::Actuator => (&["extend", "retract"], &["extended", "retracted"]),
         _ => (&[], &[]),
     }
 }
@@ -1843,6 +1889,7 @@ impl Cell {
         let places = self.places(doc);
         let belts = self.belts(doc);
         let decks = self.decks(doc);
+        let axes = self.axis_boxes(doc);
         let Some(part) = self
             .parts
             .iter_mut()
@@ -1874,6 +1921,20 @@ impl Cell {
             .next()
         {
             // On an AMR's top plate: it rides along.
+            let half = part.size().1 / 2.0;
+            part.world = DAffine3::from_translation(DVec3::new(here.x, here.y, top + half));
+        } else if let Some(top) = axes
+            .iter()
+            .filter(|(_, lo, hi)| {
+                let above = here.z - part.size().1 / 2.0 - hi.z;
+                (lo.x..=hi.x).contains(&here.x)
+                    && (lo.y..=hi.y).contains(&here.y)
+                    && (-0.01..0.1).contains(&above)
+            })
+            .map(|(_, _, hi)| hi.z)
+            .next()
+        {
+            // On an axis's top — a lifter's table, a shuttle: it rides along.
             let half = part.size().1 / 2.0;
             part.world = DAffine3::from_translation(DVec3::new(here.x, here.y, top + half));
         }
@@ -1909,9 +1970,23 @@ impl Cell {
         let c = self
             .components
             .iter()
-            .find(|c| c.object == machine && c.kind.machine())
+            .find(|c| c.object == machine && (c.kind.machine() || c.kind == Kind::Actuator))
             .cloned()
-            .ok_or("명령을 받는 장비(CNC, 사출기)가 아닙니다")?;
+            .ok_or("명령을 받는 장비(CNC, 사출기, 동작축)가 아닙니다")?;
+        if c.kind == Kind::Actuator {
+            let m = self.machines.entry(machine).or_default();
+            m.held = false;
+            m.opening = match command {
+                Command::Extend => true,
+                Command::Retract => false,
+                _ => return Err("동작축은 전진·후진 명령만 받습니다".into()),
+            };
+            self.changed = true;
+            return Ok(());
+        }
+        if matches!(command, Command::Extend | Command::Retract) {
+            return Err("전진·후진은 동작축의 명령입니다".into());
+        }
         if c.mirror.is_some() {
             return Err("실제 장비(MTConnect)를 따라가는 중이라 명령을 받지 않습니다".into());
         }
@@ -1926,6 +2001,7 @@ impl Cell {
             // A moulding machine: a guard and its cycle; it makes the part.
             match command {
                 Command::Clamp | Command::Unclamp => return Err("사출기에는 척이 없습니다".into()),
+                Command::Extend | Command::Retract => unreachable!("refused above"),
                 Command::Open if busy => return Err("성형 중에는 가드를 열 수 없습니다".into()),
                 Command::Open => m.opening = true,
                 Command::Close => m.opening = false,
@@ -1969,6 +2045,7 @@ impl Cell {
                 }
                 m.machining = Some(0.0);
             }
+            Command::Extend | Command::Retract => unreachable!("refused above"),
         }
         self.changed = true;
         Ok(())
@@ -1992,6 +2069,17 @@ impl Cell {
                     .find(|b| b.object == machine)
                     .is_some_and(|b| b.at_end(&self.parts).is_some());
         }
+        if c.kind == Kind::Sensor {
+            return signal == Signal::Detected && self.detects(doc, c);
+        }
+        if c.kind == Kind::Actuator {
+            let m = self.machines.get(&machine).cloned().unwrap_or_default();
+            return match signal {
+                Signal::Extended => m.opening && m.door >= 1.0,
+                Signal::Retracted => !m.opening && m.door <= 0.0,
+                _ => false,
+            };
+        }
         if !c.kind.machine() {
             return false;
         }
@@ -2003,8 +2091,81 @@ impl Cell {
             Signal::Unclamped => !m.clamped && m.chuck <= 0.0,
             Signal::Idle => m.machining.is_none(),
             Signal::Done => m.machining.is_none() && self.in_chuck(doc, c) == Some(true),
-            Signal::PartAtEnd | Signal::Arrived => false,
+            Signal::PartAtEnd
+            | Signal::Arrived
+            | Signal::Detected
+            | Signal::Extended
+            | Signal::Retracted => false,
         }
+    }
+
+    /// Sensor `c`'s beam where it is: from, the way it points, how long.
+    fn beam(doc: &Document, c: &Component) -> Option<(DVec3, DVec3, f64)> {
+        let world = doc.world_transform(id_of(doc, c.object)?);
+        let unit = [DVec3::X, DVec3::Y, DVec3::Z][c.props.axis.min(2) as usize];
+        let way = (world.matrix3 * unit).normalize_or_zero();
+        let length = if c.props.travel.abs() > 1e-6 {
+            c.props.travel
+        } else {
+            0.5
+        };
+        // A beam set the other way points back along its axis.
+        Some((world.translation, way * length.signum(), length.abs()))
+    }
+
+    /// Whether a part breaks sensor `c`'s beam: a part held or not, the
+    /// beam passing within its round and its height.
+    fn detects(&self, doc: &Document, c: &Component) -> bool {
+        let Some((from, way, length)) = Self::beam(doc, c) else {
+            return false;
+        };
+        self.parts.iter().any(|p| {
+            let at = p.world.translation;
+            let along = (at - from).dot(way).clamp(0.0, length);
+            let d = at - (from + way * along);
+            let (r, h) = p.size();
+            DVec3::new(d.x, d.y, 0.0).length() <= r && d.z.abs() <= h / 2.0
+        })
+    }
+
+    /// Axis `c` as far out as `out` (0 where placed, 1 at its far end):
+    /// how the world moves with it from where it was placed.
+    fn axis_shift(doc: &Document, c: &Component, out: f64) -> Option<DAffine3> {
+        let id = id_of(doc, c.object)?;
+        Some(match door_motion(doc, id, id, Some(&c.props))? {
+            DoorMotion::Swing { pivot, axis, angle } => {
+                DAffine3::from_translation(pivot)
+                    * DAffine3::from_axis_angle(axis, angle * out)
+                    * DAffine3::from_translation(-pivot)
+            }
+            DoorMotion::Slide(by) => DAffine3::from_translation(by * out),
+        })
+    }
+
+    /// Each axis's box in the world as it now stands: the object's own.
+    fn axis_boxes(&self, doc: &Document) -> Vec<(u64, DVec3, DVec3)> {
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Actuator)
+            .filter_map(|c| {
+                let out = self.machines.get(&c.object).map_or(0.0, |m| m.door);
+                let shift = Self::axis_shift(doc, c, out)?;
+                let (lo, hi) = bounds(doc, id_of(doc, c.object)?)?;
+                let mut a = DVec3::splat(f64::INFINITY);
+                let mut b = DVec3::splat(f64::NEG_INFINITY);
+                for k in 0..8 {
+                    let corner = DVec3::new(
+                        if k & 1 == 0 { lo.x } else { hi.x },
+                        if k & 2 == 0 { lo.y } else { hi.y },
+                        if k & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    let w = shift.transform_point3(corner);
+                    a = a.min(w);
+                    b = b.max(w);
+                }
+                Some((c.object, a, b))
+            })
+            .collect()
     }
 
     /// The PLC addresses the cell reads, and what each holds: its machines'
@@ -2317,6 +2478,19 @@ impl Cell {
     /// or ran, and whether a state changed: a door reaching its end, a
     /// cycle ending.
     fn step(&mut self, doc: &Document, dt: f64) -> (bool, bool) {
+        // Each axis as it stood, and its box: what stands on it goes with it.
+        let axes_before: Vec<(u64, f64)> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Actuator)
+            .map(|c| {
+                (
+                    c.object,
+                    self.machines.get(&c.object).map_or(0.0, |m| m.door),
+                )
+            })
+            .collect();
+        let boxes_before = self.axis_boxes(doc);
         let mut moving = false;
         let mut finished = false;
         let mut done: Vec<DVec3> = Vec::new();
@@ -2392,6 +2566,43 @@ impl Cell {
         // A moulding cycle ended: the part it made, in the mould.
         for seat in moulded {
             self.add_part(seat + DVec3::Z * (FINISHED.1 - RAW.1) / 2.0, true);
+        }
+        // The parts standing on an axis that moved, moved with it.
+        for (object, before) in axes_before {
+            let Some(c) = self.components.iter().find(|c| c.object == object).cloned() else {
+                continue;
+            };
+            let after = self.machines.get(&object).map_or(0.0, |m| m.door);
+            if after == before {
+                continue;
+            }
+            let (Some(from), Some(to)) = (
+                Self::axis_shift(doc, &c, before),
+                Self::axis_shift(doc, &c, after),
+            ) else {
+                continue;
+            };
+            let Some(&(_, lo, hi)) = boxes_before.iter().find(|b| b.0 == object) else {
+                continue;
+            };
+            let shift = to * from.inverse();
+            let (_, turn, _) = shift.to_scale_rotation_translation();
+            for p in &mut self.parts {
+                if p.held.is_some() {
+                    continue;
+                }
+                let foot = p.world.translation - DVec3::Z * (p.size().1 / 2.0);
+                let on = foot.x >= lo.x
+                    && foot.x <= hi.x
+                    && foot.y >= lo.y
+                    && foot.y <= hi.y
+                    && (foot.z - hi.z).abs() < 0.01;
+                if on {
+                    let at = shift.transform_point3(p.world.translation);
+                    let (_, own, _) = p.world.to_scale_rotation_translation();
+                    p.world = DAffine3::from_rotation_translation(turn * own, at);
+                }
+            }
         }
         let (carried, arrived) = self.convey(doc, dt);
         self.conveying = carried;
@@ -2606,9 +2817,40 @@ impl Cell {
     /// moved, and whether one came to an end or was put on.
     fn convey(&mut self, doc: &Document, dt: f64) -> (bool, bool) {
         let (mut moved, mut arrived) = (false, false);
+        let boxes = self.axis_boxes(doc);
         for belt in self.belts(doc) {
             let gap = 2.0 * RAW.0 + 0.005;
             let end = belt.length / 2.0 - RAW.0;
+            // An axis standing up across the belt, where parts ride — a
+            // stopper raised — and how far along the belt it begins.
+            let stops: Vec<f64> = boxes
+                .iter()
+                .filter_map(|&(_, lo, hi)| {
+                    let corners = (0..8).map(|k| {
+                        DVec3::new(
+                            if k & 1 == 0 { lo.x } else { hi.x },
+                            if k & 2 == 0 { lo.y } else { hi.y },
+                            if k & 4 == 0 { lo.z } else { hi.z },
+                        ) - belt.centre
+                    });
+                    let (mut a0, mut a1, mut c0, mut c1) = (
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                    );
+                    for d in corners {
+                        a0 = a0.min(d.dot(belt.along));
+                        a1 = a1.max(d.dot(belt.along));
+                        c0 = c0.min(d.dot(belt.across));
+                        c1 = c1.max(d.dot(belt.across));
+                    }
+                    let across = c1 >= -belt.width / 2.0 && c0 <= belt.width / 2.0;
+                    let up = hi.z > belt.centre.z + 0.002 && lo.z < belt.centre.z + RAW.1;
+                    let on = a1 >= -belt.length / 2.0 && a0 <= belt.length / 2.0;
+                    (across && up && on).then_some(a0)
+                })
+                .collect();
             // Front first: each stops behind the one ahead.
             let mut on: Vec<(usize, f64)> = self
                 .parts
@@ -2621,7 +2863,13 @@ impl Cell {
             let mut limit = end;
             let mut gone = Vec::new();
             for (i, x) in on {
-                let to = (x + belt.props.speed * dt).min(limit).max(x);
+                // Held behind a stop ahead of it.
+                let held = stops
+                    .iter()
+                    .filter(|a0| **a0 >= x + RAW.0 - 0.002)
+                    .map(|a0| a0 - RAW.0)
+                    .fold(limit, f64::min);
+                let to = (x + belt.props.speed * dt).min(held).max(x);
                 if to > x + 1e-9 {
                     self.parts[i].world.translation += belt.along * (to - x);
                     moved = true;
@@ -2807,6 +3055,14 @@ impl Cell {
                     out.push((uid.raw(), open, machine, props));
                 }
             }
+        }
+        // An axis moves as a door of its own does.
+        for c in self.components.iter().filter(|c| c.kind == Kind::Actuator) {
+            let Some(id) = id_of(doc, c.object) else {
+                continue;
+            };
+            let out_by = self.machines.get(&c.object).map_or(0.0, |m| m.door);
+            out.push((c.object, out_by, id, Some(c.props)));
         }
         out
     }
@@ -2997,6 +3253,18 @@ impl Cell {
                             "turning": r.as_ref().is_some_and(|r| !r.legs.is_empty()),
                             "angle": self.turned(doc, c),
                         })
+                    }),
+                    "sensor": (c.kind == Kind::Sensor).then(|| {
+                        let beam = Self::beam(doc, c);
+                        json!({
+                            "from": beam.map(|(f, ..)| point(f)),
+                            "to": beam.map(|(f, w, l)| point(f + w * l)),
+                            "detected": self.detects(doc, c),
+                        })
+                    }),
+                    "actuator": (c.kind == Kind::Actuator).then(|| {
+                        let m = self.machines.get(&c.object).cloned().unwrap_or_default();
+                        json!({ "out": m.door, "extending": m.opening })
                     }),
                     "amr": (c.kind == Kind::Amr).then(|| {
                         let r = self.rover(doc, c);
@@ -4006,5 +4274,150 @@ mod tests {
             json!({"op": "mirror", "object": machine.to_string(), "agent": "https://x"}),
         );
         assert_eq!(a["ok"], false, "only http");
+    }
+}
+
+#[cfg(test)]
+mod axis_tests {
+    use super::*;
+
+    fn ask(cell: &mut Cell, doc: &Document, req: Value) -> Value {
+        serde_json::from_str(&cell.handle(doc, &req.to_string())).unwrap()
+    }
+
+    fn run_for(cell: &mut Cell, doc: &Document, from: f64, seconds: f64) -> f64 {
+        let start = Instant::now();
+        let mut t = from;
+        while t < from + seconds {
+            t += 0.05;
+            cell.tick(doc, t, start + Duration::from_secs_f64(t));
+        }
+        t
+    }
+
+    /// A conveyor 2 m long along X at the origin, its belt's top 0.8 m up,
+    /// and the equipment `more` names placed beside it: the scene, and the
+    /// cell with each item's role, its settings the template's.
+    fn line(more: &[(&str, [f64; 2], f64, Value)]) -> (Document, Cell, Vec<u64>) {
+        let mut library = crate::library::Library::default();
+        library.handle(
+            &json!({"op": "place", "template": "conveyor", "at": [0.0, 0.0, 0.0]}).to_string(),
+        );
+        for (template, at, yaw, _) in more {
+            library.handle(
+                &json!({"op": "place", "template": template, "at": [at[0], at[1], 0.0], "yaw": yaw})
+                    .to_string(),
+            );
+        }
+        let mut doc = Document::new();
+        library.apply(&mut doc);
+        let mut cell = Cell::default();
+        let roles = library.roles();
+        let mut uids = Vec::new();
+        for (k, (uid, name, kind)) in roles.into_iter().enumerate() {
+            cell.ensure(uid, name, kind);
+            let props = if k == 0 {
+                json!({"speed": 0.5})
+            } else {
+                more[k - 1].3.clone()
+            };
+            let a = ask(
+                &mut cell,
+                &doc,
+                json!({"op": "role", "object": uid.to_string(), "kind": kind.tag(), "props": props}),
+            );
+            assert_eq!(a["ok"], true, "{a}");
+            uids.push(uid);
+        }
+        (doc, cell, uids)
+    }
+
+    #[test]
+    fn a_stopper_holds_parts_on_the_belt_and_a_sensor_sees_them() {
+        // A stopper across the belt 0.3 m past its middle; a sensor's beam
+        // across it at 0.0, looking along +Y.
+        let (doc, mut cell, uids) = line(&[
+            (
+                "stopper",
+                [0.3, 0.0],
+                0.0,
+                json!({"axis": 2, "travel": 0.04, "door": 0.3}),
+            ),
+            (
+                "photo_sensor",
+                [0.0, -0.4],
+                std::f64::consts::FRAC_PI_2,
+                json!({"axis": 0, "travel": 0.8}),
+            ),
+        ]);
+        let (stopper, sensor) = (uids[1], uids[2]);
+        // A part at the belt's start.
+        cell.add_part(DVec3::new(-0.9, 0.0, 0.8 + RAW.1 / 2.0), false);
+        assert!(cell.signal(&doc, stopper, Signal::Retracted));
+        cell.command(&doc, stopper, Command::Extend).unwrap();
+        assert!(cell.command(&doc, stopper, Command::Start).is_err());
+        let mut t = run_for(&mut cell, &doc, 0.0, 0.5);
+        assert!(cell.signal(&doc, stopper, Signal::Extended));
+        // On the way past the sensor.
+        let mut seen = false;
+        while t < 6.0 {
+            t = run_for(&mut cell, &doc, t, 0.05);
+            seen |= cell.signal(&doc, sensor, Signal::Detected);
+        }
+        assert!(seen, "the part crossed the beam");
+        assert!(
+            !cell.signal(&doc, sensor, Signal::Detected),
+            "and is past it"
+        );
+        // Held against the stopper, its pin 10 mm thick at 0.3.
+        let x = cell.parts()[0].world.translation.x;
+        assert!((x - (0.3 - 0.01 - RAW.0)).abs() < 0.01, "{x}");
+        // Lowered, the part goes on to the end.
+        cell.command(&doc, stopper, Command::Retract).unwrap();
+        run_for(&mut cell, &doc, t, 4.0);
+        let x = cell.parts()[0].world.translation.x;
+        assert!((x - (1.0 - RAW.0)).abs() < 1e-6, "{x}");
+        assert!(cell.signal(&doc, stopper, Signal::Retracted));
+    }
+
+    #[test]
+    fn a_lifter_lifts_what_stands_on_it_and_a_turntable_turns_it() {
+        let (doc, mut cell, uids) = line(&[
+            (
+                "lifter",
+                [3.0, 0.0],
+                0.0,
+                json!({"axis": 2, "travel": 0.3, "door": 1.0}),
+            ),
+            (
+                "rotary_axis",
+                [5.0, 0.0],
+                0.0,
+                json!({"swing": 1, "axis": 2, "angle": std::f64::consts::PI, "door": 1.0}),
+            ),
+        ]);
+        let (lifter, table) = (uids[1], uids[2]);
+        cell.add_part(DVec3::new(3.1, 0.0, 0.8 + RAW.1 / 2.0), false);
+        cell.add_part(DVec3::new(5.2, 0.0, 0.8 + RAW.1 / 2.0), false);
+        cell.command(&doc, lifter, Command::Extend).unwrap();
+        cell.command(&doc, table, Command::Extend).unwrap();
+        run_for(&mut cell, &doc, 0.0, 1.5);
+        let lifted = cell.parts()[0].world.translation;
+        assert!(
+            (lifted - DVec3::new(3.1, 0.0, 1.1 + RAW.1 / 2.0)).length() < 1e-6,
+            "{lifted}"
+        );
+        // Half a turn about the table's middle.
+        let turned = cell.parts()[1].world.translation;
+        assert!(
+            (turned - DVec3::new(4.8, 0.0, 0.8 + RAW.1 / 2.0)).length() < 1e-6,
+            "{turned}"
+        );
+        // Shown where they are: the lifter's table up.
+        let mut shown = doc.clone();
+        cell.apply(&mut shown);
+        let id = id_of(&shown, lifter).unwrap();
+        let (_, hi) = bounds(&shown, id).unwrap();
+        assert!((hi.z - 1.1).abs() < 1e-6, "{hi}");
     }
 }

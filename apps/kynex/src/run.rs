@@ -569,6 +569,9 @@ pub fn signal_label(signal: Signal) -> &'static str {
         Signal::Done => "가공 완료",
         Signal::PartAtEnd => "부품 도착",
         Signal::Arrived => "AMR 도착",
+        Signal::Detected => "센서 감지",
+        Signal::Extended => "전진 끝",
+        Signal::Retracted => "후진 끝",
     }
 }
 

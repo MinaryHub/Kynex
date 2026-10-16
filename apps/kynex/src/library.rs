@@ -227,6 +227,62 @@ pub const TEMPLATES: &[Template] = &[
         ],
     },
     Template {
+        key: "photo_sensor",
+        name: "포토센서",
+        group: "센서·동작축",
+        // A through-beam across a conveyor, at a part's height over it.
+        params: &[
+            p("height", "빔 높이", 0.83, 0.1, 2.0),
+            p("range", "빔 길이", 0.6, 0.05, 5.0),
+        ],
+    },
+    Template {
+        key: "stopper",
+        name: "스토퍼",
+        group: "센서·동작축",
+        // A pin that rises through a belt to hold the parts behind it.
+        params: &[
+            p("height", "벨트 높이", 0.8, 0.3, 1.5),
+            p("stroke", "행정", 0.04, 0.01, 0.2),
+            p("time", "동작 시간", 0.3, 0.05, 10.0),
+        ],
+    },
+    Template {
+        key: "lifter",
+        name: "리프터",
+        group: "센서·동작축",
+        // A table that lifts the parts on it from one level to another.
+        params: &[
+            p("height", "테이블 높이", 0.8, 0.2, 1.5),
+            p("size", "테이블 크기", 0.5, 0.2, 1.5),
+            p("stroke", "행정", 0.3, 0.02, 1.5),
+            p("time", "동작 시간", 2.0, 0.1, 30.0),
+        ],
+    },
+    Template {
+        key: "linear_axis",
+        name: "직선축 (셔틀)",
+        group: "센서·동작축",
+        // A carriage on a rail, carrying the parts on it along X.
+        params: &[
+            p("length", "레일 길이", 1.2, 0.3, 6.0),
+            p("height", "캐리지 높이", 0.8, 0.2, 1.5),
+            p("stroke", "행정", 0.8, 0.05, 5.5),
+            p("time", "동작 시간", 2.0, 0.1, 30.0),
+        ],
+    },
+    Template {
+        key: "rotary_axis",
+        name: "회전축 (인덱스 테이블)",
+        group: "센서·동작축",
+        params: &[
+            p("diameter", "지름", 0.6, 0.2, 2.0),
+            p("height", "높이", 0.8, 0.2, 1.5),
+            p("angle", "회전 각도(°)", 180.0, -360.0, 360.0),
+            p("time", "동작 시간", 1.5, 0.1, 30.0),
+        ],
+    },
+    Template {
         key: "amr_stop",
         name: "AMR 정지 위치",
         group: "물류",
@@ -1624,6 +1680,7 @@ fn tool_urdf(n: usize) -> String {
 fn build(item: &Item) -> Result<Built, String> {
     let mut doc = Document::new();
     let mut roles = Vec::new();
+    let mut props: Vec<(ObjectId, Value)> = Vec::new();
     let mut root_link = None;
     match item.template.as_str() {
         "ur10e_tending"
@@ -1764,6 +1821,154 @@ fn build(item: &Item) -> Result<Built, String> {
             let positioner = turntable(&mut doc, &c, item.param("diameter"), item.param("height"));
             roles.push((positioner, Kind::Positioner));
         }
+        "photo_sensor" => {
+            let c = Colours::new(&mut doc);
+            let h = item.param("height");
+            // The sensor's head at the beam's height, the beam along its X.
+            let sensor = doc.add_object(Object::new("photo_sensor", ObjectData::Empty));
+            doc.object_mut(sensor).unwrap().transform.translation = DVec3::new(0.0, 0.0, h);
+            let s = Some(sensor);
+            block(
+                &mut doc,
+                "head",
+                [0.03, 0.04, 0.05],
+                [0.0, 0.0, 0.0],
+                c.accent,
+                s,
+            );
+            post(
+                &mut doc,
+                "pole",
+                0.01,
+                h - 0.025,
+                [0.0, 0.0, -0.025 - (h - 0.025) / 2.0],
+                c.steel,
+                s,
+            );
+            roles.push((sensor, Kind::Sensor));
+            props.push((sensor, json!({ "axis": 0, "travel": item.param("range") })));
+        }
+        "stopper" => {
+            let c = Colours::new(&mut doc);
+            let h = item.param("height");
+            // Its body under the belt; the pin's top just below the belt's
+            // top, rising through it.
+            block(
+                &mut doc,
+                "stopper_body",
+                [0.06, 0.12, h - 0.07],
+                [0.0, 0.0, (h - 0.07) / 2.0],
+                c.dark,
+                None,
+            );
+            let pin = block(
+                &mut doc,
+                "pin",
+                [0.02, 0.1, 0.04],
+                [0.0, 0.0, h - 0.025],
+                c.accent,
+                None,
+            );
+            roles.push((pin, Kind::Actuator));
+            props.push((
+                pin,
+                json!({ "axis": 2, "travel": item.param("stroke"), "door": item.param("time") }),
+            ));
+        }
+        "lifter" => {
+            let c = Colours::new(&mut doc);
+            let (h, size) = (item.param("height"), item.param("size"));
+            block(
+                &mut doc,
+                "lifter_base",
+                [size * 0.6, size * 0.6, h - 0.06],
+                [0.0, 0.0, (h - 0.06) / 2.0],
+                c.dark,
+                None,
+            );
+            let table = block(
+                &mut doc,
+                "lift_table",
+                [size, size, 0.04],
+                [0.0, 0.0, h - 0.02],
+                c.table,
+                None,
+            );
+            roles.push((table, Kind::Actuator));
+            props.push((
+                table,
+                json!({ "axis": 2, "travel": item.param("stroke"), "door": item.param("time") }),
+            ));
+        }
+        "linear_axis" => {
+            let c = Colours::new(&mut doc);
+            let (l, h) = (item.param("length"), item.param("height"));
+            let stroke = item.param("stroke").min(l - 0.2).max(0.05);
+            block(
+                &mut doc,
+                "rail",
+                [l, 0.2, h - 0.06],
+                [0.0, 0.0, (h - 0.06) / 2.0],
+                c.steel,
+                None,
+            );
+            // The carriage at the rail's start, travelling towards +X.
+            let carriage = block(
+                &mut doc,
+                "carriage",
+                [0.3, 0.3, 0.06],
+                [-l / 2.0 + 0.15, 0.0, h - 0.03],
+                c.accent,
+                None,
+            );
+            roles.push((carriage, Kind::Actuator));
+            props.push((
+                carriage,
+                json!({ "axis": 0, "travel": stroke, "door": item.param("time") }),
+            ));
+        }
+        "rotary_axis" => {
+            let c = Colours::new(&mut doc);
+            let (d, h) = (item.param("diameter"), item.param("height"));
+            post(
+                &mut doc,
+                "rotary_base",
+                d * 0.3,
+                h - 0.04,
+                [0.0, 0.0, (h - 0.04) / 2.0],
+                c.dark,
+                None,
+            );
+            let disc = post(
+                &mut doc,
+                "disc",
+                d / 2.0,
+                0.04,
+                [0.0, 0.0, h - 0.02],
+                c.table,
+                None,
+            );
+            // A mark on the disc, to see it turn.
+            block(
+                &mut doc,
+                "mark",
+                [d * 0.4, 0.03, 0.005],
+                [d * 0.2, 0.0, 0.0225],
+                c.accent,
+                Some(disc),
+            );
+            roles.push((disc, Kind::Actuator));
+            props.push((
+                disc,
+                json!({
+                    "swing": 1,
+                    "axis": 2,
+                    "angle": item.param("angle").to_radians(),
+                    "point": [0.0, 0.0, 0.0],
+                    "door": item.param("time"),
+                }),
+            ));
+        }
         "amr_stop" => {
             let c = Colours::new(&mut doc);
             let stop = amr_stop(&mut doc, &c, item.param("length"), item.param("width"));
@@ -1798,7 +2003,7 @@ fn build(item: &Item) -> Result<Built, String> {
         order,
         roles,
         root_link,
-        props: Vec::new(),
+        props,
     })
 }
 

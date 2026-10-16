@@ -19,6 +19,8 @@ const KINDS = [
   ['positioner', '포지셔너'],
   ['door', '문 (장비의 움직이는 부분)'],
   ['connector', '연결점'],
+  ['sensor', '포토센서'],
+  ['actuator', '동작축 (스토퍼·리프터·직선·회전)'],
 ];
 
 // What each I/O point is, in words: the robot's outputs and its inputs.
@@ -41,6 +43,11 @@ const IO_LABELS = {
   idle: '대기 중',
   done: '완료',
   part_at_end: '부품 도착',
+  extend: '전진',
+  retract: '후진',
+  extended: '전진 끝',
+  retracted: '후진 끝',
+  detected: '감지',
 };
 
 // An I/O number as the controller names it.
@@ -82,6 +89,17 @@ const FIELDS = {
     ['axis', '축', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
     ['travel', '거리', 'mm', 1000],
     ['angle', '각도', '°', 180 / Math.PI],
+  ],
+  sensor: [
+    ['axis', '빔 방향', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
+    ['travel', '빔 길이', 'mm', 1000],
+  ],
+  actuator: [
+    ['swing', '동작', '', 1, [[0, '직선'], [1, '회전']]],
+    ['axis', '축', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
+    ['travel', '행정', 'mm', 1000],
+    ['angle', '각도', '°', 180 / Math.PI],
+    ['door', '동작 시간', 's', 1],
   ],
   connector: [
     ['plug', '종류', '', 1, [[0, '로봇 받침면'], [1, '컨베이어 입구'], [2, '컨베이어 출구'], [3, '받침면에 올라섬']]],
@@ -249,6 +267,15 @@ export class CellPanel {
             .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(s.name)}</button>`)
             .join('') + (c.amr?.driving ? '<span class="muted">주행 중</span>' : '')
         : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
+    } else if (c && c.kind === 'actuator') {
+      const a = c.actuator ?? {};
+      const at = a.out >= 1 ? '전진 끝' : a.out <= 0 ? '후진 끝' : a.extending ? '전진 중' : '후진 중';
+      actions =
+        `<button class="text-btn" data-machine="extend"${a.extending ? ' disabled' : ''}>전진</button>` +
+        `<button class="text-btn" data-machine="retract"${a.extending ? '' : ' disabled'}>후진</button>` +
+        `<span class="muted">${at}</span>`;
+    } else if (c && c.kind === 'sensor') {
+      actions = c.sensor?.detected ? '<span class="warn-text">감지</span>' : '<span class="muted">감지 없음</span>';
     } else if (c && c.kind === 'positioner') {
       const p = c.positioner;
       const angle = p?.angle != null ? Math.round((p.angle * 180) / Math.PI) : 0;
@@ -434,6 +461,19 @@ export class CellPanel {
       );
       dots.renderOrder = 8;
       this.markers.add(dots);
+    }
+    // Each sensor's beam: red while a part breaks it.
+    for (const c of this.cell.components) {
+      const b = c.sensor;
+      if (!b?.from || !b?.to) continue;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute([...b.from, ...b.to], 3));
+      const line = new THREE.Line(
+        geometry,
+        new THREE.LineBasicMaterial({ color: b.detected ? 0xff4d4d : 0x3ddc84, transparent: true, opacity: 0.9, depthTest: false }),
+      );
+      line.renderOrder = 8;
+      this.markers.add(line);
     }
   }
 }

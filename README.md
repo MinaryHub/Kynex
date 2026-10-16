@@ -651,6 +651,9 @@ not change the session's scene.
   - AMR 정지 위치: where an AMR stops, facing the stop's X.
   - 포지셔너: a turntable, turned about its own vertical axis, with its
     top plate (`…top…`).
+  - 포토센서: a beam from the object's origin along its own X, Y or Z.
+  - 동작축: the object slides along, or turns about, an axis of its own:
+    a stopper, a lifter, a shuttle, an index table.
 
   Settings start at industry-typical values (docs/roadmap-vs-visual-components.md
   §4): 90 s machining, 3 s door, 1 s chuck, 5 × 4 places 100 mm apart, and
@@ -707,6 +710,22 @@ not change the session's scene.
   after the robot's own, turned with `MoveExtJ` (a mechanical unit to set
   up on the controller); a UR or a Doosan has no such axis, and the
   program says where it is to be turned, as a comment.
+- **Sensors and axes** (library group **센서·동작축**: 포토센서, 스토퍼,
+  리프터, 직선축, 회전축). Any object can take these roles too.
+  - A photo sensor's beam is drawn in the scene: green while clear, red
+    while a part breaks it. Its signal is **감지**.
+  - An axis goes to its far end on **전진** and back on **후진** over its
+    동작 시간. It slides by its 행정 along its own X, Y or Z, or turns by
+    its 각도 about that axis through the point picked. Its signals are
+    **전진 끝** and **후진 끝**.
+  - What stands on an axis's top goes with it, and a part let go over its
+    top stands there.
+  - An axis raised across a belt holds the parts behind it, as a stopper
+    does. Lowered, they go on.
+  - The inspector has 전진/후진 buttons. In a program, **장비 명령** gives
+    the commands, and **신호 대기** or a **만약/반복** condition waits on
+    or tests the signals. Each signal can be wired to the controller's I/O
+    and to a PLC like a machine's.
 - **A robot on a track** (ABB IRB 1600 + 주행 트랙: 3 m of travel, 1.6
   m/s): the track is its first joint, jogged and solved with the arm. On
   a line or an arc the track goes evenly from end to end, as the

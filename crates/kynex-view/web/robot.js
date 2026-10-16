@@ -36,6 +36,10 @@ const SIGNALS = [
 // What each kind of machine takes and says, as the program's rows offer it.
 const COMMANDS_OF = {
   cnc: COMMANDS,
+  actuator: [
+    ['extend', '전진'],
+    ['retract', '후진'],
+  ],
   molder: [
     ['open', '가드 열기'],
     ['close', '가드 닫기'],
@@ -51,6 +55,11 @@ const SIGNALS_OF = {
     ['done', '성형 완료'],
   ],
   conveyor: [['part_at_end', '부품 도착']],
+  sensor: [['detected', '감지']],
+  actuator: [
+    ['extended', '전진 끝'],
+    ['retracted', '후진 끝'],
+  ],
   amr: [['arrived', 'AMR 도착']],
 };
 const SPEEDS = [1, 2, 5, 10, 20];
@@ -622,7 +631,7 @@ export class RobotPanel {
         .join('')}</select>`;
     const grippers = (r ? this.grippersOf(r) : []).map((g) => [g.object, this.ctx.records.get(g.object)?.name ?? g.name]);
     // Machines take commands; a conveyor's sensor is waited on too.
-    const machines = this.machines();
+    const machines = this.commanded();
     const sensed = this.cell.components.filter((c) => c.kind in SIGNALS_OF).map((c) => [c.object, c.name]);
     const kind = this.cell.components.find((c) => c.object === step.machine)?.kind ?? 'cnc';
     // One that has gone from the cell still shows by its name.
@@ -882,6 +891,11 @@ export class RobotPanel {
     return this.cell.components.filter((c) => c.kind === 'cnc' || c.kind === 'molder').map((c) => [c.object, c.name]);
   }
 
+  // What a step can tell to do: the machines, and the axes.
+  commanded() {
+    return this.cell.components.filter((c) => c.kind in COMMANDS_OF || c.kind === 'cnc').map((c) => [c.object, c.name]);
+  }
+
   // The machine a point is at: the one whose chuck is nearest, within reach
   // of a robot working at it.
   machineNear(at) {
@@ -926,10 +940,17 @@ export class RobotPanel {
       case 'grip':
       case 'release':
         return gripper ? { type, gripper } : null;
-      case 'command':
-        return machine ? { type, machine, command: 'open' } : null;
-      case 'wait':
-        return machine ? { type, machine, signal: 'done' } : null;
+      case 'command': {
+        const [object] = this.commanded()[0] ?? [];
+        const kind = this.cell.components.find((c) => c.object === object)?.kind;
+        return object ? { type, machine: object, command: (COMMANDS_OF[kind] ?? COMMANDS)[0][0] } : null;
+      }
+      case 'wait': {
+        // A machine's cycle done, or else the first thing that says anything.
+        if (machine) return { type, machine, signal: 'done' };
+        const c = this.cell.components.find((c) => c.kind in SIGNALS_OF);
+        return c ? { type, machine: c.object, signal: SIGNALS_OF[c.kind][0][0] } : null;
+      }
       case 'delay':
         return { type, seconds: 1 };
       case 'next':

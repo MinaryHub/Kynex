@@ -211,6 +211,8 @@ function setGizmo(rec) {
     });
     node.add(inner);
     gizmos.set(rec.uid, node);
+    // Faint or hidden like the others, if a gizmo is out.
+    markersLook = 'stale';
     content.add(node);
   }
   node.matrix.fromArray(rec.matrix);
@@ -1282,7 +1284,31 @@ const _size = new THREE.Vector2();
 // Where each frame's time goes on this side, for the benchmark: what the
 // browser spends preparing and submitting, not what the GPU spends drawing.
 const cpu = { levels: 0, scene: 0, frames: 0, shadowFrames: 0 };
+// While a gizmo is out — the robot's TCP handle, or equipment's — the
+// joint and link markers step back so its arrows and rings read: faint
+// while it is shown, gone while it is dragged.
+let markersLook = 'normal';
+function quietMarkers() {
+  const dragging = robotPanel.dragging || libraryPanel.dragging;
+  const shown = robotPanel.handleRoot != null || libraryPanel.handleItem != null;
+  const look = dragging ? 'hidden' : shown ? 'faint' : 'normal';
+  if (look === markersLook) return;
+  markersLook = look;
+  for (const node of gizmos.values()) {
+    node.children[0]?.traverse((o) => {
+      if (!o.material) return;
+      o.material.userData.opacity ??= o.material.opacity;
+      o.material.opacity = look === 'faint' ? 0.15 : o.material.userData.opacity;
+    });
+    // Only the joints that move stay, faint: fixed joints' arrows and the
+    // links' axes, crowded about the tool, go while a gizmo is out.
+    const moving = node.userData.kind?.startsWith('joint:') && node.userData.kind !== 'joint:fixed';
+    node.children[0].visible = look === 'normal' || (look === 'faint' && moving);
+  }
+}
+
 renderer.setAnimationLoop(() => {
+  quietMarkers();
   if (flight) {
     const t = Math.min((performance.now() - flight.t0) / 420, 1);
     const k = ease(t);

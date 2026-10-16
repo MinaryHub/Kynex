@@ -572,6 +572,11 @@ that plane; in **회전** (or `R`; `T` or **이동** back) drag the red, green
 or blue ring to turn it about X, Y or Z — its X and Y tilt and its turn,
 in the angle snap's steps. Several selected together turn about Z only;
 Alt held as it is let go keeps it from snapping onto a connection point.
+A robot's moving joint selected, or a part one moves (the forearm, say),
+has a gizmo of its own instead: a ring about the joint's axis (an arrow
+along it for a sliding joint), dragged to turn the joint within its
+limits, as its slider does. The robot's base or its root takes the
+equipment's gizmo, to move the whole robot.
 The inspector sets its position, turn and sizes by number too, and
 **기즈모 끄기** turns the gizmo off (kept for the browser). Locked
 equipment has none. Sizes change the item's shape, and the item keeps its

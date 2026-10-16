@@ -779,8 +779,10 @@ function select(uid, { frame: andFrame = false, keep = [] } = {}) {
   levelsDirty = true;
   if (was != null) highlight(was);
   if (selected != null) highlight(selected);
-  // The gizmo onto the equipment selected, or away.
-  libraryPanel.selectionChanged(selected);
+  // A joint's gizmo onto a robot's joint (or the part it moves); else the
+  // gizmo onto the equipment selected, or away.
+  const onJoint = robotPanel.selectionChanged(selected);
+  libraryPanel.selectionChanged(onJoint ? null : selected);
   document.querySelectorAll('.node.selected, .joint.selected').forEach((n) => n.classList.remove('selected'));
   if (selected != null) {
     revealInTree(selected);
@@ -1289,8 +1291,8 @@ const cpu = { levels: 0, scene: 0, frames: 0, shadowFrames: 0 };
 // while it is shown, gone while it is dragged.
 let markersLook = 'normal';
 function quietMarkers() {
-  const dragging = robotPanel.dragging || libraryPanel.dragging;
-  const shown = robotPanel.handleRoot != null || libraryPanel.handleItem != null;
+  const dragging = robotPanel.dragging || robotPanel.jointDragging || libraryPanel.dragging;
+  const shown = robotPanel.handleRoot != null || robotPanel.joint != null || libraryPanel.handleItem != null;
   const look = dragging ? 'hidden' : shown ? 'faint' : 'normal';
   if (look === markersLook) return;
   markersLook = look;
@@ -1309,6 +1311,7 @@ function quietMarkers() {
 
 renderer.setAnimationLoop(() => {
   quietMarkers();
+  robotPanel.followJoint();
   if (flight) {
     const t = Math.min((performance.now() - flight.t0) / 420, 1);
     const k = ease(t);

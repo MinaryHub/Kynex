@@ -485,6 +485,7 @@ function connect() {
   source.addEventListener('cell', (e) => {
     const cell = JSON.parse(e.data);
     cellPanel.setCell(cell);
+    timelinePanel.setFlow(cell);
     robotPanel.setCell(cell);
     plcPanel.setCell(cell);
   });

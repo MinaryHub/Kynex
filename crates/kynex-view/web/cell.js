@@ -20,6 +20,10 @@ const KINDS = [
   ['door', '문 (장비의 움직이는 부분)'],
   ['connector', '연결점'],
   ['sensor', '포토센서'],
+  ['source', '공정 흐름: 소재 공급'],
+  ['station', '공정 흐름: 공정 스테이션'],
+  ['buffer', '공정 흐름: 버퍼'],
+  ['sink', '공정 흐름: 배출'],
   ['actuator', '동작축 (스토퍼·리프터·직선·회전)'],
 ];
 
@@ -90,6 +94,22 @@ const FIELDS = {
     ['travel', '거리', 'mm', 1000],
     ['angle', '각도', '°', 180 / Math.PI],
   ],
+  source: [
+    ['feed', '공급 간격', 's', 1],
+    ['capacity', '내보낼 자리', '개', 1],
+    ['speed', '이송 속도', 'mm/s', 1000],
+  ],
+  station: [
+    ['cycle', '처리 시간', 's', 1],
+    ['capacity', '대기 자리', '개', 1],
+    ['takes', '투입 수 (2 이상: 조립)', '개', 1],
+    ['makes', '배출 수 (2 이상: 분해)', '개', 1],
+    ['speed', '이송 속도', 'mm/s', 1000],
+  ],
+  buffer: [
+    ['capacity', '용량', '개', 1],
+    ['speed', '이송 속도', 'mm/s', 1000],
+  ],
   sensor: [
     ['axis', '빔 방향', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
     ['travel', '빔 길이', 'mm', 1000],
@@ -142,6 +162,15 @@ export class CellPanel {
       if (stop) this.send({ op: 'drive', object: this.ctx.selected(), stop });
       const turn = e.target.closest('[data-turn]')?.dataset.turn;
       if (turn != null) this.send({ op: 'turn', object: this.ctx.selected(), angle: (Number(turn) * Math.PI) / 180 });
+      // A process flow's next: one more, or one fewer.
+      const next = e.target.closest('[data-flow-next]');
+      if (next) {
+        const object = this.ctx.selected();
+        const have = this.componentOf(object)?.flow?.next ?? [];
+        const t = next.dataset.flowNext;
+        const list = have.includes(t) ? have.filter((x) => x !== t) : [...have, t];
+        this.send({ op: 'flow_next', object, next: list });
+      }
       if (e.target.closest('[data-pick]')) {
         this.pickingFor = this.ctx.selected();
         this.showFor(this.pickingFor);
@@ -278,6 +307,32 @@ export class CellPanel {
             .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(s.name)}</button>`)
             .join('') + (c.amr?.driving ? '<span class="muted">주행 중</span>' : '')
         : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
+    } else if (c && c.flow) {
+      const f = c.flow;
+      // Where its parts go: every other part of the flow, those it sends
+      // to on.
+      const targets = this.cell.components.filter(
+        (t) => t.object !== c.object && ['station', 'buffer', 'sink'].includes(t.kind),
+      );
+      const kindName = Object.fromEntries(KINDS);
+      const nexts =
+        c.kind === 'sink'
+          ? ''
+          : targets.length
+            ? `<span class="muted">다음 공정</span>${targets
+                .map(
+                  (t) =>
+                    `<button class="text-btn${f.next.includes(t.object) ? ' on' : ''}" data-flow-next="${escapeHtml(t.object)}" aria-pressed="${f.next.includes(t.object)}" title="${escapeHtml(kindName[t.kind] ?? t.kind)}">${f.next.includes(t.object) ? '✓ ' : ''}${escapeHtml(t.name)}</button>`,
+                )
+                .join('')}`
+            : '<span class="muted">다음 공정으로 보낼 공정·버퍼·배출 역할이 없습니다</span>';
+      const state =
+        c.kind === 'sink'
+          ? `배출 ${f.made}개`
+          : c.kind === 'station'
+            ? `${f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 대기 ${f.queue} · 완료 ${f.made}`
+            : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
+      actions = `${nexts}<span class="muted">${state}</span>`;
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};
       const at = a.out >= 1 ? '전진 끝' : a.out <= 0 ? '후진 끝' : a.extending ? '전진 중' : '후진 중';
@@ -471,8 +526,11 @@ export class CellPanel {
   drawMarkers() {
     for (const child of [...this.markers.children]) {
       child.removeFromParent();
-      child.geometry.dispose();
-      child.material.dispose();
+      // An arrow is a group: its shaft and its head each their own.
+      child.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
     }
     const slots = this.cell.components.flatMap((c) => c.slots.flat());
     const seats = this.cell.components.filter((c) => c.seat).flatMap((c) => c.seat);
@@ -493,6 +551,32 @@ export class CellPanel {
       dots.renderOrder = 8;
       this.markers.add(dots);
     }
+    // The process flow: an arrow from each part of it to each it sends to.
+    const at = new Map(this.cell.components.filter((c) => c.flow?.at).map((c) => [c.object, c.flow.at]));
+    const arrows = [];
+    for (const c of this.cell.components) {
+      for (const n of c.flow?.next ?? []) {
+        const a = at.get(c.object);
+        const b = at.get(n);
+        if (!a || !b) continue;
+        const from = new THREE.Vector3(a[0], a[1], a[2] + 0.05);
+        const to = new THREE.Vector3(b[0], b[1], b[2] + 0.05);
+        const way = to.clone().sub(from);
+        const length = way.length();
+        if (length < 1e-6) continue;
+        const arrow = new THREE.ArrowHelper(way.normalize(), from, length, 0x5aa9ff, Math.min(0.25, length * 0.3), 0.12);
+        arrow.traverse((o) => {
+          if (o.material) {
+            o.material.depthTest = false;
+            o.material.transparent = true;
+            o.material.opacity = 0.85;
+          }
+          o.renderOrder = 8;
+        });
+        arrows.push(arrow);
+      }
+    }
+    for (const a of arrows) this.markers.add(a);
     // Each sensor's beam: red while a part breaks it.
     for (const c of this.cell.components) {
       const b = c.sensor;

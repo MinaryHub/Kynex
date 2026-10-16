@@ -745,6 +745,25 @@ not change the session's scene.
     the commands, and **신호 대기** or a **만약/반복** condition waits on
     or tests the signals. Each signal can be wired to the controller's I/O
     and to a PLC like a machine's.
+- **Process flow** (as Visual Components' process modelling;
+  `apps/kynex/src/cell/flow.rs`). Library group **공정 흐름**: 소재 공급,
+  공정 스테이션, 버퍼, 배출. Any object can take these roles too.
+  - 소재 공급 puts a part in every 공급 간격, as long as the place it sends
+    to has room. 공정 스테이션 works on a part for its 처리 시간; with
+    투입 수 above 1 it assembles, with 배출 수 above 1 it disassembles.
+    버퍼 holds up to its 용량 in turn. 배출 counts parts and takes each
+    one's lead time from its 소재 공급.
+  - **다음 공정** in the inspector sets where each one sends its parts. A
+    part goes to the first with room, taking turns, at the sender's 이송
+    속도. A station holds what it made until there is room ahead, and
+    starts nothing meanwhile (blocked). Blue arrows in the scene show the
+    routing.
+  - In the timeline panel, **공정 흐름 ▶ 실행 / ■ 정지 / ⟲ 초기화** runs
+    the flow on the simulation clock, at the robot panel's 배속. The bar
+    shows parts out, parts an hour, parts in process and lead time (mean,
+    least, most). Each station gets a lane in the timeline: working,
+    blocked, idle, and its utilization. Robot programs can run alongside.
+- **A robot on a track**
 - **A robot on a track** (ABB IRB 1600 + 주행 트랙: 3 m of travel, 1.6
   m/s): the track is its first joint, jogged and solved with the arm. On
   a line or an arc the track goes evenly from end to end, as the

@@ -182,10 +182,25 @@ pub enum Kind {
     /// to retract, over `door` seconds — a stopper, a lifter, a shuttle, a
     /// rotary table. Raised across a belt, it holds the parts behind it.
     Actuator,
+    /// Where parts come into a process flow: one every `feed` seconds, as
+    /// long as its way out (`capacity`) has room (see `flow`).
+    Source,
+    /// A step of a process flow: `takes` parts in (more than one, an
+    /// assembly), `cycle` seconds, `makes` parts out (more than one, a
+    /// disassembly); `capacity` parts may wait for it.
+    Station,
+    /// Parts kept in turn, `capacity` of them, on their way.
+    Buffer,
+    /// Where parts leave a process flow, counted, their lead time taken.
+    Sink,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 14] = [
+    pub const ALL: [Kind; 18] = [
+        Kind::Source,
+        Kind::Station,
+        Kind::Buffer,
+        Kind::Sink,
         Kind::Sensor,
         Kind::Actuator,
         Kind::Amr,
@@ -218,6 +233,10 @@ impl Kind {
             Kind::Connector => "connector",
             Kind::Sensor => "sensor",
             Kind::Actuator => "actuator",
+            Kind::Source => "source",
+            Kind::Station => "station",
+            Kind::Buffer => "buffer",
+            Kind::Sink => "sink",
         }
     }
 
@@ -232,6 +251,14 @@ impl Kind {
     /// A machine a robot tends: a door, a cycle, a part inside.
     pub fn machine(self) -> bool {
         matches!(self, Kind::Cnc | Kind::Molder)
+    }
+
+    /// A part of a process flow: parts go from one to the next.
+    pub fn flow(self) -> bool {
+        matches!(
+            self,
+            Kind::Source | Kind::Station | Kind::Buffer | Kind::Sink
+        )
     }
 }
 
@@ -270,6 +297,11 @@ pub struct Props {
     pub point: [f64; 3],
     /// Connector: what it takes (see [`PLUGS`]).
     pub plug: u32,
+    /// Process flow: how many parts may wait (a source's and a buffer's,
+    /// how many it holds); how many a station takes and makes a cycle.
+    pub capacity: u32,
+    pub takes: u32,
+    pub makes: u32,
 }
 
 /// What a connector takes, by its number: a robot standing on it, a
@@ -297,6 +329,9 @@ impl Default for Props {
             angle: std::f64::consts::FRAC_PI_2,
             point: [0.0; 3],
             plug: 0,
+            capacity: 1,
+            takes: 1,
+            makes: 1,
         }
     }
 }
@@ -332,6 +367,23 @@ impl Props {
                 door: 1.0,
                 axis: 2,
                 travel: 0.1,
+                ..Self::default()
+            },
+            // A part a minute in; a minute's work; ten kept; parts carried
+            // on at a walk.
+            Kind::Source => Self {
+                feed: 60.0,
+                speed: 1.0,
+                ..Self::default()
+            },
+            Kind::Station => Self {
+                cycle: 60.0,
+                speed: 1.0,
+                ..Self::default()
+            },
+            Kind::Buffer => Self {
+                capacity: 10,
+                speed: 1.0,
                 ..Self::default()
             },
             _ => Self::default(),
@@ -378,6 +430,14 @@ impl Props {
         self.plug = v["plug"]
             .as_f64()
             .map_or(self.plug, |x| x.clamp(0.0, (PLUGS.len() - 1) as f64) as u32);
+        let few = |key: &str, now: u32, most: u32| {
+            v[key]
+                .as_f64()
+                .map_or(now, |x| x.clamp(1.0, most as f64) as u32)
+        };
+        self.capacity = few("capacity", self.capacity, 1000);
+        self.takes = few("takes", self.takes, 20);
+        self.makes = few("makes", self.makes, 20);
     }
 
     fn to_json(self) -> Value {
@@ -398,6 +458,9 @@ impl Props {
             "angle": self.angle,
             "point": self.point,
             "plug": self.plug,
+            "capacity": self.capacity,
+            "takes": self.takes,
+            "makes": self.makes,
         })
     }
 }
@@ -507,6 +570,10 @@ pub struct Part {
     pub finished: bool,
     /// The grip point holding it, and where it sits from there.
     pub held: Option<(u64, DAffine3)>,
+    /// When it came into the cell, on the simulation's clock.
+    pub born: f64,
+    /// Where it is in a process flow, if it is in one (see `flow`).
+    pub flow: Option<flow::Place>,
 }
 
 impl Part {
@@ -686,6 +753,12 @@ pub struct Cell {
     signal_last: BTreeMap<String, i64>,
     /// Each AMR following a real one: how its feed is getting on.
     follows: BTreeMap<u64, Value>,
+    /// The process flow: where each of its parts goes next, how each
+    /// stands, whether it runs (see `flow`).
+    flow_next: BTreeMap<u64, Vec<u64>>,
+    stations: BTreeMap<u64, flow::Station>,
+    flow_on: bool,
+    flow_stats: flow::Stats,
 }
 
 /// A signal the cell shares with a PLC besides its machines' commands and
@@ -999,6 +1072,13 @@ impl Cell {
                     .and_then(|(id, _)| doc.object_uid(id))
                     .map(|u| u.raw())
             });
+            if let (Some(object), Some(next)) = (found, saved["next"].as_array()) {
+                let next: Vec<u64> = next
+                    .iter()
+                    .filter_map(|n| n.as_str().and_then(|s| s.parse().ok()))
+                    .collect();
+                self.flow_next.insert(object, next);
+            }
             match (found, kind) {
                 (Some(object), Some(kind))
                     if !self.components.iter().any(|c| c.object == object) =>
@@ -1068,6 +1148,9 @@ impl Cell {
                     "io": c.io,
                     "plc": c.plc,
                     "mirror": c.mirror.as_ref().map(crate::mtconnect::Source::to_json),
+                    "next": self.flow_next.get(&c.object).map(|n| {
+                        n.iter().map(u64::to_string).collect::<Vec<_>>()
+                    }),
                 })
             })
             .chain(self.pending.iter().cloned())
@@ -1521,6 +1604,8 @@ impl Cell {
             world: DAffine3::from_translation(at),
             finished,
             held: None,
+            born: self.last_tick.unwrap_or(0.0),
+            flow: None,
         });
         self.changed = true;
     }
@@ -1820,6 +1905,18 @@ impl Cell {
             }
             // The PLC signal table, whole.
             "signals" => self.set_signals(&req["signals"])?,
+            // The process flow: started, stopped, reset; where a part of it
+            // sends its parts.
+            "flow" => self.flow(req["action"].as_str().unwrap_or(""))?,
+            "flow_next" => {
+                let next = req["next"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| n.as_str().and_then(|s| s.parse::<u64>().ok()))
+                    .collect();
+                self.set_flow_next(uid("object")?, next)?;
+            }
             "grip" => self.grip(doc, uid("gripper")?)?,
             "release" => self.release(doc, uid("gripper")?)?,
             // A machine's door dragged to `open` (0 shut, 1 open), as it is
@@ -2474,7 +2571,8 @@ impl Cell {
 
     /// Whether anything is moving or running: the loop then keeps time.
     pub fn is_running(&self) -> bool {
-        self.conveying
+        self.flow_on
+            || self.conveying
             || self.rovers.values().any(|r| !r.legs.is_empty())
             || self
                 .components
@@ -2618,6 +2716,9 @@ impl Cell {
                 }
             }
         }
+        let (flowed, flow_changed) = self.flow_step(doc, dt);
+        moving |= flowed;
+        finished |= flow_changed;
         let (carried, arrived) = self.convey(doc, dt);
         self.conveying = carried;
         let (driven, stopped) = self.drive_on(doc, dt);
@@ -2919,7 +3020,7 @@ impl Cell {
                 .parts
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| p.held.is_none())
+                .filter(|(_, p)| p.held.is_none() && p.flow.is_none())
                 .filter_map(|(i, p)| belt.along_of(p).map(|x| (i, x)))
                 .collect();
             on.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -3002,6 +3103,7 @@ impl Cell {
                 };
                 (c.object, c.name.clone(), activity)
             })
+            .chain(self.flow_activities())
             .chain(
                 self.components
                     .iter()
@@ -3317,6 +3419,7 @@ impl Cell {
                             "angle": self.turned(doc, c),
                         })
                     }),
+                    "flow": c.kind.flow().then(|| self.flow_json(doc, c)),
                     "sensor": (c.kind == Kind::Sensor).then(|| {
                         let beam = Self::beam(doc, c);
                         json!({
@@ -3363,6 +3466,7 @@ impl Cell {
             })
             .collect();
         json!({
+            "flow": self.flow_summary(),
             "components": components,
             "signals": self.signals.iter().map(|s| {
                 let mut v = s.to_json();
@@ -3453,8 +3557,12 @@ pub fn is_op(op: &str) -> bool {
             | "plc"
             | "signals"
             | "mirror"
+            | "flow"
+            | "flow_next"
     )
 }
+
+mod flow;
 
 #[cfg(test)]
 mod tests {

@@ -207,6 +207,12 @@
         <button class="icon-btn small" id="tl-close" aria-label="타임라인 닫기"><svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
       </div>
       <div class="tl-view" id="tl-view-timeline">
+        <div class="sc-bar flow-bar" id="flow-bar" hidden>
+          <span class="section-title">공정 흐름</span>
+          <button class="chip-btn" id="flow-run" title="소재 공급·공정·버퍼·배출 역할의 흐름을 시뮬레이션 시계로 돌립니다">▶ 실행</button>
+          <button class="chip-btn" id="flow-reset" title="흐름의 부품을 모두 치우고 통계를 지웁니다">⟲ 초기화</button>
+          <span class="muted num" id="flow-state"></span>
+        </div>
         <div class="tl-lanes" id="tl-lanes"></div>
         <div class="tl-legend" id="tl-legend"></div>
       </div>

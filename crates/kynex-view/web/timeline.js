@@ -106,6 +106,12 @@ export class TimelinePanel {
       win.document.close();
     });
     document.getElementById('sc-csv').addEventListener('click', () => this.scenariosCsv());
+    // The process flow: run, stop, reset.
+    this.flowState = null;
+    document.getElementById('flow-run').addEventListener('click', () =>
+      this.flowOp(this.flowState?.on ? 'stop' : 'start'),
+    );
+    document.getElementById('flow-reset').addEventListener('click', () => this.flowOp('reset'));
     document.getElementById('tl-legend').innerHTML = Object.entries(ACTIVITIES)
       .map(([, [label, color]]) => `<span><i style="background:${color}"></i>${label}</span>`)
       .join('');
@@ -184,6 +190,27 @@ export class TimelinePanel {
   setTimeline(data) {
     this.data = data;
     if (!this.box.hidden) this.render();
+  }
+
+  async flowOp(action) {
+    try {
+      const answer = await post({ op: 'flow', action });
+      if (!answer.ok) this.ctx.toast(answer.error || '요청을 처리하지 못했습니다');
+    } catch (err) {
+      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+    }
+  }
+
+  // The `cell` event's process flow: shown when the cell has one.
+  setFlow(cell) {
+    const any = (cell.components ?? []).some((c) => c.flow);
+    const f = cell.flow;
+    this.flowState = f;
+    document.getElementById('flow-bar').hidden = !any;
+    if (!any || !f) return;
+    document.getElementById('flow-run').textContent = f.on ? '■ 정지' : '▶ 실행';
+    const lead = f.lead_mean != null ? ` · 리드타임 평균 ${f.lead_mean.toFixed(1)} s (최소 ${f.lead_min.toFixed(1)}, 최대 ${f.lead_max.toFixed(1)})` : '';
+    document.getElementById('flow-state').textContent = `배출 ${f.sunk}개 · 시간당 ${f.per_hour.toFixed(1)}개 · 공정 중 ${f.wip}개${lead}`;
   }
 
   // The scenarios compared, as CSV.

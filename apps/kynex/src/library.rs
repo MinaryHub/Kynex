@@ -45,6 +45,9 @@ pub struct Param {
     pub max: f64,
     /// A choice rather than a size: what each number names.
     pub choices: &'static [&'static str],
+    /// What it is in: `m` a length (shown in millimetres), or as shown —
+    /// `s`, `°`, `개`.
+    pub unit: &'static str,
 }
 
 /// A kind of equipment.
@@ -63,6 +66,27 @@ const fn p(key: &'static str, label: &'static str, default: f64, min: f64, max: 
         min,
         max,
         choices: &[],
+        unit: "m",
+    }
+}
+
+/// A parameter that is not a length: in `unit`, shown as it is.
+const fn q(
+    key: &'static str,
+    label: &'static str,
+    default: f64,
+    min: f64,
+    max: f64,
+    unit: &'static str,
+) -> Param {
+    Param {
+        key,
+        label,
+        default,
+        min,
+        max,
+        choices: &[],
+        unit,
     }
 }
 
@@ -86,6 +110,7 @@ const fn tool(default: usize) -> Param {
         min: 0.0,
         max: (TOOLS.len() - 1) as f64,
         choices: TOOLS,
+        unit: "",
     }
 }
 
@@ -227,6 +252,36 @@ pub const TEMPLATES: &[Template] = &[
         ],
     },
     Template {
+        key: "flow_source",
+        name: "소재 공급",
+        group: "공정 흐름",
+        params: &[q("feed", "공급 간격", 30.0, 1.0, 3600.0, "s")],
+    },
+    Template {
+        key: "flow_station",
+        name: "공정 스테이션",
+        group: "공정 흐름",
+        // A workbench: one part in, a cycle, one out — more for an assembly
+        // or a disassembly.
+        params: &[
+            q("cycle", "처리 시간", 45.0, 1.0, 36000.0, "s"),
+            q("takes", "투입 수", 1.0, 1.0, 20.0, "개"),
+            q("makes", "배출 수", 1.0, 1.0, 20.0, "개"),
+        ],
+    },
+    Template {
+        key: "flow_buffer",
+        name: "버퍼",
+        group: "공정 흐름",
+        params: &[q("capacity", "용량", 10.0, 1.0, 1000.0, "개")],
+    },
+    Template {
+        key: "flow_sink",
+        name: "배출",
+        group: "공정 흐름",
+        params: &[],
+    },
+    Template {
         key: "photo_sensor",
         name: "포토센서",
         group: "센서·동작축",
@@ -244,7 +299,7 @@ pub const TEMPLATES: &[Template] = &[
         params: &[
             p("height", "벨트 높이", 0.8, 0.3, 1.5),
             p("stroke", "행정", 0.04, 0.01, 0.2),
-            p("time", "동작 시간", 0.3, 0.05, 10.0),
+            q("time", "동작 시간", 0.3, 0.05, 10.0, "s"),
         ],
     },
     Template {
@@ -256,7 +311,7 @@ pub const TEMPLATES: &[Template] = &[
             p("height", "테이블 높이", 0.8, 0.2, 1.5),
             p("size", "테이블 크기", 0.5, 0.2, 1.5),
             p("stroke", "행정", 0.3, 0.02, 1.5),
-            p("time", "동작 시간", 2.0, 0.1, 30.0),
+            q("time", "동작 시간", 2.0, 0.1, 30.0, "s"),
         ],
     },
     Template {
@@ -268,7 +323,7 @@ pub const TEMPLATES: &[Template] = &[
             p("length", "레일 길이", 1.2, 0.3, 6.0),
             p("height", "캐리지 높이", 0.8, 0.2, 1.5),
             p("stroke", "행정", 0.8, 0.05, 5.5),
-            p("time", "동작 시간", 2.0, 0.1, 30.0),
+            q("time", "동작 시간", 2.0, 0.1, 30.0, "s"),
         ],
     },
     Template {
@@ -278,8 +333,8 @@ pub const TEMPLATES: &[Template] = &[
         params: &[
             p("diameter", "지름", 0.6, 0.2, 2.0),
             p("height", "높이", 0.8, 0.2, 1.5),
-            p("angle", "회전 각도(°)", 180.0, -360.0, 360.0),
-            p("time", "동작 시간", 1.5, 0.1, 30.0),
+            q("angle", "회전 각도", 180.0, -360.0, 360.0, "°"),
+            q("time", "동작 시간", 1.5, 0.1, 30.0, "s"),
         ],
     },
     Template {
@@ -1142,6 +1197,11 @@ impl Library {
                     item.params.insert(k, v);
                 }
                 self.items[at] = item.clone();
+                // Settings the template gives its roles — a station's time, a
+                // stopper's stroke — follow its parameters.
+                if let Ok(built) = self.made(&item) {
+                    roles.props.extend(role_props(&item, built));
+                }
                 // Made again, an identity may name another object now: a
                 // grip point where a tool's working point is. Its role goes.
                 if let (Ok(before), Ok(after)) =
@@ -1398,7 +1458,7 @@ impl Library {
                 "name": t.name,
                 "group": t.group,
                 "params": t.params.iter().map(|p| json!({
-                    "key": p.key, "label": p.label, "default": p.default, "min": p.min, "max": p.max, "choices": p.choices,
+                    "key": p.key, "label": p.label, "default": p.default, "min": p.min, "max": p.max, "choices": p.choices, "unit": p.unit,
                 })).collect::<Vec<_>>(),
             })).chain(self.customs.iter().map(|c| json!({
                 "key": c.key,
@@ -1484,7 +1544,17 @@ fn role_uids(item: &Item, built: &Built) -> Vec<(u64, String, Kind)> {
         .filter_map(|(id, kind)| {
             // A machine, an AMR, a stop is the item as a whole: its root,
             // under its name.
-            if matches!(kind, Kind::Cnc | Kind::Molder | Kind::Amr | Kind::Stop) {
+            if matches!(
+                kind,
+                Kind::Cnc
+                    | Kind::Molder
+                    | Kind::Amr
+                    | Kind::Stop
+                    | Kind::Source
+                    | Kind::Station
+                    | Kind::Buffer
+                    | Kind::Sink
+            ) {
                 return Some((item.root_uid(), item.name.clone(), *kind));
             }
             let k = built.order.iter().position(|o| o == id)? as u64;
@@ -1820,6 +1890,36 @@ fn build(item: &Item) -> Result<Built, String> {
             let c = Colours::new(&mut doc);
             let positioner = turntable(&mut doc, &c, item.param("diameter"), item.param("height"));
             roles.push((positioner, Kind::Positioner));
+        }
+        "flow_source" | "flow_station" | "flow_buffer" | "flow_sink" => {
+            let c = Colours::new(&mut doc);
+            // A table of its own size and colour; its top where parts stand.
+            let (name, size, colour, kind) = match item.template.as_str() {
+                "flow_source" => ("source", [0.6, 0.6, 0.8], c.accent, Kind::Source),
+                "flow_station" => ("station", [1.0, 0.8, 0.9], c.machine, Kind::Station),
+                "flow_buffer" => ("buffer", [1.2, 0.5, 0.6], c.pallet, Kind::Buffer),
+                _ => ("sink", [0.6, 0.6, 0.7], c.dark, Kind::Sink),
+            };
+            let table = block(
+                &mut doc,
+                name,
+                size,
+                [0.0, 0.0, size[2] / 2.0],
+                colour,
+                None,
+            );
+            roles.push((table, kind));
+            let settings = match kind {
+                Kind::Source => json!({ "feed": item.param("feed") }),
+                Kind::Station => json!({
+                    "cycle": item.param("cycle"),
+                    "takes": item.param("takes"),
+                    "makes": item.param("makes"),
+                }),
+                Kind::Buffer => json!({ "capacity": item.param("capacity") }),
+                _ => json!({}),
+            };
+            props.push((table, settings));
         }
         "photo_sensor" => {
             let c = Colours::new(&mut doc);

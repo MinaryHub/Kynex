@@ -591,6 +591,10 @@ export class LibraryPanel {
           const options = p.choices.map((name, i) => `<option value="${i}"${i === Math.round(v) ? ' selected' : ''}>${escapeHtml(name)}</option>`).join('');
           return `<label class="insp-field">${escapeHtml(p.label)}<select data-param="${p.key}" data-choice>${options}</select></label>`;
         }
+        // A length in millimetres; a time, an angle or a count as it is.
+        if (p.unit && p.unit !== 'm') {
+          return `<label class="insp-field">${escapeHtml(p.label)}<input type="number" class="num" data-param="${p.key}" data-scale="1" value="${Math.round(v * 100) / 100}" min="${p.min}" max="${p.max}" step="${p.unit === '개' ? 1 : p.unit === '°' ? 15 : 1}"><span>${escapeHtml(p.unit)}</span></label>`;
+        }
         return `<label class="insp-field">${escapeHtml(p.label)}<input type="number" class="num" data-param="${p.key}" value="${Math.round(v * 1000)}" min="${Math.round(p.min * 1000)}" max="${Math.round(p.max * 1000)}" step="10"><span>mm</span></label>`;
       })
       .join('');
@@ -757,7 +761,7 @@ export class LibraryPanel {
     } else if (e.target.dataset.yaw !== undefined) {
       this.move(item.id, item.at, rad(v));
     } else if (e.target.dataset.param) {
-      const scale = e.target.dataset.choice !== undefined ? 1 : 1000;
+      const scale = e.target.dataset.choice !== undefined || e.target.dataset.scale === '1' ? 1 : 1000;
       this.send({ op: 'resize', item: item.id, params: { [e.target.dataset.param]: v / scale } });
     }
   }

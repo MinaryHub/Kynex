@@ -150,7 +150,7 @@ impl Runner {
 
     /// The step after where block step `self.step` leads.
     fn past(&self) -> usize {
-        self.jumps[self.step].map_or(self.step, |j| j) + 1
+        self.jumps[self.step].unwrap_or(self.step) + 1
     }
 
     /// Whether its program runs round and round.

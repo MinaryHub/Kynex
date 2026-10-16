@@ -242,6 +242,14 @@ pub fn run_with(
     }
 }
 
+/// A model being read: where it comes when read, where its answer goes,
+/// and whether it is placed where it stood in its file.
+type Importing = (
+    Receiver<Result<crate::import::Imported, String>>,
+    std::sync::mpsc::Sender<String>,
+    bool,
+);
+
 /// What KYNEX adds to the session's scene: placed equipment, robots posed
 /// and their programs, the cell's roles and its parts, and the collision
 /// check over them all.
@@ -294,12 +302,7 @@ struct Stage {
     /// The project file held for this KYNEX while it is open.
     _lock: Option<std::fs::File>,
     /// Models being read, each with where its answer goes.
-    /// Whether each is placed where it stood in its file.
-    importing: Vec<(
-        Receiver<Result<crate::import::Imported, String>>,
-        std::sync::mpsc::Sender<String>,
-        bool,
-    )>,
+    importing: Vec<Importing>,
 }
 
 /// The project as it was before each edit, to go back to, and as it was
@@ -539,10 +542,21 @@ impl Stage {
                 // robot and no gripper — is the posing's, below.)
                 let scene = self.base.as_ref().unwrap_or(doc);
                 let posed = self.posing.shown(scene);
+                let flowing = self.cell.flow_running();
                 let reply = self
                     .cell
                     .handle(posed.as_ref().unwrap_or(scene), &request.body);
                 touched |= self.cell.take_changed();
+                // A process flow started with nothing else running: a new
+                // record of it.
+                if op == "flow"
+                    && !flowing
+                    && self.cell.flow_running()
+                    && !self.runners.iter().any(|r| !r.stopped())
+                {
+                    self.timeline = Some(Timeline::new(self.clock.time));
+                    self.timeline_told = None;
+                }
                 reply
             } else {
                 let scene = self.base.as_ref().unwrap_or(doc);
@@ -684,7 +698,12 @@ impl Stage {
             }
         }
         // While a run goes on, the timeline grows with it.
-        if let Some(timeline) = self.timeline.as_mut().filter(|_| !self.runners.is_empty()) {
+        let flowing = self.cell.flow_running();
+        if let Some(timeline) = self
+            .timeline
+            .as_mut()
+            .filter(|_| !self.runners.is_empty() || flowing)
+        {
             // The tick the last run stops on is recorded too: an alarm shows.
             if !timeline.ended() {
                 let mut lanes: Vec<Now> = self
@@ -706,7 +725,7 @@ impl Stage {
                     },
                 ));
                 timeline.sample(time, lanes);
-                if self.runners.iter().all(|r| r.stopped()) {
+                if self.runners.iter().all(|r| r.stopped()) && !flowing {
                     timeline.end();
                 }
             }
@@ -1521,6 +1540,7 @@ fn undoable(op: &str) -> bool {
     !matches!(
         op,
         "" | "play"
+            | "flow"
             | "follow"
             | "stop"
             | "speed"

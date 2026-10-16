@@ -193,10 +193,14 @@ pub enum Kind {
     Buffer,
     /// Where parts leave a process flow, counted, their lead time taken.
     Sink,
+    /// A person: walks (`speed`) to the stations that need one and works
+    /// there, and carries parts by hand (see `fleet`).
+    Operator,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 18] = [
+    pub const ALL: [Kind; 19] = [
+        Kind::Operator,
         Kind::Source,
         Kind::Station,
         Kind::Buffer,
@@ -237,6 +241,7 @@ impl Kind {
             Kind::Station => "station",
             Kind::Buffer => "buffer",
             Kind::Sink => "sink",
+            Kind::Operator => "operator",
         }
     }
 
@@ -297,9 +302,11 @@ pub struct Props {
     pub point: [f64; 3],
     /// Connector: what it takes (see [`PLUGS`]).
     pub plug: u32,
-    /// Process flow: how a part is sent on: straight there (0), or by AMR
-    /// (1, see `fleet`).
+    /// Process flow: how a part is sent on: straight there (0), by AMR
+    /// (1) or by an operator (2, see `fleet`); and whether a station needs
+    /// an operator at it to work (1).
     pub carrier: u32,
+    pub crew: u32,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -333,6 +340,7 @@ impl Default for Props {
             point: [0.0; 3],
             plug: 0,
             carrier: 0,
+            crew: 0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -390,6 +398,11 @@ impl Props {
                 speed: 1.0,
                 ..Self::default()
             },
+            // A walk on a shop floor, a little over 1 m/s.
+            Kind::Operator => Self {
+                speed: 1.2,
+                ..Self::default()
+            },
             _ => Self::default(),
         }
     }
@@ -442,7 +455,10 @@ impl Props {
         self.capacity = few("capacity", self.capacity, 1000);
         self.carrier = v["carrier"]
             .as_f64()
-            .map_or(self.carrier, |x| if x > 0.5 { 1 } else { 0 });
+            .map_or(self.carrier, |x| x.round().clamp(0.0, 2.0) as u32);
+        self.crew = v["crew"]
+            .as_f64()
+            .map_or(self.crew, |x| if x > 0.5 { 1 } else { 0 });
         self.takes = few("takes", self.takes, 20);
         self.makes = few("makes", self.makes, 20);
     }
@@ -467,6 +483,7 @@ impl Props {
             "plug": self.plug,
             "capacity": self.capacity,
             "carrier": self.carrier,
+            "crew": self.crew,
             "takes": self.takes,
             "makes": self.makes,
         })
@@ -919,6 +936,8 @@ enum Leg {
     /// Drive straight to stop `0`, once no other AMR holds it (see
     /// `fleet`).
     Via(u64),
+    /// Walk straight here: a person, who goes round others.
+    Walk(DVec3),
 }
 
 /// How fast an AMR turns on the spot, radians a second.
@@ -2203,7 +2222,7 @@ impl Cell {
         let Some(c) = self.components.iter().find(|c| c.object == machine) else {
             return false;
         };
-        if matches!(c.kind, Kind::Amr | Kind::Positioner) {
+        if matches!(c.kind, Kind::Amr | Kind::Positioner | Kind::Operator) {
             return signal == Signal::Arrived
                 && self.rovers.get(&machine).is_none_or(|r| r.legs.is_empty());
         }
@@ -2845,7 +2864,7 @@ impl Cell {
             .components
             .iter()
             .filter(|c| {
-                matches!(c.kind, Kind::Amr | Kind::Positioner)
+                matches!(c.kind, Kind::Amr | Kind::Positioner | Kind::Operator)
                     && self
                         .rovers
                         .get(&c.object)
@@ -2865,10 +2884,11 @@ impl Cell {
                 };
                 match leg {
                     Leg::Turn(to) => {
-                        let rate = if c.kind == Kind::Positioner {
-                            c.props.speed.max(1e-6)
-                        } else {
-                            AMR_TURN
+                        let rate = match c.kind {
+                            Kind::Positioner => c.props.speed.max(1e-6),
+                            // A person turns round in a second.
+                            Kind::Operator => 3.0,
+                            _ => AMR_TURN,
                         };
                         let need = turn_between(r.yaw, to);
                         let can = rate * left;
@@ -2878,6 +2898,19 @@ impl Cell {
                             r.legs.remove(0);
                         } else {
                             r.yaw += can * need.signum();
+                            left = 0.0;
+                        }
+                    }
+                    Leg::Walk(to) => {
+                        let to = DVec3::new(to.x, to.y, r.at.z);
+                        let need = to.distance(r.at);
+                        let can = c.props.speed.max(0.01) * left;
+                        if need <= can {
+                            r.at = to;
+                            left -= need / c.props.speed.max(0.01);
+                            r.legs.remove(0);
+                        } else {
+                            r.at += (to - r.at) / need * can;
                             left = 0.0;
                         }
                     }
@@ -3149,6 +3182,7 @@ impl Cell {
                 (c.object, c.name.clone(), activity)
             })
             .chain(self.flow_activities())
+            .chain(self.operator_activities())
             .chain(
                 self.components
                     .iter()
@@ -3184,7 +3218,7 @@ impl Cell {
         for c in self
             .components
             .iter()
-            .filter(|c| matches!(c.kind, Kind::Amr | Kind::Positioner))
+            .filter(|c| matches!(c.kind, Kind::Amr | Kind::Positioner | Kind::Operator))
         {
             let (Some(r), Some(id)) = (self.rovers.get(&c.object), id_of(doc, c.object)) else {
                 continue;

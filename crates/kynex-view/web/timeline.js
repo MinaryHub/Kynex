@@ -47,6 +47,8 @@ const ACTIVITIES = {
   door: ['문 개폐', '#7d8fa6'],
   blocked: ['언로드 대기', '#e0a43a'],
   drive: ['주행', '#9b7bff'],
+  walk: ['보행', '#c08bff'],
+  work: ['작업', '#2fbfa0'],
   idle: ['쉼', '#2f353f'],
 };
 
@@ -210,7 +212,7 @@ export class TimelinePanel {
     if (!any || !f) return;
     document.getElementById('flow-run').textContent = f.on ? '■ 정지' : '▶ 실행';
     const lead = f.lead_mean != null ? ` · 리드타임 평균 ${f.lead_mean.toFixed(1)} s (최소 ${f.lead_min.toFixed(1)}, 최대 ${f.lead_max.toFixed(1)})` : '';
-    const amr = f.carrying ? ` · AMR 운반 ${f.carrying}건` : '';
+    const amr = f.carrying ? ` · 운반 ${f.carrying}건` : '';
     const problem = f.problem ? ` · ⚠ ${f.problem}` : '';
     document.getElementById('flow-state').textContent = `배출 ${f.sunk}개 · 시간당 ${f.per_hour.toFixed(1)}개 · 공정 중 ${f.wip}개${amr}${lead}${problem}`;
   }
@@ -299,8 +301,8 @@ export class TimelinePanel {
         const s = l.shares;
         const share =
           l.group === 'machine'
-            ? s.drive != null || s.turn != null
-              ? `가동률 <b>${pct((s.drive || 0) + (s.turn || 0))}</b>`
+            ? s.drive != null || s.turn != null || s.walk != null || s.work != null
+              ? `가동률 <b>${pct((s.drive || 0) + (s.turn || 0) + (s.walk || 0) + (s.work || 0))}</b>`
               : `가동률 <b>${pct(s.cut)}</b>`
             : `작업 <b>${pct((s.move || 0) + (s.grip || 0))}</b> · 대기 ${pct((s.wait || 0) + (s.pause || 0))}`;
         return `<div class="tl-lane"><span class="tl-name" title="${escapeHtml(l.name)}">${escapeHtml(l.name)}</span><div class="tl-track">${bars}</div><span class="tl-share">${share}</span></div>`;

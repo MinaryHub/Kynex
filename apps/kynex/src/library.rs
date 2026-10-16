@@ -282,6 +282,12 @@ pub const TEMPLATES: &[Template] = &[
         params: &[],
     },
     Template {
+        key: "operator",
+        name: "작업자",
+        group: "공정 흐름",
+        params: &[q("speed", "걷는 속도", 1.2, 0.2, 3.0, "m/s")],
+    },
+    Template {
         key: "photo_sensor",
         name: "포토센서",
         group: "센서·동작축",
@@ -1554,6 +1560,7 @@ fn role_uids(item: &Item, built: &Built) -> Vec<(u64, String, Kind)> {
                     | Kind::Station
                     | Kind::Buffer
                     | Kind::Sink
+                    | Kind::Operator
             ) {
                 return Some((item.root_uid(), item.name.clone(), *kind));
             }
@@ -1890,6 +1897,24 @@ fn build(item: &Item) -> Result<Built, String> {
             let c = Colours::new(&mut doc);
             let positioner = turntable(&mut doc, &c, item.param("diameter"), item.param("height"));
             roles.push((positioner, Kind::Positioner));
+        }
+        "operator" => {
+            let c = Colours::new(&mut doc);
+            // A person, 1.75 m: body and head, facing +X.
+            let person = doc.add_object(Object::new("operator", ObjectData::Empty));
+            let m = Some(person);
+            post(&mut doc, "body", 0.2, 1.45, [0.0, 0.0, 0.725], c.accent, m);
+            post(&mut doc, "head", 0.12, 0.22, [0.0, 0.0, 1.6], c.body, m);
+            block(
+                &mut doc,
+                "front",
+                [0.12, 0.16, 0.08],
+                [0.18, 0.0, 1.3],
+                c.dark,
+                m,
+            );
+            roles.push((person, Kind::Operator));
+            props.push((person, json!({ "speed": item.param("speed") })));
         }
         "flow_source" | "flow_station" | "flow_buffer" | "flow_sink" => {
             let c = Colours::new(&mut doc);

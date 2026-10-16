@@ -163,3 +163,69 @@ fn a_flow_sends_its_parts_by_amr() {
     assert!(s["sunk"].as_u64().unwrap() >= 1, "{s}");
     assert!(s["problem"].is_null(), "{s}");
 }
+
+#[test]
+fn a_station_that_needs_a_person_waits_for_one_to_walk_to_it() {
+    // One person, 6 m away; a manned station; a part every 30 s.
+    let (doc, mut cell, u) = floor(&[
+        ("operator", 0.0, -3.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 30.0})),
+        ("flow_station", 2.0, 0.0, json!({"cycle": 10.0, "crew": 1})),
+        ("flow_sink", 4.0, 0.0, Value::Null),
+    ]);
+    let (person, source, station, sink) = (u[0], u[1], u[2], u[3]);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    // The part there at once; the person on the way, not yet working.
+    let t = run(&mut cell, &doc, 0.0, 2.5);
+    assert_eq!(cell.stations[&station].crew, Some(person));
+    assert!(cell.stations[&station].working.is_none());
+    let walking = cell.operator_activities()[0].2;
+    assert_eq!(walking, "walk");
+    // About 3 m at 1.2 m/s: there and at work by 5 s, done 10 s later.
+    let t = run(&mut cell, &doc, t, 3.5);
+    assert!(cell.stations[&station].working.is_some());
+    assert_eq!(cell.operator_activities()[0].2, "work");
+    run(&mut cell, &doc, t, 12.0);
+    assert_eq!(cell.flow_summary()["sunk"], 1);
+    // Free again where they stand.
+    assert_eq!(cell.stations[&station].crew, None);
+    assert_eq!(cell.operator_activities()[0].2, "idle");
+}
+
+#[test]
+fn a_person_carries_parts_by_hand() {
+    let (doc, mut cell, u) = floor(&[
+        ("operator", 1.0, -2.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 60.0, "carrier": 2})),
+        ("flow_station", 5.0, 0.0, json!({"cycle": 5.0})),
+        ("flow_sink", 7.0, 0.0, Value::Null),
+    ]);
+    let (person, source, station, sink) = (u[0], u[1], u[2], u[3]);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    // Walked over, picked up (2 s): in hand on the way.
+    let t = run(&mut cell, &doc, 0.0, 6.0);
+    let in_hand = cell
+        .parts()
+        .iter()
+        .find(|p| matches!(p.flow, Some(Place::Riding { amr, .. }) if amr == person))
+        .map(|p| p.world.translation);
+    let z = in_hand.expect("a part in hand by 6 s").z;
+    assert!(z > 1.0 && z < 1.2, "at waist height: {z}");
+    run(&mut cell, &doc, t, 20.0);
+    assert_eq!(cell.flow_summary()["sunk"], 1);
+    assert!(cell.flow_summary()["problem"].is_null());
+}

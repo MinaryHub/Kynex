@@ -779,6 +779,19 @@ not change the session's scene.
     where it goes, and unloads for 5 s. The flow bar shows the transports
     in hand and any problem, such as no stop near a station. Each AMR's
     lane in the timeline shows its driving and its utilization.
+- **Operators** (library 공정 흐름 → 작업자, or the role 작업자 on any
+  object). An operator walks at 걷는 속도 (1.2 m/s), straight, and goes
+  round others.
+  - A station with **작업자: 작업자 필요** starts a cycle only once an
+    operator is at it. When a part is ready, the nearest free operator
+    walks to the front of the station, works there for the cycle, and is
+    free again where they stand.
+  - **보내는 방법: 작업자** has the nearest free operator fetch the part,
+    pick it up (2 s), carry it at waist height to the front of where it
+    goes, and put it down (2 s).
+  - Each operator gets a lane in the timeline: 보행, 작업 and idle, and
+    their utilization. An operator always busy is the line's bottleneck.
+- **A robot on a track**
 - **A robot on a track**
 - **A robot on a track**
 - **A robot on a track** (ABB IRB 1600 + 주행 트랙: 3 m of travel, 1.6

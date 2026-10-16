@@ -24,6 +24,12 @@ use super::*;
 /// Seconds to load or unload a part at a stop.
 pub const LOAD: f64 = 5.0;
 
+/// Seconds for a person to pick a part up, or put it down.
+pub const HAND: f64 = 2.0;
+
+/// How far in front of what they work at a person stands, metres.
+const REACH: f64 = 0.6;
+
 /// How far from a flow component the stop it is served at may be, metres.
 const NEAR: f64 = 4.0;
 
@@ -33,8 +39,11 @@ pub struct Job {
     pub part: u64,
     pub from: u64,
     pub to: u64,
+    /// The AMR, or the person, carrying it.
     pub amr: Option<u64>,
     pub phase: Phase,
+    /// How: by AMR (1) or by hand (2), as the sender says.
+    pub by: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -199,6 +208,118 @@ impl Cell {
             })
     }
 
+    /// Where a person stands to work at, or hand a part to, component
+    /// `object`: in front of it, on the floor.
+    fn spot(doc: &Document, c: &Component) -> Option<DVec3> {
+        let (top, _, across) = Self::dock(doc, c)?;
+        let id = id_of(doc, c.object)?;
+        let depth = doc
+            .objects()
+            .filter(|(o, _)| *o == id || is_below(doc, *o, id))
+            .filter_map(|(o, _)| bounds(doc, o))
+            .map(|(lo, hi)| (hi - lo).dot(across).abs())
+            .fold(0.0, f64::max);
+        let front = top - across * (depth / 2.0 + REACH);
+        Some(DVec3::new(front.x, front.y, 0.0))
+    }
+
+    /// A person free: not walking, not working at a station, not carrying.
+    fn free_operators(&self) -> Vec<u64> {
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Operator)
+            .map(|c| c.object)
+            .filter(|o| {
+                !self.jobs.iter().any(|j| j.amr == Some(*o))
+                    && !self.stations.values().any(|s| s.crew == Some(*o))
+                    && self.rovers.get(o).is_none_or(|r| r.legs.is_empty())
+            })
+            .collect()
+    }
+
+    /// Person `who` walks to `to`, then faces `toward`.
+    fn walk(&mut self, doc: &Document, who: u64, to: DVec3, toward: DVec3) -> Option<()> {
+        let c = self.components.iter().find(|c| c.object == who)?.clone();
+        let mut r = self.rover(doc, &c)?;
+        let way = to - r.at;
+        r.legs.clear();
+        if way.truncate().length() > 1e-3 {
+            r.legs.push(Leg::Turn(way.y.atan2(way.x)));
+            r.legs.push(Leg::Walk(to));
+        }
+        let face = toward - to;
+        if face.truncate().length() > 1e-3 {
+            r.legs.push(Leg::Turn(face.y.atan2(face.x)));
+        }
+        self.rovers.insert(who, r);
+        Some(())
+    }
+
+    /// The free person nearest component `object` sent to work at it; who,
+    /// if anyone was free.
+    pub(super) fn call_operator(&mut self, doc: &Document, object: u64) -> Option<u64> {
+        let c = self.components.iter().find(|c| c.object == object)?.clone();
+        let spot = Self::spot(doc, &c)?;
+        let who = self
+            .free_operators()
+            .into_iter()
+            .filter_map(|o| {
+                let oc = self.components.iter().find(|x| x.object == o)?;
+                Some((
+                    o,
+                    self.rover(doc, oc)?.at.truncate().distance(spot.truncate()),
+                ))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))?
+            .0;
+        let toward = Self::dock(doc, &c)?.0;
+        self.walk(doc, who, spot, toward)?;
+        Some(who)
+    }
+
+    /// Sends person `who` to hand component `object` a part, or take one.
+    fn walk_to(&mut self, doc: &Document, who: u64, object: u64) -> Result<(), String> {
+        let c = self
+            .components
+            .iter()
+            .find(|c| c.object == object)
+            .cloned()
+            .ok_or("no such component")?;
+        let spot = Self::spot(doc, &c).ok_or("no place to stand")?;
+        let toward = Self::dock(doc, &c).ok_or("no place to stand")?.0;
+        self.walk(doc, who, spot, toward).ok_or("no such person")?;
+        Ok(())
+    }
+
+    /// What each person is doing, for the timeline: walking, working (at a
+    /// station at work, or handling a part), or idle.
+    pub(super) fn operator_activities(&self) -> Vec<(u64, String, &'static str)> {
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Operator)
+            .map(|c| {
+                let o = c.object;
+                let walking = self.rovers.get(&o).is_some_and(|r| !r.legs.is_empty());
+                let working = self
+                    .stations
+                    .values()
+                    .any(|s| s.crew == Some(o) && s.working.is_some())
+                    || self.jobs.iter().any(|j| {
+                        j.amr == Some(o)
+                            && matches!(j.phase, Phase::Loading(_) | Phase::Unloading(_))
+                    });
+                let a = if walking {
+                    "walk"
+                } else if working {
+                    "work"
+                } else {
+                    "idle"
+                };
+                (o, c.name.clone(), a)
+            })
+            .collect()
+    }
+
     /// Sends AMR `amr` to stop `stop` along the lanes.
     fn send(&mut self, doc: &Document, amr: u64, stop: u64) -> Result<(), String> {
         let c = self
@@ -231,7 +352,44 @@ impl Cell {
         for k in 0..self.jobs.len() {
             let job = self.jobs[k].clone();
             let idle = |cell: &Cell, a: u64| cell.rovers.get(&a).is_none_or(|r| r.legs.is_empty());
+            let hand = job.by == 2;
             let next = match job.phase {
+                // By hand: the free person nearest the sender.
+                Phase::Waiting if hand => {
+                    let near = self
+                        .components
+                        .iter()
+                        .find(|c| c.object == job.from)
+                        .cloned();
+                    let Some(spot) = near.as_ref().and_then(|c| Self::spot(doc, c)) else {
+                        continue;
+                    };
+                    let who = self
+                        .free_operators()
+                        .into_iter()
+                        .filter_map(|o| {
+                            let oc = self.components.iter().find(|x| x.object == o)?;
+                            Some((
+                                o,
+                                self.rover(doc, oc)?.at.truncate().distance(spot.truncate()),
+                            ))
+                        })
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .map(|(o, _)| o);
+                    let Some(who) = who else {
+                        if !self.components.iter().any(|c| c.kind == Kind::Operator) {
+                            self.flow_problem =
+                                Some("작업자가 나르게 했지만 작업자 역할이 없습니다".into());
+                        }
+                        continue;
+                    };
+                    if let Err(e) = self.walk_to(doc, who, job.from) {
+                        self.flow_problem = Some(e);
+                        continue;
+                    }
+                    self.jobs[k].amr = Some(who);
+                    Phase::Fetching
+                }
                 Phase::Waiting => match self.free_amr() {
                     Some(amr) => {
                         let Some(stop) = self.stop_near(doc, job.from) else {
@@ -253,7 +411,9 @@ impl Cell {
                     }
                     None => continue,
                 },
-                Phase::Fetching if idle(self, job.amr.unwrap()) => Phase::Loading(now + LOAD),
+                Phase::Fetching if idle(self, job.amr.unwrap()) => {
+                    Phase::Loading(now + if hand { HAND } else { LOAD })
+                }
                 Phase::Loading(until) if now >= until => {
                     if let Some(i) = self.part_index(job.part) {
                         self.parts[i].flow = Some(Place::Riding {
@@ -261,18 +421,26 @@ impl Cell {
                             to: job.to,
                         });
                     }
-                    let Some(stop) = self.stop_near(doc, job.to) else {
-                        self.flow_problem =
-                            Some("부품을 받을 공정 가까이(4 m)에 AMR 정지 위치가 없습니다".into());
-                        continue;
+                    let sent = if hand {
+                        self.walk_to(doc, job.amr.unwrap(), job.to)
+                    } else {
+                        match self.stop_near(doc, job.to) {
+                            Some(stop) => self.send(doc, job.amr.unwrap(), stop),
+                            None => {
+                                Err("부품을 받을 공정 가까이(4 m)에 AMR 정지 위치가 없습니다"
+                                    .into())
+                            }
+                        }
                     };
-                    if let Err(e) = self.send(doc, job.amr.unwrap(), stop) {
+                    if let Err(e) = sent {
                         self.flow_problem = Some(e);
                         continue;
                     }
                     Phase::Carrying
                 }
-                Phase::Carrying if idle(self, job.amr.unwrap()) => Phase::Unloading(now + LOAD),
+                Phase::Carrying if idle(self, job.amr.unwrap()) => {
+                    Phase::Unloading(now + if hand { HAND } else { LOAD })
+                }
                 Phase::Unloading(until) if now >= until => {
                     // Handed over: arrived where it goes, as a part carried
                     // straight there would.
@@ -296,12 +464,28 @@ impl Cell {
             happened = true;
         }
         self.jobs.retain(|j| j.part != 0);
-        // Parts on board where the AMR's top plate now is.
+        // Parts on board where the AMR's top plate now is; carried by hand,
+        // before the person, at waist height.
+        let people: BTreeMap<u64, DAffine3> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Operator)
+            .filter_map(|c| {
+                let r = self.rover(doc, c)?;
+                Some((c.object, pose_of(r.at, r.yaw)))
+            })
+            .collect();
         for p in &mut self.parts {
             if let Some(Place::Riding { amr, .. }) = &p.flow {
+                let half = p.size().1 / 2.0;
                 if let Some(top) = decks.get(amr) {
-                    let half = p.size().1 / 2.0;
                     p.world = DAffine3::from_translation(top.transform_point3(DVec3::Z * half));
+                } else if let Some(pose) = people.get(amr) {
+                    p.world = DAffine3::from_translation(pose.transform_point3(DVec3::new(
+                        0.35,
+                        0.0,
+                        1.0 + half,
+                    )));
                 }
             }
         }

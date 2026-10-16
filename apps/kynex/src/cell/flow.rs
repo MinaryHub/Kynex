@@ -49,6 +49,8 @@ pub struct Station {
     pub made: u64,
     /// The next of its targets to try first.
     pub turn: usize,
+    /// The operator it has called, who works at it (see `fleet`).
+    pub crew: Option<u64>,
 }
 
 /// What the sinks have seen since the flow started.
@@ -276,6 +278,8 @@ impl Cell {
                 if now >= end {
                     s.working = None;
                     s.made += 1;
+                    // Its operator free again, where they stand.
+                    s.crew = None;
                     happened = true;
                     // The first goes on as the product; the rest are in it.
                     let mut made = Vec::new();
@@ -308,7 +312,21 @@ impl Cell {
                 }
             }
             let takes = c.props.takes.max(1) as usize;
-            if s.working.is_none() && s.out.is_empty() && s.queue.len() >= takes {
+            let ready = s.working.is_none() && s.out.is_empty() && s.queue.len() >= takes;
+            // A station that needs a person works once one is at it: called
+            // if none is, waited for while they walk.
+            let manned = c.props.crew == 0
+                || match s.crew {
+                    Some(op) => self.rovers.get(&op).is_none_or(|r| r.legs.is_empty()),
+                    None => {
+                        if ready {
+                            s.crew = self.call_operator(doc, c.object);
+                            happened |= s.crew.is_some();
+                        }
+                        false
+                    }
+                };
+            if ready && manned {
                 let parts: Vec<u64> = s.queue.drain(..takes).collect();
                 s.working = Some((now + c.props.cycle, parts));
                 happened = true;
@@ -344,8 +362,8 @@ impl Cell {
                     continue;
                 };
                 happened = true;
-                // By AMR: it waits here for one.
-                if c.props.carrier == 1 {
+                // By AMR, or by hand: it waits here for one.
+                if c.props.carrier > 0 {
                     self.parts[i].flow = Some(Place::Waiting {
                         at: c.object,
                         to: target.object,
@@ -356,6 +374,7 @@ impl Cell {
                         to: target.object,
                         amr: None,
                         phase: super::fleet::Phase::Waiting,
+                        by: c.props.carrier,
                     });
                     continue;
                 }

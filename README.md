@@ -583,8 +583,11 @@ round its hinge, as its door role says), a robot's joint about its axis
 (the part dragged turns the joint that moves it). The pointer turns to a
 hand over them, and the view stays still meanwhile. The layout does not
 change: a door is left part open where it is let go (and a cycle will not
-start until it is opened or closed), a robot is posed. **초기 상태로**
-puts what was dragged back: doors shut, robots as placed. Changing where a
+start until it is opened or closed), a robot is posed. As in Visual
+Components, each drag is an edit to undo and redo (Ctrl+Z, Ctrl+Y) with
+the others — and so are a robot jogged, sent to a point or posed by its
+TCP handle; undoing a pose leaves the cell's parts as they are.
+**초기 상태로** puts what was dragged back: doors shut, robots as placed. Changing where a
 part is within its equipment — Visual Components' Modeling — is left to a
 modeling program: the model made there comes in by **모델 가져오기**.
 The inspector sets its position, turn and sizes by number too, and

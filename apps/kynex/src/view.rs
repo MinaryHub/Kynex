@@ -1100,6 +1100,10 @@ impl Stage {
             "cell": self.cell.to_saved(),
             "library": self.library.to_saved(),
             "signals": self.cell.signals_saved(),
+            // As Visual Components' interact: what is dragged by hand undoes
+            // too — robots posed, doors left open.
+            "held": self.posing.held_json(),
+            "doors": self.cell.doors_json(),
         })
     }
 
@@ -1114,10 +1118,13 @@ impl Stage {
         let h = &mut self.history;
         // Only what goes on and on is one edit: a handle dragged, sizes or a
         // step's numbers typed. Two points taught are two.
-        let same = matches!(op, "move" | "move_many" | "resize" | "edit")
-            && h.last
-                .as_ref()
-                .is_some_and(|(k, at)| *k == key && now.duration_since(*at) < ONE_EDIT);
+        let same = matches!(
+            op,
+            "move" | "move_many" | "resize" | "edit" | "jog" | "ik" | "door_to"
+        ) && h
+            .last
+            .as_ref()
+            .is_some_and(|(k, at)| *k == key && now.duration_since(*at) < ONE_EDIT);
         if !same || h.undo.is_empty() {
             h.undo.push((before, edit_label(op)));
             if h.undo.len() > MOST_UNDONE {
@@ -1158,17 +1165,39 @@ impl Stage {
     /// runs stops; the robots stay as posed.
     fn restore(&mut self, doc: &Document, state: &Value) {
         let list = |key: &str| state[key].as_array().cloned().unwrap_or_default();
-        self.runners.clear();
-        self.timeline = None;
-        self.library.restore(&list("library"));
-        self.cell.restore(list("cell"));
-        if let Err(e) = self.cell.set_signals(&state["signals"]) {
-            println!("PLC 신호를 되돌리지 못했습니다: {e}");
+        // Only what differs: a pose undone leaves the cell, its parts in
+        // the machines, as it is.
+        let now = self.snapshot(doc);
+        let differs = |key: &str| state[key] != now[key];
+        if ["library", "cell", "signals", "programs"]
+            .iter()
+            .any(|k| differs(k))
+        {
+            self.runners.clear();
+            self.timeline = None;
+            if differs("library") {
+                self.library.restore(&list("library"));
+            }
+            if differs("cell") || differs("library") {
+                self.cell.restore(list("cell"));
+            }
+            if let Err(e) = self.cell.set_signals(&state["signals"]) {
+                println!("PLC 신호를 되돌리지 못했습니다: {e}");
+            }
+            let actives = self.posing.undo_to(list("programs"));
+            self.replaced(doc);
+            self.posing.set_actives(&actives);
+            self.plc_changed = true;
         }
-        let actives = self.posing.undo_to(list("programs"));
-        self.replaced(doc);
-        self.posing.set_actives(&actives);
-        self.plc_changed = true;
+        if differs("held") || differs("library") || differs("programs") {
+            let scene = self.base.as_ref().unwrap_or(doc);
+            for root in self.posing.set_held(&state["held"]) {
+                crate::pose::mark(scene, root, &mut self.placed);
+            }
+        }
+        if differs("doors") || differs("cell") || differs("library") {
+            self.cell.set_doors(&state["doors"]);
+        }
     }
 
     /// The `history` event: what undoing and redoing would do.
@@ -1312,10 +1341,7 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
 fn undoable(op: &str) -> bool {
     !matches!(
         op,
-        "" | "jog"
-            | "ik"
-            | "goto"
-            | "play"
+        "" | "play"
             | "stop"
             | "speed"
             | "export"
@@ -1359,6 +1385,8 @@ fn edit_label(op: &str) -> &'static str {
         "place" => "장비 놓기",
         "move" | "move_many" => "장비 이동",
         "duplicate" => "장비 복제",
+        "jog" | "ik" | "goto" | "release" => "로봇 자세",
+        "door_to" => "문 열림",
         "import" => "모델 가져오기",
         "lock" => "장비 잠금",
         "rename" => "장비 이름",
@@ -1526,6 +1554,69 @@ mod tests {
             }],
         );
         serde_json::from_str(&answer.recv().unwrap()).unwrap()
+    }
+
+    /// As Visual Components' interact: a robot's joint dragged (many jogs,
+    /// one edit) and a door dragged part open undo and redo like any edit;
+    /// undoing a pose leaves the cell's parts where they are.
+    #[test]
+    fn what_is_dragged_by_hand_is_undone_too() {
+        let dir = std::env::temp_dir().join(format!("kynex-undo-drag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(dir.join("drag.json"))).unwrap();
+        stage.replaced(&doc);
+        ask(
+            &mut stage,
+            &doc,
+            json!({"op": "place", "template": "ur5e", "at": [0, 0, 0]}),
+            true,
+        );
+        ask(
+            &mut stage,
+            &doc,
+            json!({"op": "place", "template": "cnc_lathe", "at": [2, 0, 0]}),
+            true,
+        );
+        let scene = stage.base.clone().unwrap();
+        let robot = kynex_model::robots(&scene)[0].root;
+        let kin = kynex_kin::Kinematics::of(&scene, robot).unwrap();
+        let joint = kin.vars[0].uid;
+        let machine = stage
+            .cell
+            .to_saved()
+            .iter()
+            .find(|c| c["kind"] == "cnc")
+            .unwrap()["object"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let edits = stage.history.undo.len();
+
+        for q in [0.2, 0.4, 0.6] {
+            let jog = json!({"op": "jog", "robot": robot.to_string(), "joint": joint.to_string(), "position": q});
+            assert_eq!(ask(&mut stage, &doc, jog, true)["ok"], true);
+        }
+        let door = json!({"op": "door_to", "object": machine, "open": 0.5});
+        assert_eq!(ask(&mut stage, &doc, door, true)["ok"], true);
+        assert_eq!(stage.history.undo.len(), edits + 2, "a drag, a door");
+        assert_eq!(stage.history_json()["undo"], "문 열림");
+
+        let undo = json!({"op": "undo"});
+        assert_eq!(ask(&mut stage, &doc, undo.clone(), true)["edit"], "문 열림");
+        assert_eq!(stage.cell.doors_json(), json!({}));
+        assert_eq!(ask(&mut stage, &doc, undo, true)["edit"], "로봇 자세");
+        assert_eq!(stage.posing.held_json(), json!({}), "as placed");
+        let redo = json!({"op": "redo"});
+        assert_eq!(
+            ask(&mut stage, &doc, redo.clone(), true)["edit"],
+            "로봇 자세"
+        );
+        let held = stage.posing.held_json();
+        assert_eq!(held[robot.to_string()][joint.to_string()], 0.6);
+        assert_eq!(ask(&mut stage, &doc, redo, true)["edit"], "문 열림");
+        assert_eq!(stage.cell.doors_json()[&machine][0], 0.5);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Equipment placed, moved (twice, close together: one edit) and

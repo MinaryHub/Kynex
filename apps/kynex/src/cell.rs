@@ -1041,6 +1041,38 @@ impl Cell {
     }
 
     /// Sets the settings `v` names on object `object`'s role.
+    /// The machines' doors as they stand, as undoing keeps them: by
+    /// machine, how far open, whether opening, whether left so by hand.
+    pub fn doors_json(&self) -> Value {
+        json!(self
+            .machines
+            .iter()
+            .filter(|(_, m)| m.door > 0.0 || m.opening || m.held)
+            .map(|(object, m)| (object.to_string(), json!([m.door, m.opening, m.held])))
+            .collect::<BTreeMap<_, _>>())
+    }
+
+    /// The doors as `v` (a [`Self::doors_json`]) has them, the others shut.
+    pub fn set_doors(&mut self, v: &Value) {
+        for (object, m) in self.machines.iter_mut() {
+            let (door, opening, held) = match &v[object.to_string()] {
+                Value::Array(a) => (
+                    a.first()
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 1.0),
+                    a.get(1).and_then(Value::as_bool).unwrap_or(false),
+                    a.get(2).and_then(Value::as_bool).unwrap_or(false),
+                ),
+                _ => (0.0, false, false),
+            };
+            if m.machining.is_none() {
+                (m.door, m.opening, m.held) = (door, opening, held);
+            }
+        }
+        self.changed = true;
+    }
+
     /// Object `object`'s role under its new name (its equipment renamed).
     pub fn rename(&mut self, object: u64, name: &str) {
         if let Some(c) = self.components.iter_mut().find(|c| c.object == object) {

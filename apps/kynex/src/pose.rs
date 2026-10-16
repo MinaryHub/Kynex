@@ -166,6 +166,44 @@ impl Posing {
         actives
     }
 
+    /// The robots posed by hand, as undoing keeps them: by robot, each
+    /// joint's position.
+    pub fn held_json(&self) -> Value {
+        json!(self
+            .held
+            .iter()
+            .map(|(root, joints)| {
+                let joints: BTreeMap<String, f64> =
+                    joints.iter().map(|(j, q)| (j.to_string(), *q)).collect();
+                (root.to_string(), joints)
+            })
+            .collect::<BTreeMap<_, _>>())
+    }
+
+    /// The robots posed as `v` (a [`Self::held_json`]) has them, the rest as
+    /// placed. Returns every robot whose pose this changes.
+    pub fn set_held(&mut self, v: &Value) -> Vec<u64> {
+        let mut held: BTreeMap<u64, BTreeMap<u64, f64>> = BTreeMap::new();
+        for (root, joints) in v.as_object().into_iter().flatten() {
+            let Ok(root) = root.parse::<u64>() else {
+                continue;
+            };
+            let joints = joints
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(j, q)| Some((j.parse::<u64>().ok()?, q.as_f64()?)))
+                .collect();
+            held.insert(root, joints);
+        }
+        let mut roots: Vec<u64> = self.held.keys().chain(held.keys()).copied().collect();
+        roots.sort_unstable();
+        roots.dedup();
+        roots.retain(|r| self.held.get(r) != held.get(r));
+        self.held = held;
+        roots
+    }
+
     /// Each robot back on the routine it was working on, if it still has it.
     pub fn set_actives(&mut self, actives: &BTreeMap<u64, usize>) {
         for (root, active) in actives {

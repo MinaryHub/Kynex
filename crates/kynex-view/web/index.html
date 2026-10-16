@@ -112,10 +112,11 @@
     <div class="plc-panel" id="plc-panel" hidden>
       <div class="plc-head">PLC 연결</div>
       <div class="plc-fields">
-        <label class="insp-field">방식<select id="plc-protocol"><option value="modbus">Modbus TCP</option><option value="opcua">OPC UA</option></select></label>
+        <label class="insp-field">방식<select id="plc-protocol"><option value="modbus">Modbus TCP</option><option value="opcua">OPC UA</option><option value="s7">Siemens S7</option></select></label>
         <label class="insp-field">주소<input id="plc-host" type="text" value="127.0.0.1" spellcheck="false"></label>
         <label class="insp-field">포트<input id="plc-port" type="number" class="num" value="502" min="1" max="65535"></label>
         <label class="insp-field" data-for="modbus">유닛<input id="plc-unit" type="number" class="num" value="1" min="0" max="255"></label>
+        <label class="insp-field" data-for="s7" title="S7-1200/1500: 랙 0, 슬롯 1 · S7-300: 랙 0, 슬롯 2. S7-1200/1500은 PUT/GET 허용, 최적화되지 않은 DB가 필요합니다">랙·슬롯<input id="plc-rack" type="number" class="num" value="0" min="0" max="7"><input id="plc-slot" type="number" class="num" value="1" min="0" max="31"></label>
         <label class="insp-field" data-for="opcua">경로<input id="plc-path" type="text" placeholder="/서버/경로" spellcheck="false"></label>
         <label class="insp-field" data-for="opcua">보안<select id="plc-security"><option value="none">없음</option><option value="sign">서명 (Basic256Sha256)</option><option value="encrypt">서명·암호화 (Basic256Sha256)</option></select></label>
         <label class="insp-field" data-for="opcua">사용자<input id="plc-user" type="text" placeholder="익명" spellcheck="false" autocomplete="off"></label>

@@ -1,7 +1,7 @@
 //! A PLC on the network: virtual commissioning. KYNEX is the client, as
 //! Visual Components is to a PLC's server; the PLC's program runs the
-//! cell's machines as it would the real ones. Over Modbus TCP, or OPC UA
-//! (see [`opcua`]).
+//! cell's machines as it would the real ones. Over Modbus TCP, OPC UA
+//! (see [`opcua`]) or Siemens S7 (see [`s7`]).
 //!
 //! The cell's machines are wired to the PLC's addresses (see
 //! `Component::plc`): a command — a door to open, a cycle to start — is
@@ -9,7 +9,7 @@
 //! cycle done — is written to its address as it changes. Over Modbus an
 //! address is a coil, counted from 0 as Modbus addresses them (coil 00001
 //! is address 0); over OPC UA it is a Boolean variable's node id
-//! (`ns=2;s=Lathe.Open`).
+//! (`ns=2;s=Lathe.Open`); over S7, a CPU's address (`DB1.DBX0.0`, `M10.0`).
 //!
 //! The link runs on a thread of its own, exchanging every [`EVERY`]: it
 //! reads the commands (Modbus function 1, OPC UA Read) and writes each
@@ -17,6 +17,7 @@
 //! connects. The page and the cell never wait on the network.
 
 pub mod opcua;
+pub mod s7;
 pub mod secure;
 
 use std::collections::BTreeMap;
@@ -37,6 +38,7 @@ pub const EVERY: Duration = Duration::from_millis(50);
 pub enum Protocol {
     Modbus,
     OpcUa,
+    S7,
 }
 
 impl Protocol {
@@ -44,6 +46,7 @@ impl Protocol {
         match self {
             Protocol::Modbus => "modbus",
             Protocol::OpcUa => "opcua",
+            Protocol::S7 => "s7",
         }
     }
 }
@@ -56,6 +59,10 @@ pub struct Settings {
     pub port: u16,
     /// The Modbus unit (slave) the PLC answers as.
     pub unit: u8,
+    /// S7: the CPU's rack and slot (0 and 1 for an S7-1200/1500, 0 and 2
+    /// for an S7-300).
+    pub rack: u8,
+    pub slot: u8,
     /// The OPC UA server's path after its host and port, if its endpoint
     /// has one (`/freeopcua/server/`).
     pub path: String,
@@ -78,6 +85,8 @@ impl Default for Settings {
             host: "127.0.0.1".into(),
             port: 502,
             unit: 1,
+            rack: 0,
+            slot: 1,
             path: String::new(),
             security: opcua::Mode::None,
             user: String::new(),
@@ -93,6 +102,7 @@ impl Settings {
         let d = Self::default();
         let protocol = match v["protocol"].as_str() {
             Some("opcua") => Protocol::OpcUa,
+            Some("s7") => Protocol::S7,
             _ => Protocol::Modbus,
         };
         Self {
@@ -109,6 +119,8 @@ impl Settings {
                 .as_u64()
                 .and_then(|u| u8::try_from(u).ok())
                 .unwrap_or(d.unit),
+            rack: v["rack"].as_u64().map_or(d.rack, |r| r.min(7) as u8),
+            slot: v["slot"].as_u64().map_or(d.slot, |s| s.min(31) as u8),
             security: match v["security"].as_str() {
                 Some("sign") => opcua::Mode::Sign,
                 Some("encrypt") => opcua::Mode::SignAndEncrypt,
@@ -137,6 +149,8 @@ impl Settings {
             "host": self.host,
             "port": self.port,
             "unit": self.unit,
+            "rack": self.rack,
+            "slot": self.slot,
             "path": self.path,
             "security": match self.security {
                 opcua::Mode::None => "none",
@@ -493,6 +507,7 @@ enum Conn {
         unit: u8,
     },
     OpcUa(opcua::Session),
+    S7(s7::Client),
 }
 
 /// Modbus addresses of one kind, read in spans of at most `most`: each
@@ -530,6 +545,13 @@ impl Conn {
     /// server's certificate, when the channel is kept with it.
     fn open(settings: &Settings) -> Result<(Self, Option<String>), String> {
         let stream = connect(settings)?;
+        if settings.protocol == Protocol::S7 {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+            return Ok((
+                Conn::S7(s7::Client::open(stream, settings.rack, settings.slot)?),
+                None,
+            ));
+        }
         if settings.protocol == Protocol::Modbus {
             return Ok((
                 Conn::Modbus {
@@ -588,6 +610,31 @@ impl Conn {
                     &mut got,
                 )?;
             }
+            Conn::S7(client) => {
+                let mut named = Vec::new();
+                for (a, kind) in addresses {
+                    match s7::parse(a) {
+                        Ok(at) => named.push((a, kind, at)),
+                        Err(e) => problems.push(e),
+                    }
+                }
+                let at: Vec<s7::Address> = named.iter().map(|n| n.2).collect();
+                if !at.is_empty() {
+                    for ((a, kind, _), value) in named.into_iter().zip(client.read(&at)?) {
+                        match value {
+                            Ok(v) => {
+                                let v = if *kind == Kind::Bit {
+                                    i64::from(v != 0)
+                                } else {
+                                    v
+                                };
+                                got.insert(a.clone(), v);
+                            }
+                            Err(e) => problems.push(format!("{a}: {e}")),
+                        }
+                    }
+                }
+            }
             Conn::OpcUa(session) => {
                 let mut nodes = Vec::new();
                 let mut named = Vec::new();
@@ -643,6 +690,15 @@ impl Conn {
                     Err(e) if e.starts_with("Modbus 예외") => Ok(Err(format!("{address}: {e}"))),
                     Err(e) => Err(e),
                 }
+            }
+            Conn::S7(client) => {
+                let at = match s7::parse(address) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(Err(e)),
+                };
+                Ok(client
+                    .write(&at, value)?
+                    .map_err(|e| format!("{address}: {e}")))
             }
             Conn::OpcUa(session) => {
                 let node = match opcua::NodeId::parse(address) {

@@ -827,8 +827,8 @@ cargo run -p kynex -- view 127.0.0.1:7878 --key demo --open
 
 The cell's machines can be run by a PLC's program instead of the robot's,
 to try the PLC's logic before the machines exist (`apps/kynex/src/plc.rs`).
-KYNEX is a client of the PLC, as Visual Components is, over **Modbus TCP**
-or **OPC UA**:
+KYNEX is a client of the PLC, as Visual Components is, over **Modbus TCP**,
+**OPC UA** or **Siemens S7**:
 
 - **PLC** in the toolbar: Modbus TCP or OPC UA, the PLC's address and
   port (502 or 4840 by default), Modbus's unit or the OPC UA endpoint's
@@ -851,6 +851,22 @@ or **OPC UA**:
   a command's address (each takes it); a state's address shared by two is
   on only when both say so, and is warned of. A command the machine
   cannot take (a door while machining) is shown beside the link's state.
+- Siemens S7: KYNEX's own client (`apps/kynex/src/plc/s7.rs`), over
+  ISO-on-TCP (port 102) to the CPU's rack and slot (랙·슬롯: 0 and 1 for
+  an S7-1200/1500, 0 and 2 for an S7-300). Addresses as TIA Portal writes
+  them, German or English: `DB1.DBX0.0`, `DB1.DBB2`, `DB1.DBW2`,
+  `DB1.DBD4`, `M10.0`, `MW10`, `I0.0` (`E0.0`), `Q0.0` (`A0.0`). A bit is
+  written alone. A word or double word is signed, and a bit's state, read
+  from a byte or word, is on when it is not 0. On an S7-1200/1500, allow
+  PUT/GET in the CPU's protection settings and turn off the data block's
+  optimized access. Otherwise the CPU refuses, and KYNEX says why beside
+  the address.
+
+  Checked with python-snap7's free S7 server (`tools/plc/check.py
+  --protocol s7`): a lathe ran three cycles from the PLC program, every
+  step within 0.12 s of the lathe's own time. That server writes a bit as
+  its whole byte, unlike a CPU, so that check uses a byte per signal.
+  Single bits are checked against a test CPU in the unit tests.
 - OPC UA: KYNEX's own client (`apps/kynex/src/plc/opcua.rs`). **보안**:
   none (the `None` policy), or Basic256Sha256 signed, or signed and
   encrypted (`plc/secure.rs`, on the RustCrypto crates: RSA-OAEP and RSA

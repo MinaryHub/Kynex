@@ -25,6 +25,8 @@ export class PlcPanel {
     this.host = document.getElementById('plc-host');
     this.port = document.getElementById('plc-port');
     this.unit = document.getElementById('plc-unit');
+    this.rack = document.getElementById('plc-rack');
+    this.slot = document.getElementById('plc-slot');
     this.button = document.getElementById('plc-connect');
     this.status = document.getElementById('plc-status');
     this.dot = document.querySelector('.toolbar .plc-dot');
@@ -36,7 +38,7 @@ export class PlcPanel {
     });
     // OPC UA's usual port in place of Modbus's, as the protocol changes.
     this.protocol.addEventListener('change', () => {
-      const usual = { modbus: '502', opcua: '4840' };
+      const usual = { modbus: '502', opcua: '4840', s7: '102' };
       if (Object.values(usual).includes(this.port.value)) this.port.value = usual[this.protocol.value];
       this.showFields();
     });
@@ -69,6 +71,8 @@ export class PlcPanel {
         host: this.host.value.trim(),
         port,
         unit,
+        rack: Number(this.rack.value) || 0,
+        slot: Number(this.slot.value) || 0,
         path: this.path.value.trim(),
         security: this.security.value,
         user: this.user.value.trim(),
@@ -94,6 +98,8 @@ export class PlcPanel {
       [this.host, s.host],
       [this.port, s.port],
       [this.unit, s.unit],
+      [this.rack, s.rack ?? 0],
+      [this.slot, s.slot ?? 1],
       [this.path, s.path ?? ''],
       [this.security, s.security ?? 'none'],
       [this.user, s.user ?? ''],

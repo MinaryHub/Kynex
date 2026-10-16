@@ -1,12 +1,17 @@
 """Virtual commissioning, checked against servers that are not KYNEX's own:
 a free Modbus TCP server (pymodbus) or a free OPC UA server (asyncua) plays
 a PLC, and a small PLC program in this script runs a CNC lathe in a running
-KYNEX through its cycle.
+KYNEX through its cycle. Or a free Siemens S7 server (python-snap7's, the
+open-source Snap7 library): commands on DB1.DBB0-4, states on DB1.DBB10-15,
+a byte each. A byte, not a bit: that server writes a bit (DBX) as the whole
+byte it is in, where a CPU writes the bit alone; KYNEX writes bits as
+python-snap7's own client does.
 
-    pip install pymodbus asyncua
+    pip install pymodbus asyncua python-snap7
     kynex view --empty --port 8097 --project target/plc/kynex-project.json
     python tools/plc/check.py                    # Modbus TCP
     python tools/plc/check.py --protocol opcua   # OPC UA
+    python tools/plc/check.py --protocol s7      # Siemens S7
     python tools/plc/check.py --protocol opcua --security encrypt --user kynex --password secret
 
 The script places a lathe in that KYNEX (over its page's requests), wires
@@ -240,10 +245,47 @@ async def opcua_plc(program, port, security="none", user=None, password=None):
     return stop, link, {name: f"ns={ns};s=Lathe.{name}" for name in nodes}
 
 
+async def s7_plc(program, port):
+    """An S7 server with data block 1, its program scanning every 10 ms.
+    Returns its stop, and each name's address."""
+    from snap7.server import Server
+    from snap7.type import SrvArea
+
+    db = bytearray(32)
+    names = {
+        **{name: i for i, name in enumerate(COMMANDS)},
+        **{name: 10 + i for i, name in enumerate(STATES)},
+    }
+
+    def bit(name):
+        return db[names[name]] != 0
+
+    def set_bit(name, on):
+        db[names[name]] = 1 if on else 0
+
+    server = Server(log=False)
+    server.register_area(SrvArea.DB, 1, db)
+    server.start(tcp_port=port)
+
+    async def scanning():
+        while True:
+            program.scan(bit, set_bit)
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(scanning())
+
+    async def stop():
+        task.cancel()
+        server.stop()
+
+    link = {"protocol": "s7", "host": "127.0.0.1", "port": port, "rack": 0, "slot": 1}
+    return stop, link, {name: f"DB1.DBB{n}" for name, n in names.items()}
+
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--kynex", default="http://127.0.0.1:8097")
-    parser.add_argument("--protocol", choices=["modbus", "opcua"], default="modbus")
+    parser.add_argument("--protocol", choices=["modbus", "opcua", "s7"], default="modbus")
     parser.add_argument("--port", type=int)
     parser.add_argument("--cycles", type=int, default=2)
     parser.add_argument("--security", choices=["none", "sign", "encrypt"], default="none")
@@ -254,6 +296,8 @@ async def main():
     program = Program(args.cycles)
     if args.protocol == "modbus":
         stop, link, addresses = await modbus_plc(program, args.port or 5020)
+    elif args.protocol == "s7":
+        stop, link, addresses = await s7_plc(program, args.port or 1102)
     else:
         stop, link, addresses = await opcua_plc(
             program, args.port or 4840, args.security, args.user, args.password

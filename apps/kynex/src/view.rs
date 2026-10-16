@@ -515,9 +515,12 @@ impl Stage {
             } else if library::is_op(&op) {
                 touched = true;
                 self.library_op(doc, &request.body)
-            } else if cell::is_op(&op) {
+            } else if cell::is_op(&op)
+                && !(op == "release" && robot.is_some() && !request.body.contains("\"gripper\""))
+            {
                 // Against the scene as shown: a grip is where the posed
-                // robot's gripper is.
+                // robot's gripper is. (A robot let go of — `release` with a
+                // robot and no gripper — is the posing's, below.)
                 let scene = self.base.as_ref().unwrap_or(doc);
                 let posed = self.posing.shown(scene);
                 let reply = self

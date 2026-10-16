@@ -794,19 +794,16 @@ export class LibraryPanel {
   }
 
   // The handle onto its item, but not while it is being dragged.
-  // On the part selected, at its middle (the whole equipment's middle for
-  // its root), turned as the equipment is: the point the equipment moves
-  // with and turns about. Where the equipment's origin is from there, in
-  // its own axes, is kept to put the origin back (`originAt`).
+  // At the equipment's origin, turned as the equipment is, whatever part of
+  // it was picked: the equipment moves as one, as Visual Components moves a
+  // component (its parts move in the interact mode). The origin's offset
+  // from the gizmo, in its own axes, puts the origin back (`originAt`).
   followHandle() {
     const item = this.handleItem != null && this.itemById(this.handleItem);
     if (!item || this.dragging) return;
     const turn = new THREE.Quaternion().setFromEuler(new THREE.Euler(item.roll ?? 0, item.pitch ?? 0, item.yaw, 'ZYX'));
     const at = new THREE.Vector3().fromArray(item.at);
-    const s = this.ctx.selected();
-    const on = s != null && this.itemOf(s)?.id === item.id ? s : item.root;
-    const box = this.ctx.bounds(on);
-    const pivot = box.isEmpty() ? at.clone() : box.getCenter(new THREE.Vector3());
+    const pivot = at.clone();
     this.offset = pivot.clone().sub(at).applyQuaternion(turn.clone().invert());
     this.proxy.position.copy(pivot);
     this.proxy.quaternion.copy(turn);

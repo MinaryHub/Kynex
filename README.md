@@ -567,16 +567,25 @@ Drag an entry onto the scene, or click it and then click the scene. It
 lands on the floor, or on top of whatever is under the pointer (a robot
 on its pedestal). A CNC machine is turned so its door faces the origin.
 Select a placed item, here or in the scene, and its gizmo is on it at
-once: drag an arrow to move it along that axis, a square to move it in
-that plane; in **회전** (or `R`; `T` or **이동** back) drag the red, green
-or blue ring to turn it about X, Y or Z — its X and Y tilt and its turn,
-in the angle snap's steps. Several selected together turn about Z only;
-Alt held as it is let go keeps it from snapping onto a connection point.
-A robot's moving joint selected, or a part one moves (the forearm, say),
-has a gizmo of its own instead: a ring about the joint's axis (an arrow
-along it for a sliding joint), dragged to turn the joint within its
-limits, as its slider does. The robot's base or its root takes the
-equipment's gizmo, to move the whole robot.
+once, at the item's origin and along its own axes, whichever part of it
+was picked: the equipment moves as one, as Visual Components moves a
+component. Drag an arrow to move it along that axis, a square to move it
+in that plane; in **회전** (or `R`; `T` or **이동** back) drag the red,
+green or blue ring to turn it about X, Y or Z — its X and Y tilt and its
+turn, in the angle snap's steps. Several selected together turn about Z
+only; Alt held as it is let go keeps it from snapping onto a connection
+point.
+
+**Interact** (the hand on the toolbar, or `I`), as Visual Components'
+Interact: the parts that move are dragged along their own way, within
+their limits — a machine's door from shut to open (along its slide, or
+round its hinge, as its door role says), a robot's joint about its axis
+(the part dragged turns the joint that moves it). The pointer turns to a
+hand over them, and the view stays still meanwhile. The layout does not
+change: a door is left part open where it is let go (and a cycle will not
+start until it is opened or closed), a robot is posed. **초기 상태로**
+puts what was dragged back: doors shut, robots as placed. Changing where a
+part is within its equipment — Visual Components' Modeling — is to come.
 The inspector sets its position, turn and sizes by number too, and
 **기즈모 끄기** turns the gizmo off (kept for the browser). Locked
 equipment has none. Sizes change the item's shape, and the item keeps its

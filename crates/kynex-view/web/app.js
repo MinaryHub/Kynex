@@ -32,7 +32,7 @@ const BENCH = new URLSearchParams(location.search).has('bench');
 let benchStarted = false;
 let benchUpdates = 0;
 const collapsed = new Set();
-const view = { joints: true, wire: false, grid: true, timeline: false, measure: false };
+const view = { joints: true, wire: false, grid: true, timeline: false, measure: false, interact: false };
 
 // ---- renderer, camera, lights ----------------------------------------------
 
@@ -780,10 +780,9 @@ function select(uid, { frame: andFrame = false, keep = [] } = {}) {
   levelsDirty = true;
   if (was != null) highlight(was);
   if (selected != null) highlight(selected);
-  // A joint's gizmo onto a robot's joint (or the part it moves); else the
-  // gizmo onto the equipment selected, or away.
-  const onJoint = robotPanel.selectionChanged(selected);
-  libraryPanel.selectionChanged(onJoint ? null : selected);
+  // The gizmo onto the equipment selected, or away; none while the parts
+  // themselves are dragged (the interact mode).
+  libraryPanel.selectionChanged(view.interact ? null : selected);
   document.querySelectorAll('.node.selected, .joint.selected').forEach((n) => n.classList.remove('selected'));
   if (selected != null) {
     revealInTree(selected);
@@ -839,6 +838,157 @@ document.getElementById('insp-close').addEventListener('click', () => select(nul
 // Click to pick, unless the pointer travelled: that was an orbit.
 const ray = new THREE.Raycaster();
 let down = null;
+// ---- interact: the parts that move, dragged along their own way ------------
+//
+// As Visual Components' Interact: with it on (toolbar, I), a machine's door
+// or a robot's joint under the pointer is dragged along its degree of
+// freedom, within its limits — a door from shut to open, a joint about its
+// axis. The layout does not change; 초기 상태로 puts them all back.
+
+let interacting = null; // the drag going on
+const interacted = { doors: new Set(), robots: new Set() }; // what was moved
+
+// What part under the pointer moves, and how: a door of a machine, or a
+// robot's moving joint. Null for the rest.
+function grabbable(uid) {
+  for (let at = uid, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) {
+    for (const c of cellPanel.cell.components) {
+      const way = c.machine?.doors?.find((d) => d.uid === at);
+      if (way) return { kind: 'door', machine: c.object, way, open: c.machine.door ?? 0 };
+    }
+  }
+  const joint = robotPanel.movingJointAt(uid);
+  if (joint) {
+    const j = robotPanel.jointOf(joint);
+    const rec = records.get(joint.uid);
+    if (!j || !rec) return null;
+    const m = new THREE.Matrix4().fromArray(rec.matrix);
+    const origin = new THREE.Vector3().setFromMatrixPosition(m);
+    const axis = new THREE.Vector3().setFromMatrixColumn(m, 2).normalize();
+    return { kind: 'joint', joint, slides: joint.slides, origin, axis, value: j.position };
+  }
+  return null;
+}
+
+// The part and point under screen point (x, y), if any.
+function partAt(x, y) {
+  const r = canvas.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1), camera);
+  const hit = batch.mesh && ray.intersectObject(batch.mesh, false).find((h) => batch.uidAt(h.batchId) != null);
+  return hit ? { uid: batch.uidAt(hit.batchId), point: hit.point.clone() } : null;
+}
+
+// How far round `axis` through `pivot` the pointer has gone from `from`
+// (a point), radians; null when the ray misses the plane.
+function turnAbout(pivot, axis, from) {
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axis, pivot);
+  const p = ray.ray.intersectPlane(plane, new THREE.Vector3());
+  if (!p) return null;
+  const a = plane.projectPoint(from, new THREE.Vector3()).sub(pivot);
+  const b = p.sub(pivot);
+  return Math.atan2(axis.dot(new THREE.Vector3().crossVectors(a, b)), a.dot(b));
+}
+
+// How far along unit `dir` through `from` the pointer's ray comes nearest.
+function alongLine(from, dir) {
+  const w0 = ray.ray.origin.clone().sub(from);
+  const b = ray.ray.direction.dot(dir);
+  const d = ray.ray.direction.dot(w0);
+  const e = dir.dot(w0);
+  const denom = 1 - b * b;
+  return Math.abs(denom) < 1e-9 ? 0 : (e - b * d) / denom;
+}
+
+// One door request on its way at a time; the newest waits.
+const doorLane = { busy: false, next: null };
+async function sendDoor(request) {
+  if (doorLane.busy) return void (doorLane.next = request);
+  doorLane.busy = true;
+  for (let next = request; next; ) {
+    doorLane.next = null;
+    try {
+      const a = await (await fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) })).json();
+      if (!a.ok) toast(a.error);
+    } catch (e) {
+      toast(`KYNEX에 요청하지 못했습니다: ${e.message}`);
+    }
+    next = doorLane.next;
+  }
+  doorLane.busy = false;
+}
+
+function interactMove(e) {
+  const r = canvas.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const g = interacting;
+  if (g.kind === 'door') {
+    let open = g.open;
+    if (g.way.slide) {
+      const by = new THREE.Vector3().fromArray(g.way.slide);
+      const len = by.length();
+      open += alongLine(g.point, by.clone().normalize()) / len;
+    } else {
+      const t = turnAbout(new THREE.Vector3().fromArray(g.way.pivot), new THREE.Vector3().fromArray(g.way.axis), g.point);
+      if (t == null) return;
+      open += t / g.way.angle;
+    }
+    sendDoor({ op: 'door_to', object: g.machine, open: Math.min(Math.max(open, 0), 1) });
+  } else {
+    const r2 = robotPanel.robots.find((x) => x.root === g.joint.root);
+    if (!r2) return;
+    const d = g.slides ? alongLine(g.point, g.axis) : turnAbout(g.origin, g.axis, g.point);
+    if (d == null) return;
+    robotPanel.send(r2, { op: 'jog', robot: r2.root, joint: g.joint.uid, position: g.value + d });
+  }
+}
+
+canvas.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (!view.interact || e.button !== 0) return;
+    const hit = partAt(e.clientX, e.clientY);
+    const g = hit && grabbable(hit.uid);
+    if (!g) return;
+    // The part, not the view: the orbit does not see this press.
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    interacting = { ...g, point: hit.point };
+    if (g.kind === 'door') interacted.doors.add(g.machine);
+    else interacted.robots.add(g.joint.root);
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+    document.getElementById('interact-reset').hidden = false;
+  },
+  { capture: true },
+);
+canvas.addEventListener('pointermove', (e) => {
+  if (interacting) return interactMove(e);
+  if (!view.interact || e.buttons) return;
+  // A hand over what can be dragged.
+  const hit = partAt(e.clientX, e.clientY);
+  canvas.style.cursor = hit && grabbable(hit.uid) ? 'grab' : '';
+});
+const endInteract = () => {
+  if (!interacting) return;
+  interacting = null;
+  canvas.style.cursor = '';
+  interactEnded = performance.now();
+};
+let interactEnded = 0;
+canvas.addEventListener('pointerup', endInteract);
+canvas.addEventListener('pointercancel', endInteract);
+
+// Everything dragged back as it was: doors shut, robots as the scene has them.
+document.getElementById('interact-reset').addEventListener('click', async () => {
+  const post = (b) => fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+  for (const machine of interacted.doors) await post({ op: 'door_to', object: machine, open: 0 });
+  for (const root of interacted.robots) await post({ op: 'release', robot: root });
+  interacted.doors.clear();
+  interacted.robots.clear();
+  document.getElementById('interact-reset').hidden = true;
+  toast('움직인 문과 관절을 처음 상태로 되돌렸습니다');
+});
+
 canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
 canvas.addEventListener('pointerup', (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4 || e.button !== 0) return;
@@ -1043,6 +1193,12 @@ function setToggle(name, on) {
     surface.wireframe = on;
     outline.enabled = !on;
   }
+  if (name === 'interact') {
+    // The parts, not the equipment: its gizmo away meanwhile.
+    libraryPanel.selectionChanged(on ? null : selected);
+    if (!on) canvas.style.cursor = '';
+    toast(on ? '상호작용: 문이나 로봇 관절을 끌어 움직입니다 (I로 끄기)' : '상호작용을 껐습니다');
+  }
   if (name === 'measure') {
     clearMeasure();
     if (on) {
@@ -1195,6 +1351,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'w') setToggle('wire', !view.wire);
   else if (k === 'g') setToggle('grid', !view.grid);
   else if (k === 'm') setToggle('measure', !view.measure);
+  else if (k === 'i') setToggle('interact', !view.interact);
   else if (k === '0') frame(selected, 'iso');
   else if (k === '7') frame(selected, 'top');
   else if (k === '1') frame(selected, 'front');
@@ -1292,8 +1449,8 @@ const cpu = { levels: 0, scene: 0, frames: 0, shadowFrames: 0 };
 // while it is shown, gone while it is dragged.
 let markersLook = 'normal';
 function quietMarkers() {
-  const dragging = robotPanel.dragging || robotPanel.jointDragging || libraryPanel.dragging;
-  const shown = robotPanel.handleRoot != null || robotPanel.joint != null || libraryPanel.handleItem != null;
+  const dragging = robotPanel.dragging || libraryPanel.dragging || interacting != null;
+  const shown = robotPanel.handleRoot != null || libraryPanel.handleItem != null;
   const look = dragging ? 'hidden' : shown ? 'faint' : 'normal';
   if (look === markersLook) return;
   markersLook = look;
@@ -1312,7 +1469,6 @@ function quietMarkers() {
 
 renderer.setAnimationLoop(() => {
   quietMarkers();
-  robotPanel.followJoint();
   if (flight) {
     const t = Math.min((performance.now() - flight.t0) / 420, 1);
     const k = ease(t);

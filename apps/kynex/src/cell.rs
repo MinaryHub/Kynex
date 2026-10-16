@@ -480,6 +480,9 @@ pub struct Machine {
     pub door: f64,
     /// Whether the door is opening (or open), rather than closing.
     pub opening: bool,
+    /// Whether the door was left part open by hand (`door_to`): it stays
+    /// so until the machine is told to open or close it.
+    pub held: bool,
     /// Whether the chuck is told to clamp (or has), rather than let go.
     pub clamped: bool,
     /// How far closed the chuck is: 0 open, 1 clamped. It closes and opens
@@ -1727,6 +1730,31 @@ impl Cell {
             "signals" => self.set_signals(&req["signals"])?,
             "grip" => self.grip(doc, uid("gripper")?)?,
             "release" => self.release(doc, uid("gripper")?)?,
+            // A machine's door dragged to `open` (0 shut, 1 open), as it is
+            // left: not while it machines, nor while it follows a real one.
+            "door_to" => {
+                let object = uid("object")?;
+                let c = self
+                    .components
+                    .iter()
+                    .find(|c| c.object == object && c.kind.machine())
+                    .ok_or("no such machine")?;
+                if c.mirror.is_some() {
+                    return Err("실제 장비를 따라가는 동안에는 문을 움직일 수 없습니다".into());
+                }
+                let open = req["open"]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                    .ok_or("open is a number")?;
+                let m = self.machines.entry(object).or_default();
+                if m.machining.is_some() {
+                    return Err("가공 중에는 문을 움직일 수 없습니다".into());
+                }
+                m.door = open.clamp(0.0, 1.0);
+                m.opening = m.door >= 0.5;
+                m.held = m.door > 0.0 && m.door < 1.0;
+                self.changed = true;
+            }
             "machine" => {
                 let command = req["action"]
                     .as_str()
@@ -1858,6 +1886,10 @@ impl Cell {
         let in_chuck = self.in_chuck(doc, &c);
         let m = self.machines.entry(machine).or_default();
         let busy = m.machining.is_some();
+        // Told to open or close: a door left part open by hand goes on.
+        if matches!(command, Command::Open | Command::Close) && !busy {
+            m.held = false;
+        }
         if c.kind == Kind::Molder {
             // A moulding machine: a guard and its cycle; it makes the part.
             match command {
@@ -2243,8 +2275,8 @@ impl Cell {
                 .any(|c| c.kind == Kind::Conveyor && c.props.feed > 0.0)
             || self.machines.values().any(|m| {
                 m.machining.is_some()
-                    || (m.opening && m.door < 1.0)
-                    || (!m.opening && m.door > 0.0)
+                    || (!m.held && m.opening && m.door < 1.0)
+                    || (!m.held && !m.opening && m.door > 0.0)
                     || m.chuck != if m.clamped { 1.0 } else { 0.0 }
             })
     }
@@ -2265,7 +2297,7 @@ impl Cell {
                 continue;
             };
             let target = if m.opening { 1.0 } else { 0.0 };
-            if m.door != target {
+            if m.door != target && !m.held {
                 moving = true;
                 let pace = if c.props.door > 0.0 {
                     dt / c.props.door
@@ -2747,6 +2779,26 @@ impl Cell {
         out
     }
 
+    /// How each door of machine `machine` moves, shut as `doc` has it: for
+    /// the page, to drag it along its way (`door_to`).
+    fn door_motions(&self, doc: &Document, machine: ObjectId) -> Vec<Value> {
+        self.door_parts(doc, machine)
+            .into_iter()
+            .filter_map(|(door, props)| {
+                let uid = doc.object_uid(door)?.raw().to_string();
+                Some(match door_motion(doc, door, machine, props.as_ref())? {
+                    DoorMotion::Slide(by) => json!({ "uid": uid, "slide": by.to_array() }),
+                    DoorMotion::Swing { pivot, axis, angle } => json!({
+                        "uid": uid,
+                        "pivot": pivot.to_array(),
+                        "axis": axis.to_array(),
+                        "angle": angle,
+                    }),
+                })
+            })
+            .collect()
+    }
+
     /// Moves each open door in `doc` as far as it is open: as its door role
     /// says, or else aside along its machine's X by its own width.
     fn open_doors(&self, doc: &mut Document) -> Vec<u64> {
@@ -2760,33 +2812,15 @@ impl Cell {
                 continue;
             }
             let world = doc.world_transform(door);
-            let own = |p: &Props| {
-                let unit = [DVec3::X, DVec3::Y, DVec3::Z][p.axis.min(2) as usize];
-                (world.matrix3 * unit).normalize_or_zero()
-            };
-            let moved = match props {
-                Some(p) if p.swing > 0.5 => {
-                    let pivot = world.transform_point3(DVec3::from_array(p.point));
+            let moved = match door_motion(doc, door, machine, props.as_ref()) {
+                Some(DoorMotion::Swing { pivot, axis, angle }) => {
                     DAffine3::from_translation(pivot)
-                        * DAffine3::from_axis_angle(own(&p), p.angle * open)
+                        * DAffine3::from_axis_angle(axis, angle * open)
                         * DAffine3::from_translation(-pivot)
                         * world
                 }
-                Some(p) if p.travel != 0.0 => {
-                    DAffine3::from_translation(own(&p) * p.travel * open) * world
-                }
-                _ => {
-                    let along = doc
-                        .world_transform(machine)
-                        .matrix3
-                        .x_axis
-                        .normalize_or_zero();
-                    let Some((lo, hi)) = bounds(doc, door) else {
-                        continue;
-                    };
-                    let width = (hi - lo).dot(along).abs();
-                    DAffine3::from_translation(along * (width + 0.02) * open) * world
-                }
+                Some(DoorMotion::Slide(by)) => DAffine3::from_translation(by * open) * world,
+                None => continue,
             };
             // From the world into the door's own transform.
             let Some(o) = doc.object(door) else { continue };
@@ -2949,6 +2983,7 @@ impl Cell {
                         });
                         json!({
                             "door": m.door,
+                            "doors": id_of(doc, c.object).map(|id| self.door_motions(doc, id)),
                             "opening": m.opening,
                             "clamped": m.clamped,
                             "cycles": m.cycles,
@@ -2989,6 +3024,51 @@ impl Cell {
 }
 
 /// The requests [`Cell`] takes.
+/// How a door moves from shut to open, in the world: along a way, or round
+/// a hinge by an angle.
+enum DoorMotion {
+    Slide(DVec3),
+    Swing {
+        pivot: DVec3,
+        axis: DVec3,
+        angle: f64,
+    },
+}
+
+/// How door part `door` of machine `machine` moves, shut as `doc` has it:
+/// as its door role says, or else aside along its machine's X by its own
+/// width.
+fn door_motion(
+    doc: &Document,
+    door: ObjectId,
+    machine: ObjectId,
+    props: Option<&Props>,
+) -> Option<DoorMotion> {
+    let world = doc.world_transform(door);
+    let own = |p: &Props| {
+        let unit = [DVec3::X, DVec3::Y, DVec3::Z][p.axis.min(2) as usize];
+        (world.matrix3 * unit).normalize_or_zero()
+    };
+    Some(match props {
+        Some(p) if p.swing > 0.5 => DoorMotion::Swing {
+            pivot: world.transform_point3(DVec3::from_array(p.point)),
+            axis: own(p),
+            angle: p.angle,
+        },
+        Some(p) if p.travel != 0.0 => DoorMotion::Slide(own(p) * p.travel),
+        _ => {
+            let along = doc
+                .world_transform(machine)
+                .matrix3
+                .x_axis
+                .normalize_or_zero();
+            let (lo, hi) = bounds(doc, door)?;
+            let width = (hi - lo).dot(along).abs();
+            DoorMotion::Slide(along * (width + 0.02))
+        }
+    })
+}
+
 pub fn is_op(op: &str) -> bool {
     matches!(
         op,
@@ -3000,6 +3080,7 @@ pub fn is_op(op: &str) -> bool {
             | "grip"
             | "release"
             | "machine"
+            | "door_to"
             | "drive"
             | "turn"
             | "io"
@@ -3261,6 +3342,66 @@ mod tests {
             .unwrap()
             .raw();
         assert_eq!(guess(&doc), vec![(grip_a, Kind::Gripper)]);
+    }
+
+    /// A door dragged part open stays as left, its way told to the page; a
+    /// cycle will not start with it so; told to open, it goes on.
+    #[test]
+    fn a_door_is_dragged_open_and_stays_as_left() {
+        let (mut doc, _, machine, _) = scene();
+        let door = doc.add_mesh_object("cnc_1_door", kreate_mesh::primitives::cube(1.0));
+        {
+            let o = doc.object_mut(door).unwrap();
+            o.transform.scale = DVec3::new(0.6, 0.03, 0.7);
+            o.transform.translation = DVec3::new(0.0, 0.7, 1.2);
+        }
+        let m = id_of(&doc, machine).unwrap();
+        doc.set_parent(door, Some(m)).unwrap();
+        let mut cell = Cell::default();
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": machine.to_string(), "kind": "cnc"}),
+        );
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        cell.tick(&doc, 0.0, at(0.0));
+
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "door_to", "object": machine.to_string(), "open": 0.4}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        cell.tick(&doc, 2.0, at(2.0));
+        assert_eq!(cell.machines[&machine].door, 0.4, "held where it was left");
+        assert!(!cell.is_running());
+        // Its way, for the page: aside along the machine's X by its width.
+        let json: Value = serde_json::from_str(&cell.to_json(&doc)).unwrap();
+        let c = json["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["kind"] == "cnc")
+            .unwrap();
+        let way = &c["machine"]["doors"][0]["slide"];
+        assert!((way[0].as_f64().unwrap() - 0.62).abs() < 1e-9, "{way}");
+        let start = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "machine", "object": machine.to_string(), "action": "start"}),
+        );
+        assert_eq!(start["ok"], false, "not part open");
+
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "machine", "object": machine.to_string(), "action": "open"}),
+        );
+        cell.tick(&doc, 2.9, at(2.9));
+        assert!(cell.machines[&machine].door > 0.4, "going on");
+        cell.tick(&doc, 9.0, at(9.0));
+        assert_eq!(cell.machines[&machine].door, 1.0);
     }
 
     #[test]

@@ -155,35 +155,6 @@ export class RobotPanel {
       if (this.dragging) this.pulled();
     });
 
-    // A joint's gizmo: on the joint selected, or the one that moves the
-    // part selected — its ring about the joint's axis (an arrow along it
-    // for a sliding joint), dragged to turn the joint.
-    this.jointProxy = new THREE.Object3D();
-    ctx.scene.add(this.jointProxy);
-    this.jointHandle = new TransformControls(ctx.camera, ctx.canvas);
-    this.jointHandle.setSize(0.7);
-    this.jointHandle.setSpace('local');
-    this.jointHandle.showX = this.jointHandle.showY = false;
-    this.jointHelper = this.jointHandle.getHelper();
-    this.joint = null; // { root, uid, slides, from: { position, quaternion, value } }
-    this.jointDragging = false;
-    this.jointHandle.addEventListener('dragging-changed', (e) => {
-      ctx.controls.enabled = !e.value;
-      this.jointDragging = e.value;
-      if (e.value && this.joint) {
-        const j = this.jointOf(this.joint);
-        this.joint.from = {
-          position: this.jointProxy.position.clone(),
-          quaternion: this.jointProxy.quaternion.clone(),
-          value: j?.position ?? 0,
-        };
-      }
-      if (!e.value) this.draggedAt = performance.now();
-    });
-    this.jointHandle.addEventListener('objectChange', () => {
-      if (this.jointDragging) this.jointPulled();
-    });
-
     this.host.addEventListener('pointerdown', (e) => this.pointerDown(e));
     this.host.addEventListener('click', (e) => this.clicked(e));
     this.host.addEventListener('change', (e) => this.optionChanged(e));
@@ -198,31 +169,9 @@ export class RobotPanel {
   ownsPointer() {
     return (
       this.dragging ||
-      this.jointDragging ||
       this.handle.axis !== null ||
-      this.jointHandle.axis !== null ||
       performance.now() - this.draggedAt < 250
     );
-  }
-
-  // The selection changed: the joint gizmo onto the joint selected, or onto
-  // the moving joint nearest above the part selected. Whether it took the
-  // selection (then the equipment's gizmo stays away).
-  selectionChanged(uid) {
-    const found = uid != null ? this.movingJointAt(uid) : null;
-    this.joint = found;
-    if (found) {
-      this.jointHandle.setMode(found.slides ? 'translate' : 'rotate');
-      this.jointHandle.showX = this.jointHandle.showY = false;
-      this.jointHandle.showZ = true;
-      this.jointHandle.attach(this.jointProxy);
-      this.ctx.scene.add(this.jointHelper);
-      this.followJoint();
-    } else {
-      this.jointHandle.detach();
-      this.jointHelper.removeFromParent();
-    }
-    return !!found;
   }
 
   // The robot's moving joint `uid` is, or is the nearest above it: walking
@@ -241,37 +190,6 @@ export class RobotPanel {
 
   jointOf(joint) {
     return this.robots.find((r) => r.root === joint.root)?.joints.find((j) => j.uid === joint.uid);
-  }
-
-  // The joint gizmo where the joint is now, but not while it is dragged.
-  followJoint() {
-    if (!this.joint || this.jointDragging) return;
-    const rec = this.ctx.records.get(this.joint.uid);
-    if (!rec) return;
-    const m = new THREE.Matrix4().fromArray(rec.matrix);
-    const scale = new THREE.Vector3();
-    m.decompose(this.jointProxy.position, this.jointProxy.quaternion, scale);
-    this.jointProxy.updateMatrixWorld();
-  }
-
-  // The joint turned (or slid) as far as its gizmo has been, from where
-  // the drag began: about its own Z, which is its axis.
-  jointPulled() {
-    const { joint } = this;
-    const j = joint && this.jointOf(joint);
-    const r = joint && this.robots.find((x) => x.root === joint.root);
-    if (!j || !r || !joint.from) return;
-    let v;
-    if (joint.slides) {
-      const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(joint.from.quaternion);
-      v = joint.from.value + this.jointProxy.position.clone().sub(joint.from.position).dot(axis);
-    } else {
-      const d = joint.from.quaternion.clone().invert().multiply(this.jointProxy.quaternion);
-      v = joint.from.value + 2 * Math.atan2(d.z, d.w);
-    }
-    const { limited, lo, hi } = spanOf(j);
-    if (limited) v = Math.min(Math.max(v, lo), hi);
-    this.send(r, { op: 'jog', robot: r.root, joint: j.uid, position: v });
   }
 
   uiOf(r) {
@@ -473,9 +391,9 @@ export class RobotPanel {
         </div>
         <div class="robot-contacts" hidden></div>
         <div class="robot-local" hidden>
-          <span class="local-badge">로컬 자세</span>
-          <span class="local-note">Kreate에는 반영되지 않습니다</span>
-          <button class="text-btn" data-act="session">세션 자세로</button>
+          <span class="local-badge">움직인 자세</span>
+          <span class="local-note">배치(장면)의 자세와 다릅니다. 지점으로 남기려면 + MoveJ·MoveL</span>
+          <button class="text-btn" data-act="session">원래 자세로</button>
         </div>
         <ul class="joints">
           ${r.joints

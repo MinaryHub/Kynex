@@ -162,9 +162,9 @@
           <div id="cell-io"></div>
         </details>
         <details class="insp-io" id="cell-mirror-box" hidden>
-          <summary>실제 장비 따라가기 <span class="muted">MTConnect · umati</span></summary>
+          <summary>실제 장비 따라가기 <span class="muted" id="mirror-ways">MTConnect · umati</span></summary>
           <div class="insp-props">
-            <label class="insp-field">방식<select id="mirror-kind"><option value="mtconnect">MTConnect</option><option value="umati">umati (OPC UA)</option></select></label>
+            <label class="insp-field">방식<select id="mirror-kind"><option value="mtconnect">MTConnect</option><option value="umati">umati (OPC UA)</option><option value="mqtt">MQTT (VDA 5050)</option></select></label>
             <label class="insp-field" data-mirror="mtconnect">에이전트<input id="mirror-agent" type="text" placeholder="http://10.0.0.5:5000" spellcheck="false"></label>
             <label class="insp-field" data-mirror="mtconnect">장비<input id="mirror-device" type="text" placeholder="이름 (비우면 첫 장비)" spellcheck="false"></label>
             <label class="insp-field" data-mirror="umati">서버<input id="mirror-url" type="text" placeholder="opc.tcp://10.0.0.5:4840" spellcheck="false"></label>
@@ -172,6 +172,10 @@
             <label class="insp-field" data-mirror="umati">보안<select id="mirror-security"><option value="none">없음</option><option value="sign">서명</option><option value="encrypt">서명·암호화</option></select></label>
             <label class="insp-field" data-mirror="umati">사용자<input id="mirror-user" type="text" placeholder="익명" spellcheck="false" autocomplete="off"></label>
             <label class="insp-field" data-mirror="umati">비밀번호<input id="mirror-password" type="password" autocomplete="new-password"></label>
+            <label class="insp-field" data-mirror="mqtt">브로커<input id="mirror-broker" type="text" placeholder="10.0.0.5:1883" spellcheck="false"></label>
+            <label class="insp-field" data-mirror="mqtt">토픽<input id="mirror-topic" type="text" placeholder="uagv/v2/제조사/일련번호/state" spellcheck="false"></label>
+            <label class="insp-field" data-mirror="mqtt">사용자<input id="mirror-mqtt-user" type="text" placeholder="없음" spellcheck="false" autocomplete="off"></label>
+            <label class="insp-field" data-mirror="mqtt">비밀번호<input id="mirror-mqtt-password" type="password" autocomplete="new-password"></label>
           </div>
           <div class="insp-actions"><button class="text-btn" id="mirror-go">따라가기</button><span class="muted" id="mirror-state"></span></div>
         </details>

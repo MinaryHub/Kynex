@@ -164,6 +164,17 @@ export class CellPanel {
       const following = !!c?.mirror;
       if (following) return this.send({ op: 'mirror', object, agent: '' });
       const value = (id) => document.getElementById(id).value.trim();
+      if (value('mirror-kind') === 'mqtt') {
+        const broker = value('mirror-broker');
+        const topic = value('mirror-topic');
+        if (!broker) return this.ctx.toast('MQTT 브로커 주소를 넣으세요 (호스트:1883)');
+        if (!topic) return this.ctx.toast('AMR 상태 토픽을 넣으세요 (VDA 5050: uagv/v2/제조사/일련번호/state)');
+        const request = { op: 'mirror', object, kind: 'mqtt', broker, topic, user: value('mirror-mqtt-user') };
+        const password = document.getElementById('mirror-mqtt-password').value;
+        if (password) request.password = password;
+        document.getElementById('mirror-mqtt-password').value = '';
+        return this.send(request);
+      }
       if (value('mirror-kind') === 'umati') {
         const url = value('mirror-url');
         const node = value('mirror-node');
@@ -318,13 +329,23 @@ export class CellPanel {
     }
     // The real machine it follows, and how that is going.
     const mirrorBox = document.getElementById('cell-mirror-box');
-    mirrorBox.hidden = !(c && (c.kind === 'cnc' || c.kind === 'molder'));
+    mirrorBox.hidden = !(c && (c.kind === 'cnc' || c.kind === 'molder' || c.kind === 'amr'));
     if (!mirrorBox.hidden) {
       const m = c.mirror;
+      // An AMR follows its fleet over MQTT; a machine, its agent or server.
+      const amr = c.kind === 'amr';
+      document.getElementById('mirror-ways').textContent = amr ? 'MQTT · VDA 5050' : 'MTConnect · umati';
+      const kindSelect = document.getElementById('mirror-kind');
+      for (const o of kindSelect.options) o.hidden = (o.value === 'mqtt') !== amr;
+      if ((kindSelect.value === 'mqtt') !== amr) kindSelect.value = amr ? 'mqtt' : 'mtconnect';
       if (m && !mirrorBox.contains(document.activeElement)) {
         const set = (id, v) => (document.getElementById(id).value = v ?? '');
-        set('mirror-kind', m.kind === 'umati' ? 'umati' : 'mtconnect');
-        if (m.kind === 'umati') {
+        set('mirror-kind', m.kind === 'umati' || m.kind === 'mqtt' ? m.kind : 'mtconnect');
+        if (m.kind === 'mqtt') {
+          set('mirror-broker', m.broker);
+          set('mirror-topic', m.topic);
+          set('mirror-mqtt-user', m.user);
+        } else if (m.kind === 'umati') {
           set('mirror-url', m.url);
           set('mirror-node', m.node);
           set('mirror-security', m.security || 'none');
@@ -338,8 +359,18 @@ export class CellPanel {
       this.mirrorFields();
       document.getElementById('mirror-go').textContent = m ? '그만 따라가기' : '따라가기';
       const st = c.machine?.mirror;
+      const fleet = c.amr?.follow;
       let text = '';
-      if (m && st) {
+      if (m && amr && fleet) {
+        const said = [
+          fleet.connected ? '연결됨' : '연결 안 됨',
+          fleet.driving != null ? (fleet.driving ? '주행 중' : '정지') : null,
+          fleet.battery != null ? `배터리 ${Math.round(fleet.battery)}%` : null,
+          fleet.age != null ? `${fleet.age}초 전` : '위치 기다리는 중',
+          ...(fleet.errors ?? []),
+        ].filter(Boolean);
+        text = said.join(' · ') + (fleet.error ? ` · ${fleet.error}` : '');
+      } else if (m && st) {
         const last = st.last;
         if (st.error) text = st.error;
         if (last) {

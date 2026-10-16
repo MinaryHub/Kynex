@@ -355,12 +355,46 @@ pub enum Source {
         settings: crate::plc::Settings,
         node: String,
     },
+    /// An AMR's state messages on an MQTT broker (see `crate::mqtt`); the
+    /// password only kept while KYNEX runs.
+    Mqtt {
+        broker: String,
+        topic: String,
+        user: String,
+        password: String,
+    },
 }
 
 impl Source {
     /// A source as a request or the project file gives it; none for an
     /// empty one. A umati source's password only from a request.
     pub fn of(v: &Value) -> Option<Self> {
+        if v["kind"] == "mqtt" {
+            let text = |key: &str, most: usize| -> String {
+                v[key]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .take(most)
+                    .collect()
+            };
+            let (broker, topic) = (text("broker", 200), text("topic", 200));
+            if broker.is_empty() || topic.is_empty() {
+                return None;
+            }
+            return Some(Source::Mqtt {
+                broker,
+                topic,
+                user: text("user", 100),
+                password: v["password"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(200)
+                    .collect(),
+            });
+        }
         if v["kind"] == "umati" {
             let node: String = v["node"].as_str()?.trim().chars().take(300).collect();
             if node.is_empty() {
@@ -408,6 +442,12 @@ impl Source {
             Source::MtConnect { agent, device } => {
                 json!({ "kind": "mtconnect", "agent": agent, "device": device })
             }
+            Source::Mqtt {
+                broker,
+                topic,
+                user,
+                ..
+            } => json!({ "kind": "mqtt", "broker": broker, "topic": topic, "user": user }),
             Source::Umati { settings, node } => {
                 let mut v = settings.to_json();
                 v["kind"] = json!("umati");
@@ -427,6 +467,20 @@ impl Source {
                 split_url(agent)?;
                 if !device_safe(device) {
                     return Err("장비 이름에는 영문자, 숫자와 - . _ ~ 만 쓸 수 있습니다".into());
+                }
+            }
+            Source::Mqtt { broker, topic, .. } => {
+                let host = broker.trim_start_matches("mqtt://");
+                if !host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '_' | '/'))
+                {
+                    return Err(
+                        "MQTT: 브로커 주소는 호스트 이름이나 IP입니다 (예: 10.0.0.5:1883)".into(),
+                    );
+                }
+                if topic.contains(['\0']) {
+                    return Err("MQTT: 토픽에 쓸 수 없는 글자가 있습니다".into());
                 }
             }
             Source::Umati { settings, node } => {
@@ -480,6 +534,8 @@ impl Mirror {
                             parse(&get(&host, port, &path)?, device)
                         })
                     }
+                    // Not a machine's: the view reads an AMR's feed itself.
+                    Source::Mqtt { .. } => Err("MQTT는 AMR의 것입니다".to_string()),
                     Source::Umati { settings, node } => (|| {
                         if umati.is_none() {
                             let mut settings = settings.clone();

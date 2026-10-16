@@ -41,6 +41,7 @@ mod collide;
 mod edges;
 mod import;
 mod library;
+mod mqtt;
 mod mtconnect;
 mod paths;
 mod plc;

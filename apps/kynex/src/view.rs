@@ -280,6 +280,8 @@ struct Stage {
     /// The real robots followed, by robot (`crate::rtde`): their joints as
     /// last shown, and each grip point's output as last seen.
     followers: std::collections::BTreeMap<u64, crate::rtde::Follow>,
+    /// The AMRs following real ones over MQTT (`crate::mqtt`), by AMR.
+    feeds: std::collections::BTreeMap<u64, (crate::mtconnect::Source, crate::mqtt::Feed)>,
     followed: std::collections::BTreeMap<u64, [f64; 6]>,
     follow_grips: std::collections::BTreeMap<u64, bool>,
     /// The project file, and whether another was just opened in its place.
@@ -381,6 +383,7 @@ impl Stage {
             plc_changed: false,
             mirrors: Default::default(),
             followers: Default::default(),
+            feeds: Default::default(),
             followed: Default::default(),
             follow_grips: Default::default(),
             file,
@@ -573,7 +576,34 @@ impl Stage {
         touched |= self.cell.tick(scene, time, now);
         // Machines following real ones: their agents asked, their states
         // taken.
-        let sources = self.cell.mirror_sources();
+        let (feeds, sources): (Vec<_>, Vec<_>) = self
+            .cell
+            .mirror_sources()
+            .into_iter()
+            .partition(|(_, s)| matches!(s, crate::mtconnect::Source::Mqtt { .. }));
+        // AMRs following real ones: their fleet's messages, their places.
+        self.feeds
+            .retain(|uid, (s, _)| feeds.iter().any(|(u, f)| u == uid && f == s));
+        for (uid, source) in feeds {
+            let crate::mtconnect::Source::Mqtt {
+                broker,
+                topic,
+                user,
+                password,
+            } = &source
+            else {
+                continue;
+            };
+            let (_, feed) = self.feeds.entry(uid).or_insert_with(|| {
+                (
+                    source.clone(),
+                    crate::mqtt::Feed::start(broker, user, password, topic),
+                )
+            });
+            let seen = feed.rover();
+            self.cell
+                .follow_amr(scene, uid, seen.as_ref(), feed.to_json());
+        }
         self.mirrors
             .retain(|uid, m| sources.iter().any(|(u, s)| u == uid && *s == m.source));
         for (uid, source) in sources {
@@ -714,6 +744,7 @@ impl Stage {
             || self.plc.on()
             || !self.mirrors.is_empty()
             || !self.followers.is_empty()
+            || !self.feeds.is_empty()
             || self.comparing.is_some()
             || !self.importing.is_empty()
     }

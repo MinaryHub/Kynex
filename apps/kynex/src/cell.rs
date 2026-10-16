@@ -684,6 +684,8 @@ pub struct Cell {
     signals: Vec<PlcSignal>,
     signal_values: BTreeMap<String, i64>,
     signal_last: BTreeMap<String, i64>,
+    /// Each AMR following a real one: how its feed is getting on.
+    follows: BTreeMap<u64, Value>,
 }
 
 /// A signal the cell shares with a PLC besides its machines' commands and
@@ -1793,9 +1795,21 @@ impl Cell {
                 let c = self
                     .components
                     .iter_mut()
-                    .find(|c| c.object == object && c.kind.machine())
-                    .ok_or("CNC나 사출기가 아닙니다")?;
-                c.mirror = mirror_of(&req);
+                    .find(|c| c.object == object && (c.kind.machine() || c.kind == Kind::Amr))
+                    .ok_or("CNC, 사출기, AMR이 아닙니다")?;
+                let source = mirror_of(&req);
+                // A machine follows its agent; an AMR, its fleet's messages.
+                let mqtt = matches!(source, Some(crate::mtconnect::Source::Mqtt { .. }));
+                if source.is_some() && mqtt != (c.kind == Kind::Amr) {
+                    return Err(if mqtt {
+                        "MQTT로 따라가는 것은 AMR입니다".to_string()
+                    } else {
+                        "AMR은 MQTT(VDA 5050)로 따라갑니다".to_string()
+                    });
+                }
+                c.mirror = source;
+                self.rovers.remove(&object);
+                self.follows.remove(&object);
                 if let Some(m) = c.mirror.as_ref() {
                     m.check()?;
                 }
@@ -2640,6 +2654,9 @@ impl Cell {
             .ok_or("AMR 정지 위치가 아닙니다")?;
         let (to, facing) =
             floor_pose(&doc.world_transform(id_of(doc, s.object).ok_or("no such stop")?));
+        if c.mirror.is_some() {
+            return Err("실제 AMR을 따라가는 중이라 보내지 않습니다".into());
+        }
         let mut r = self.rover(doc, &c).ok_or("no such AMR")?;
         if !r.legs.is_empty() {
             return Err("AMR가 아직 주행 중입니다".into());
@@ -2762,6 +2779,52 @@ impl Cell {
             }
         }
         (moved, arrived)
+    }
+
+    /// AMR `amr` where its real one says it is (`seen`, metres and radians
+    /// on the floor, none while nothing has been said), the parts on its top
+    /// plate with it; `state` is how its feed is getting on, for the page.
+    pub fn follow_amr(
+        &mut self,
+        doc: &Document,
+        amr: u64,
+        seen: Option<&crate::mqtt::Rover>,
+        state: Value,
+    ) {
+        if self.follows.get(&amr) != Some(&state) {
+            self.follows.insert(amr, state);
+            self.changed = true;
+        }
+        let Some(seen) = seen else { return };
+        let Some(c) = self.components.iter().find(|c| c.object == amr).cloned() else {
+            return;
+        };
+        let Some(r) = self.rover(doc, &c) else { return };
+        let to = DVec3::new(seen.x, seen.y, r.at.z);
+        if to.distance(r.at) < 1e-6 && (seen.theta - r.yaw).abs() < 1e-6 {
+            return;
+        }
+        let deck = self.decks(doc).into_iter().find(|d| d.object == amr);
+        let shift = pose_of(to, seen.theta) * pose_of(r.at, r.yaw).inverse();
+        if let Some(deck) = deck {
+            let (_, turn, _) = shift.to_scale_rotation_translation();
+            for p in &mut self.parts {
+                if p.held.is_none() && deck.carries(p) {
+                    let at = shift.transform_point3(p.world.translation);
+                    let (_, own, _) = p.world.to_scale_rotation_translation();
+                    p.world = DAffine3::from_rotation_translation(turn * own, at);
+                }
+            }
+        }
+        self.rovers.insert(
+            amr,
+            Rover {
+                at: to,
+                yaw: seen.theta,
+                legs: Vec::new(),
+            },
+        );
+        self.changed = true;
     }
 
     /// Each AMR's and positioner's top plate where it now is.
@@ -3271,6 +3334,8 @@ impl Cell {
                         json!({
                             "driving": r.as_ref().is_some_and(|r| !r.legs.is_empty()),
                             "at": r.as_ref().map(|r| [r.at.x, r.at.y]),
+                            "yaw": r.as_ref().map(|r| r.yaw),
+                            "follow": self.follows.get(&c.object),
                         })
                     }),
                     "machine": c.kind.machine().then(|| {
@@ -4330,6 +4395,78 @@ mod axis_tests {
             uids.push(uid);
         }
         (doc, cell, uids)
+    }
+
+    #[test]
+    fn an_amr_following_its_fleet_s_messages_carries_what_is_on_it() {
+        let mut library = crate::library::Library::default();
+        library
+            .handle(&json!({"op": "place", "template": "amr", "at": [0.0, 0.0, 0.0]}).to_string());
+        library.handle(
+            &json!({"op": "place", "template": "amr_stop", "at": [2.0, 0.0, 0.0]}).to_string(),
+        );
+        let mut doc = Document::new();
+        library.apply(&mut doc);
+        let mut cell = Cell::default();
+        let (mut amr, mut stop) = (0, 0);
+        for (uid, name, kind) in library.roles() {
+            match kind {
+                Kind::Amr => amr = uid,
+                Kind::Stop => stop = uid,
+                _ => {}
+            }
+            cell.ensure(uid, name, kind);
+        }
+        // An AMR follows MQTT; a machine's agent is not for it.
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "mirror", "object": amr.to_string(), "agent": "http://10.0.0.5:5000"}),
+        );
+        assert_eq!(a["ok"], false, "{a}");
+        let a = ask(
+            &mut cell,
+            &doc,
+            json!({"op": "mirror", "object": amr.to_string(), "kind": "mqtt",
+                   "broker": "10.0.0.5", "topic": "uagv/v2/Acme/amr-01/state", "password": "pw"}),
+        );
+        assert_eq!(a["ok"], true, "{a}");
+        let saved = cell.to_saved();
+        assert!(
+            !saved.iter().any(|v| v.to_string().contains("pw")),
+            "no password kept"
+        );
+        let top = cell.decks(&doc)[0].hi.z;
+        cell.add_part(DVec3::new(0.2, 0.0, top + FINISHED.1 / 2.0), true);
+        assert!(
+            cell.drive(&doc, amr, stop).is_err(),
+            "not sent while following"
+        );
+        // Its fleet says: 1 m along X, 2 m along Y, turned a quarter.
+        let seen = crate::mqtt::Rover {
+            x: 1.0,
+            y: 2.0,
+            theta: std::f64::consts::FRAC_PI_2,
+            driving: Some(false),
+            battery: None,
+            errors: Vec::new(),
+        };
+        cell.follow_amr(&doc, amr, Some(&seen), json!({"connected": true}));
+        let r = cell.rovers[&amr].clone();
+        assert!((r.at.x - 1.0).abs() < 1e-9 && (r.at.y - 2.0).abs() < 1e-9);
+        // The part 0.2 m ahead of its middle, ahead still: now along +Y.
+        let p = cell.parts()[0].world.translation;
+        assert!((p.x - 1.0).abs() < 1e-9 && (p.y - 2.2).abs() < 1e-9, "{p}");
+        let v: Value = serde_json::from_str(&cell.to_json(&doc)).unwrap();
+        let c = v["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["kind"] == "amr")
+            .unwrap()
+            .clone();
+        assert_eq!(c["amr"]["follow"]["connected"], true);
+        assert_eq!(c["mirror"]["kind"], "mqtt");
     }
 
     #[test]

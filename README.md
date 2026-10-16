@@ -1009,6 +1009,29 @@ Checked on URSim (UR5e, free Docker image `universalrobots/ursim_e-series`).
 A `movej` sent to it was followed throughout, and KYNEX ended on the target
 joints to 0.1°.
 
+## Real AMRs (MQTT, VDA 5050)
+
+An AMR in the scene can follow a real one through its fleet's MQTT
+broker (`apps/kynex/src/mqtt.rs`). In the AMR's inspector, open **실제
+장비 따라가기**, choose **MQTT (VDA 5050)**, and enter the broker
+(`host` or `host:port`, 1883 by default) and the AMR's state topic:
+
+- VDA 5050's `state` message (`uagv/v2/<manufacturer>/<serial>/state`) is
+  read for `agvPosition` (x, y metres and θ radians on the map), `driving`,
+  `batteryState` and `errors`. A message with `x`, `y` and `theta` (or
+  `yaw`) at its top works too. The map's origin is KYNEX's world origin.
+- The AMR stands where the messages say, and the parts on its top plate
+  ride with it. The inspector shows the connection, driving or stopped,
+  the battery, any errors, and how long ago the last position came.
+- A user name and password can be given. The password is not saved in
+  the project, so enter it again after reopening.
+- While it follows, it is not sent to stops.
+
+MQTT 3.1.1 at QoS 0, read only, with KYNEX's own client. Checked with the
+free Mosquitto broker (Docker `eclipse-mosquitto:2`): VDA 5050 messages
+published with `mosquitto_pub` moved the AMR to x 2000, y 500 mm, turned
+90°, as the last message said.
+
 ## Installing KYNEX
 
 ```

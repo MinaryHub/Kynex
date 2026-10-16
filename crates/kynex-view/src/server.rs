@@ -501,6 +501,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             "op": "import",
             "name": query("name").unwrap_or_default(),
             "unit": query("unit").and_then(|u| u.parse::<f64>().ok()),
+            "keep": query("keep").as_deref() == Some("1"),
         });
         let (tx, rx) = mpsc::channel();
         let asked = robot.send(RobotRequest {

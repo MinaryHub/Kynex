@@ -295,12 +295,13 @@ export class LibraryPanel {
   // and placed at the origin, then selected.
   async importModel(file) {
     const ext = file.name.split('.').pop().toLowerCase();
-    if (!['step', 'stp', 'stl', 'obj', 'glb', 'gltf', '3mf', 'ply', 'zip', 'urdf'].includes(ext)) {
-      return this.ctx.toast('읽을 수 있는 파일: STEP, STL, OBJ, glTF·GLB, 3MF, PLY · 로봇은 URDF 폴더를 묶은 ZIP이나 URDF');
+    if (!['step', 'stp', 'stl', 'obj', 'glb', 'gltf', '3mf', 'ply', 'fbx', 'zip', 'urdf'].includes(ext)) {
+      return this.ctx.toast('읽을 수 있는 파일: STEP, STL, OBJ, FBX, glTF·GLB, 3MF, PLY · 로봇은 URDF 폴더를 묶은 ZIP이나 URDF');
     }
     if (file.size > 256 * 1024 * 1024) return this.ctx.toast('파일이 너무 큽니다 (256 MB까지)');
     const unit = document.getElementById('import-unit').value;
-    const query = new URLSearchParams({ name: file.name, ...(unit ? { unit } : {}) });
+    const keep = document.getElementById('import-keep').checked;
+    const query = new URLSearchParams({ name: file.name, ...(unit ? { unit } : {}), ...(keep ? { keep: '1' } : {}) });
     this.ctx.toast(`${file.name}을(를) 읽는 중…`);
     try {
       const response = await fetch(`/import?${query}`, {
@@ -312,7 +313,8 @@ export class LibraryPanel {
       const a = await response.json();
       if (!a.ok) return this.ctx.toast(`가져오지 못했습니다: ${a.error}`);
       const robot = ext === 'zip' || ext === 'urdf';
-      this.ctx.toast(`"${a.name}"을(를) ${robot ? '내 로봇' : '내 장비'}으로 가져와 원점에 놓았습니다${a.notes?.length ? ` (참고 ${a.notes.length}건)` : ''}`);
+      const where = keep && !robot ? '파일 안의 위치에' : '원점에';
+      this.ctx.toast(`"${a.name}"을(를) ${robot ? '내 로봇' : '내 장비'}으로 가져와 ${where} 놓았습니다${a.notes?.length ? ` (참고 ${a.notes.length}건)` : ''}`);
       const item = a.item;
       const root = () => this.itemById(item)?.root;
       const pick = (tries = 40) => (root() && this.ctx.records.has(root()) ? this.ctx.select(root(), { frame: true }) : tries > 0 && setTimeout(() => pick(tries - 1), 50));

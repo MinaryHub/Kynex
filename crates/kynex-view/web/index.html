@@ -52,7 +52,8 @@
       <div class="lib-import pad">
         <button class="text-btn" id="import-model" title="CAD·메시 파일은 내 장비로, 로봇은 URDF 폴더를 묶은 ZIP(또는 URDF)으로 내 로봇에 가져와 원점에 놓습니다. 파일을 3D 화면에 끌어다 놓아도 됩니다">모델 가져오기</button>
         <label class="muted" title="단위가 적혀 있지 않은 파일(STL, OBJ, PLY)의 단위">단위<select id="import-unit"><option value="">자동</option><option value="0.001">mm</option><option value="1">m</option><option value="0.0254">inch</option></select></label>
-        <input type="file" id="import-file" accept=".step,.stp,.stl,.obj,.glb,.gltf,.3mf,.ply,.zip,.urdf" hidden>
+        <label class="muted check" title="파일 안의 위치에 그대로 놓습니다. Visual Components 등에서 레이아웃 전체를 FBX·STEP으로 내보낸 파일을 배치 그대로 가져올 때"><input type="checkbox" id="import-keep"> 원래 위치</label>
+        <input type="file" id="import-file" accept=".step,.stp,.stl,.obj,.glb,.gltf,.3mf,.ply,.fbx,.zip,.urdf" hidden>
       </div>
       <ul class="library" id="library-list"></ul>
     </div>

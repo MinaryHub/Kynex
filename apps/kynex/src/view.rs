@@ -294,9 +294,11 @@ struct Stage {
     /// The project file held for this KYNEX while it is open.
     _lock: Option<std::fs::File>,
     /// Models being read, each with where its answer goes.
+    /// Whether each is placed where it stood in its file.
     importing: Vec<(
         Receiver<Result<crate::import::Imported, String>>,
         std::sync::mpsc::Sender<String>,
+        bool,
     )>,
 }
 
@@ -1202,11 +1204,12 @@ impl Stage {
         let req: Value = serde_json::from_str(body).unwrap_or_default();
         let name = req["name"].as_str().unwrap_or("").to_string();
         let unit = req["unit"].as_f64();
+        let keep = req["keep"] == true;
         let (send, read) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = send.send(crate::import::read_any(&name, &bytes, unit));
         });
-        self.importing.push((read, reply));
+        self.importing.push((read, reply, keep));
     }
 
     /// Models read since last asked: each kept as the user's own equipment
@@ -1214,11 +1217,11 @@ impl Stage {
     fn imported(&mut self, doc: &Document) -> bool {
         let mut any = false;
         let mut waiting = Vec::new();
-        for (read, reply) in std::mem::take(&mut self.importing) {
+        for (read, reply, keep) in std::mem::take(&mut self.importing) {
             let model = match read.try_recv() {
                 Ok(model) => model,
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    waiting.push((read, reply));
+                    waiting.push((read, reply, keep));
                     continue;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1227,11 +1230,17 @@ impl Stage {
             };
             let answer = model.and_then(|m| {
                 let before = self.snapshot(doc);
+                let mut at = [0.0; 3];
                 let (key, m) = match m {
-                    crate::import::Imported::Shape(m) => (
-                        self.library.save_custom(&m.doc, m.root, &m.name, &[])?,
-                        m.name_notes(),
-                    ),
+                    crate::import::Imported::Shape(m) => {
+                        if keep {
+                            at = [m.at.x, m.at.y, m.at.z];
+                        }
+                        (
+                            self.library.save_custom(&m.doc, m.root, &m.name, &[])?,
+                            m.name_notes(),
+                        )
+                    }
                     crate::import::Imported::Robot(r) => {
                         let name = r.name.clone();
                         (self.library.add_model(r), (name, Vec::new()))
@@ -1239,7 +1248,7 @@ impl Stage {
                 };
                 let placed = self.library_op(
                     doc,
-                    &serde_json::json!({"op": "place", "template": key, "at": [0, 0, 0]})
+                    &serde_json::json!({"op": "place", "template": key, "at": at, "snap": false})
                         .to_string(),
                 );
                 let placed: Value = serde_json::from_str(&placed).unwrap_or_default();
@@ -1250,6 +1259,7 @@ impl Stage {
                     "name": m.0,
                     "item": placed["item"],
                     "notes": m.1,
+                    "at": at,
                 }))
             });
             any = true;

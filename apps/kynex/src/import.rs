@@ -8,7 +8,9 @@ use kreate_math::DVec3;
 use kreate_scene::{Document, Object, ObjectData};
 
 /// The files read, by extension.
-pub const FORMATS: &[&str] = &["step", "stp", "stl", "obj", "glb", "gltf", "3mf", "ply"];
+pub const FORMATS: &[&str] = &[
+    "step", "stp", "stl", "obj", "glb", "gltf", "3mf", "ply", "fbx",
+];
 
 /// The most triangles a model may have: kept in the project file, and drawn
 /// with everything else.
@@ -21,6 +23,10 @@ pub struct Model {
     pub root: u64,
     pub name: String,
     pub notes: Vec<String>,
+    /// Where it stood in the file: the middle of its foot, metres. Placed
+    /// there, it keeps its place in a layout exported whole (a Visual
+    /// Components layout's FBX or STEP).
+    pub at: DVec3,
 }
 
 impl Model {
@@ -88,6 +94,9 @@ pub fn read(name: &str, bytes: &[u8], unit: Option<f64>) -> Result<Model, String
             .map_err(|e| e.to_string())?,
         "3mf" => kreate_io::threemf::parse_3mf(bytes).map_err(|e| e.to_string())?,
         "ply" => kreate_io::ply::parse_ply(bytes, &stem).map_err(|e| e.to_string())?,
+        // Its textures, if it names files beside it, are not read: only
+        // what the file holds.
+        "fbx" => kreate_io::parse_fbx(bytes, &|_| None).map_err(|e| e.to_string())?,
         _ => return Err(format!("읽을 수 있는 파일은 {} 입니다", FORMATS.join(", "))),
     };
     if let Some(u) = unit {
@@ -161,6 +170,7 @@ pub fn read(name: &str, bytes: &[u8], unit: Option<f64>) -> Result<Model, String
         root,
         name: stem,
         notes,
+        at: middle,
     })
 }
 
@@ -219,6 +229,56 @@ mod tests {
             }
         }
         (lo, hi)
+    }
+
+    /// A layout exported whole as FBX (as Visual Components exports one):
+    /// Y up, millimetres, a box 1000 × 500 × 200 under a node moved away
+    /// from the origin. It comes in Z up, in metres, and says where it
+    /// stood, to be placed there.
+    #[test]
+    fn an_fbx_layout_says_where_it_stood() {
+        let fbx = r#"; FBX 7.4.0 project file
+FBXHeaderExtension:  {
+	FBXHeaderVersion: 1003
+	Creator: "Layout"
+}
+GlobalSettings:  {
+	Version: 1000
+	Properties70:  {
+		P: "UpAxis", "int", "Integer", "",1
+		P: "UpAxisSign", "int", "Integer", "",1
+		P: "UnitScaleFactor", "double", "Number", "",0.1
+	}
+}
+Objects:  {
+	Geometry: 100, "Geometry::Box", "Mesh" {
+		Vertices: *24 {
+			a: 0,0,0,1000,0,0,1000,0,500,0,0,500,0,200,0,1000,200,0,1000,200,500,0,200,500
+		}
+		PolygonVertexIndex: *24 {
+			a: 0,1,2,-4,4,7,6,-6,0,4,5,-2,1,5,6,-3,2,6,7,-4,3,7,4,-1
+		}
+	}
+	Model: 200, "Model::Conveyor", "Mesh" {
+		Properties70:  {
+			P: "Lcl Translation", "Lcl Translation", "", "A",2000,0,-1000
+		}
+	}
+}
+Connections:  {
+	C: "OO",200,0
+	C: "OO",100,200
+}
+"#;
+        let m = read("layout.fbx", fbx.as_bytes(), None).unwrap();
+        let (lo, hi) = bounds(&m);
+        let size = hi - lo;
+        assert!((size - DVec3::new(1.0, 0.5, 0.2)).length() < 1e-4, "{size}");
+        assert!(
+            (m.at - DVec3::new(2.5, 0.75, 0.0)).length() < 1e-4,
+            "{}",
+            m.at
+        );
     }
 
     /// A box drawn in millimetres away from the origin: read in metres,

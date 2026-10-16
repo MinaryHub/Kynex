@@ -47,9 +47,12 @@ open, on Windows). A Kreate session is joined only when its address, or
 
 **Importing models.** **모델 가져오기** in the library (or a file dropped on
 the scene) reads a CAD or mesh file with Kreate's readers, without Kreate:
-STEP, STL, OBJ, glTF/GLB, 3MF and PLY. The model is kept as equipment of the
-user's own, standing on the floor at its middle, placed at the origin and
-selected; one edit to undo. STEP, glTF and 3MF name their units; for STL,
+STEP, STL, OBJ, FBX, glTF/GLB, 3MF and PLY. The model is kept as
+equipment of the user's own, standing on the floor at its middle, placed
+at the origin and selected; one edit to undo. With **원래 위치** ticked,
+it is placed where it stood in the file instead. Use this for a whole
+layout exported from Visual Components (or any other tool) as FBX or
+STEP, so it comes in as it was laid out (see `docs/vc-layout-import.md`). STEP, glTF and 3MF name their units; for STL,
 OBJ and PLY the unit is chosen (자동: mm for STL, m for the others). A model
 over 2 million triangles, or over a kilometre, is refused. **Robots** come the
 same way, as a robot description: a `.zip` of its folder (the `.urdf`

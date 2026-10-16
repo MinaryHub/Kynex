@@ -28,6 +28,10 @@ pub enum Place {
         start: f64,
         end: f64,
     },
+    /// At `at`, for an AMR to take it to `to` (see `fleet`).
+    Waiting { at: u64, to: u64 },
+    /// On AMR `amr`'s top plate, to `to`.
+    Riding { amr: u64, to: u64 },
 }
 
 /// A component of the flow as it stands.
@@ -86,6 +90,8 @@ impl Cell {
                 self.parts.retain(|p| p.flow.is_none());
                 self.removed.extend(gone);
                 self.stations.clear();
+                self.jobs.clear();
+                self.flow_problem = None;
                 self.flow_stats = Stats::default();
             }
             other => return Err(format!("unknown flow action {other:?}")),
@@ -126,7 +132,7 @@ impl Cell {
 
     /// Where on component `c` parts are set out: the middle of the top of
     /// it and all below it, and its own X and Y along the floor.
-    fn dock(doc: &Document, c: &Component) -> Option<(DVec3, DVec3, DVec3)> {
+    pub(super) fn dock(doc: &Document, c: &Component) -> Option<(DVec3, DVec3, DVec3)> {
         let id = id_of(doc, c.object)?;
         let world = doc.world_transform(id);
         let along = world.matrix3.x_axis.normalize_or_zero();
@@ -152,7 +158,11 @@ impl Cell {
         let coming = self
             .parts
             .iter()
-            .filter(|p| matches!(&p.flow, Some(Place::Moving { to, .. }) if *to == t.object))
+            .filter(|p| {
+                matches!(&p.flow,
+                    Some(Place::Moving { to, .. } | Place::Waiting { to, .. } | Place::Riding { to, .. })
+                        if *to == t.object)
+            })
             .count();
         let held = match t.kind {
             Kind::Station => s.queue.len(),
@@ -162,7 +172,7 @@ impl Cell {
         t.props.capacity.saturating_sub((held + coming) as u32)
     }
 
-    fn part_index(&self, uid: u64) -> Option<usize> {
+    pub(super) fn part_index(&self, uid: u64) -> Option<usize> {
         self.parts.iter().position(|p| p.uid == uid)
     }
 
@@ -333,6 +343,22 @@ impl Cell {
                 let Some(i) = self.part_index(uid) else {
                     continue;
                 };
+                happened = true;
+                // By AMR: it waits here for one.
+                if c.props.carrier == 1 {
+                    self.parts[i].flow = Some(Place::Waiting {
+                        at: c.object,
+                        to: target.object,
+                    });
+                    self.jobs.push(super::fleet::Job {
+                        part: uid,
+                        from: c.object,
+                        to: target.object,
+                        amr: None,
+                        phase: super::fleet::Phase::Waiting,
+                    });
+                    continue;
+                }
                 let from = self.parts[i].world.translation;
                 let to = docks.get(&target.object).map_or(from, |d| d.0);
                 let seconds = from.distance(to) / c.props.speed.max(0.01);
@@ -342,10 +368,10 @@ impl Cell {
                     start: now,
                     end: now + seconds,
                 });
-                happened = true;
             }
         }
 
+        happened |= self.carry_on(doc, now);
         self.place_flow_parts(&docks, now);
         self.changed |= happened;
         (true, happened)
@@ -365,6 +391,14 @@ impl Cell {
                 .flat_map(|(_, p)| p.iter())
                 .chain(s.out.iter())
                 .chain(s.queue.iter());
+            // And those waiting here for an AMR.
+            let waiting: Vec<u64> = self
+                .parts
+                .iter()
+                .filter(|p| matches!(&p.flow, Some(Place::Waiting { at, .. }) if at == object))
+                .map(|p| p.uid)
+                .collect();
+            let order = order.chain(waiting.iter());
             for (k, uid) in order.enumerate() {
                 // Rows of five across the top, from its middle.
                 let (col, row) = ((k % 5) as f64 - 2.0, (k / 5) as f64);
@@ -374,7 +408,7 @@ impl Cell {
         for p in &mut self.parts {
             let half = p.size().1 / 2.0;
             match &p.flow {
-                Some(Place::At(_)) => {
+                Some(Place::At(_) | Place::Waiting { .. }) => {
                     if let Some(spot) = spots.get(&p.uid) {
                         p.world = DAffine3::from_translation(*spot + DVec3::Z * half);
                     }
@@ -393,7 +427,8 @@ impl Cell {
                     };
                     p.world = DAffine3::from_translation(from.lerp(target, t));
                 }
-                None => {}
+                // Where its AMR is: placed by `carry_on`.
+                Some(Place::Riding { .. }) | None => {}
             }
         }
     }
@@ -444,6 +479,8 @@ impl Cell {
             "lead_min": st.lead_min,
             "lead_max": (st.sunk > 0).then_some(st.lead_max),
             "wip": self.parts.iter().filter(|p| p.flow.is_some()).count(),
+            "carrying": self.jobs.len(),
+            "problem": self.flow_problem,
         })
     }
 }

@@ -763,6 +763,23 @@ not change the session's scene.
     shows parts out, parts an hour, parts in process and lead time (mean,
     least, most). Each station gets a lane in the timeline: working,
     blocked, idle, and its utilization. Robot programs can run alongside.
+- **AMR lanes and traffic** (`apps/kynex/src/cell/fleet.rs`).
+  - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
+    go both ways and are drawn in orange. Sent to a stop, an AMR drives to
+    the nearest stop on the lanes, then stop by stop the shortest way.
+    With no lanes it drives straight, as before. A stop the lanes do not
+    reach is refused.
+  - Traffic: an AMR holds the stop it stands at or drives to. Another
+    waits before driving to a stop that is held, and goes on once it is
+    let go. Two AMRs driving at each other along one lane would wait for
+    ever, so lay lanes one way round or give them a passing place.
+  - A flow piece with **보내는 방법: AMR** has each part fetched by the
+    first free AMR. It drives to the stop nearest the sender (within 4 m),
+    loads for 5 s, carries the part on its top plate to the stop nearest
+    where it goes, and unloads for 5 s. The flow bar shows the transports
+    in hand and any problem, such as no stop near a station. Each AMR's
+    lane in the timeline shows its driving and its utilization.
+- **A robot on a track**
 - **A robot on a track**
 - **A robot on a track** (ABB IRB 1600 + 주행 트랙: 3 m of travel, 1.6
   m/s): the track is its first joint, jogged and solved with the arm. On

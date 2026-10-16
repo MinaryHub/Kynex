@@ -297,6 +297,9 @@ pub struct Props {
     pub point: [f64; 3],
     /// Connector: what it takes (see [`PLUGS`]).
     pub plug: u32,
+    /// Process flow: how a part is sent on: straight there (0), or by AMR
+    /// (1, see `fleet`).
+    pub carrier: u32,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -329,6 +332,7 @@ impl Default for Props {
             angle: std::f64::consts::FRAC_PI_2,
             point: [0.0; 3],
             plug: 0,
+            carrier: 0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -436,6 +440,9 @@ impl Props {
                 .map_or(now, |x| x.clamp(1.0, most as f64) as u32)
         };
         self.capacity = few("capacity", self.capacity, 1000);
+        self.carrier = v["carrier"]
+            .as_f64()
+            .map_or(self.carrier, |x| if x > 0.5 { 1 } else { 0 });
         self.takes = few("takes", self.takes, 20);
         self.makes = few("makes", self.makes, 20);
     }
@@ -459,6 +466,7 @@ impl Props {
             "point": self.point,
             "plug": self.plug,
             "capacity": self.capacity,
+            "carrier": self.carrier,
             "takes": self.takes,
             "makes": self.makes,
         })
@@ -759,6 +767,13 @@ pub struct Cell {
     stations: BTreeMap<u64, flow::Station>,
     flow_on: bool,
     flow_stats: flow::Stats,
+    /// What last kept the flow from going on as it should, for the page.
+    flow_problem: Option<String>,
+    /// The lanes between stops, both ways; the stop each AMR holds; the
+    /// parts AMRs are to carry (see `fleet`).
+    lanes: BTreeMap<u64, Vec<u64>>,
+    holds: BTreeMap<u64, u64>,
+    jobs: Vec<fleet::Job>,
 }
 
 /// A signal the cell shares with a PLC besides its machines' commands and
@@ -901,8 +916,9 @@ struct Rover {
 enum Leg {
     /// Turn on the spot to face this way.
     Turn(f64),
-    /// Drive straight to here.
-    Go(DVec3),
+    /// Drive straight to stop `0`, once no other AMR holds it (see
+    /// `fleet`).
+    Via(u64),
 }
 
 /// How fast an AMR turns on the spot, radians a second.
@@ -1079,6 +1095,13 @@ impl Cell {
                     .collect();
                 self.flow_next.insert(object, next);
             }
+            if let (Some(object), Some(lanes)) = (found, saved["lanes"].as_array()) {
+                let lanes: Vec<u64> = lanes
+                    .iter()
+                    .filter_map(|n| n.as_str().and_then(|s| s.parse().ok()))
+                    .collect();
+                self.lanes.insert(object, lanes);
+            }
             match (found, kind) {
                 (Some(object), Some(kind))
                     if !self.components.iter().any(|c| c.object == object) =>
@@ -1149,6 +1172,9 @@ impl Cell {
                     "plc": c.plc,
                     "mirror": c.mirror.as_ref().map(crate::mtconnect::Source::to_json),
                     "next": self.flow_next.get(&c.object).map(|n| {
+                        n.iter().map(u64::to_string).collect::<Vec<_>>()
+                    }),
+                    "lanes": self.lanes.get(&c.object).map(|n| {
                         n.iter().map(u64::to_string).collect::<Vec<_>>()
                     }),
                 })
@@ -1908,6 +1934,15 @@ impl Cell {
             // The process flow: started, stopped, reset; where a part of it
             // sends its parts.
             "flow" => self.flow(req["action"].as_str().unwrap_or(""))?,
+            "amr_lanes" => {
+                let next = req["next"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| n.as_str().and_then(|s| s.parse::<u64>().ok()))
+                    .collect();
+                self.set_lanes(uid("object")?, next)?;
+            }
             "flow_next" => {
                 let next = req["next"]
                     .as_array()
@@ -2762,14 +2797,9 @@ impl Cell {
         if !r.legs.is_empty() {
             return Err("AMR가 아직 주행 중입니다".into());
         }
-        // The floor where it drives: its own height, not the stop's.
-        let to = DVec3::new(to.x, to.y, r.at.z);
-        let way = to - r.at;
-        if way.truncate().length() > 1e-3 {
-            r.legs.push(Leg::Turn(way.y.atan2(way.x)));
-            r.legs.push(Leg::Go(to));
-        }
-        r.legs.push(Leg::Turn(facing));
+        // Along the lanes, if there are any; straight there if not.
+        let _ = (to, facing);
+        r.legs = self.route(doc, r.at, stop)?;
         self.rovers.insert(amr, r);
         self.changed = true;
         Ok(())
@@ -2823,6 +2853,7 @@ impl Cell {
             })
             .cloned()
             .collect();
+        let places = self.stop_places(doc);
         for c in amrs {
             let deck = self.decks(doc).into_iter().find(|d| d.object == c.object);
             let r = self.rovers.get_mut(&c.object).expect("an AMR on its way");
@@ -2850,13 +2881,27 @@ impl Cell {
                             left = 0.0;
                         }
                     }
-                    Leg::Go(to) => {
+                    Leg::Via(stop) => {
+                        // Held by another: waits where it is.
+                        if self.holds.get(&stop).is_some_and(|a| *a != c.object) {
+                            left = 0.0;
+                            continue;
+                        }
+                        self.holds.insert(stop, c.object);
+                        let Some(&(p, _)) = places.get(&stop) else {
+                            r.legs.remove(0);
+                            continue;
+                        };
+                        let to = DVec3::new(p.x, p.y, r.at.z);
                         let need = to.distance(r.at);
                         let can = c.props.speed * left;
                         if need <= can {
                             r.at = to;
                             left -= need / c.props.speed;
                             r.legs.remove(0);
+                            // There: what it held on the way let go of.
+                            let me = c.object;
+                            self.holds.retain(|s, a| *a != me || *s == stop);
                         } else {
                             r.at += (to - r.at) / need * can;
                             left = 0.0;
@@ -3420,6 +3465,13 @@ impl Cell {
                         })
                     }),
                     "flow": c.kind.flow().then(|| self.flow_json(doc, c)),
+                    "lanes": (c.kind == Kind::Stop).then(|| {
+                        self.lanes.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default()
+                    }),
+                    "stop_at": (c.kind == Kind::Stop)
+                        .then(|| id_of(doc, c.object))
+                        .flatten()
+                        .map(|id| point(doc.world_transform(id).translation)),
                     "sensor": (c.kind == Kind::Sensor).then(|| {
                         let beam = Self::beam(doc, c);
                         json!({
@@ -3559,9 +3611,11 @@ pub fn is_op(op: &str) -> bool {
             | "mirror"
             | "flow"
             | "flow_next"
+            | "amr_lanes"
     )
 }
 
+mod fleet;
 mod flow;
 
 #[cfg(test)]

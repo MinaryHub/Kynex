@@ -95,11 +95,13 @@ const FIELDS = {
     ['angle', '각도', '°', 180 / Math.PI],
   ],
   source: [
+    ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR']]],
     ['feed', '공급 간격', 's', 1],
     ['capacity', '내보낼 자리', '개', 1],
     ['speed', '이송 속도', 'mm/s', 1000],
   ],
   station: [
+    ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR']]],
     ['cycle', '처리 시간', 's', 1],
     ['capacity', '대기 자리', '개', 1],
     ['takes', '투입 수 (2 이상: 조립)', '개', 1],
@@ -107,6 +109,7 @@ const FIELDS = {
     ['speed', '이송 속도', 'mm/s', 1000],
   ],
   buffer: [
+    ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR']]],
     ['capacity', '용량', '개', 1],
     ['speed', '이송 속도', 'mm/s', 1000],
   ],
@@ -162,6 +165,14 @@ export class CellPanel {
       if (stop) this.send({ op: 'drive', object: this.ctx.selected(), stop });
       const turn = e.target.closest('[data-turn]')?.dataset.turn;
       if (turn != null) this.send({ op: 'turn', object: this.ctx.selected(), angle: (Number(turn) * Math.PI) / 180 });
+      // A stop's lanes: one more, or one fewer, both ways.
+      const lane = e.target.closest('[data-lane]');
+      if (lane) {
+        const object = this.ctx.selected();
+        const have = this.componentOf(object)?.lanes ?? [];
+        const t = lane.dataset.lane;
+        this.send({ op: 'amr_lanes', object, next: have.includes(t) ? have.filter((x) => x !== t) : [...have, t] });
+      }
       // A process flow's next: one more, or one fewer.
       const next = e.target.closest('[data-flow-next]');
       if (next) {
@@ -307,6 +318,17 @@ export class CellPanel {
             .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(s.name)}</button>`)
             .join('') + (c.amr?.driving ? '<span class="muted">주행 중</span>' : '')
         : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
+    } else if (c && c.kind === 'amr_stop') {
+      const others = this.cell.components.filter((s) => s.kind === 'amr_stop' && s.object !== c.object);
+      const have = c.lanes ?? [];
+      actions = others.length
+        ? `<span class="muted">AMR 경로</span>${others
+            .map(
+              (s) =>
+                `<button class="text-btn${have.includes(s.object) ? ' on' : ''}" data-lane="${escapeHtml(s.object)}" aria-pressed="${have.includes(s.object)}" title="이 정지 위치와 잇는 길 (양방향)">${have.includes(s.object) ? '✓ ' : ''}${escapeHtml(s.name)}</button>`,
+            )
+            .join('')}`
+        : '<span class="muted">다른 AMR 정지 위치를 놓으면 그 사이를 길로 이을 수 있습니다</span>';
     } else if (c && c.flow) {
       const f = c.flow;
       // Where its parts go: every other part of the flow, those it sends
@@ -577,6 +599,24 @@ export class CellPanel {
       }
     }
     for (const a of arrows) this.markers.add(a);
+    // The AMRs' lanes: a line between each two stops linked.
+    const stops = new Map(this.cell.components.filter((c) => c.stop_at).map((c) => [c.object, c.stop_at]));
+    const lanes = [];
+    for (const c of this.cell.components) {
+      for (const n of c.lanes ?? []) {
+        if (c.object > n) continue;
+        const a = stops.get(c.object);
+        const b = stops.get(n);
+        if (a && b) lanes.push(a[0], a[1], 0.01, b[0], b[1], 0.01);
+      }
+    }
+    if (lanes.length) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(lanes, 3));
+      const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0xf2b53c, transparent: true, opacity: 0.9, depthTest: false }));
+      lines.renderOrder = 8;
+      this.markers.add(lines);
+    }
     // Each sensor's beam: red while a part breaks it.
     for (const c of this.cell.components) {
       const b = c.sensor;

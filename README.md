@@ -817,6 +817,15 @@ not change the session's scene.
   - An AMR's **적재량** and an operator's **한 번에 드는 수**: parts
     waiting to go from one place to the same place are carried together,
     up to that many, side by side.
+  - **보내는 방법: 로봇**: an idle robot with a grip point carries the
+    part, with no program written. It is the nearest such robot that
+    reaches both places. KYNEX solves the arm for above the part, at it,
+    above where it goes and there, with the grip point turned as it
+    stands now (a robot waits with its tool down). It runs that as a
+    program: down, grip, up, over, down, let go, up. The part goes on
+    once put down. The robot's lane in the timeline shows the work.
+    Out of reach, the flow bar says where, and the part waits for a
+    robot that can.
   - A buffer's **꺼내는 순서**: first in first out, or last in first out.
     Library **랙 창고**: a pallet rack whose parts sit on its shelves,
     ten to a shelf, the lowest first.

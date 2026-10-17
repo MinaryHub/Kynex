@@ -291,6 +291,82 @@ impl Cell {
         Ok(())
     }
 
+    /// The parts waiting for a robot to carry them: each one's identity,
+    /// where it is, and where it is to be put (the top of what it goes to,
+    /// as it would stand there).
+    pub fn robot_jobs(&self, doc: &Document) -> Vec<(u64, DVec3, DVec3)> {
+        self.jobs
+            .iter()
+            .filter(|j| j.by == 3 && j.amr.is_none() && j.part != 0)
+            .filter_map(|j| {
+                let p = self.parts.iter().find(|p| p.uid == j.part)?;
+                let to = self.components.iter().find(|c| c.object == j.to)?;
+                let (top, ..) = Self::dock(doc, to)?;
+                Some((
+                    j.part,
+                    p.world.translation,
+                    top + DVec3::Z * (p.size().1 / 2.0 + 0.002),
+                ))
+            })
+            .collect()
+    }
+
+    /// Part `part`'s job taken by robot `robot`: the part its to carry.
+    pub fn robot_take(&mut self, part: u64, robot: u64) {
+        if let Some(j) = self.jobs.iter_mut().find(|j| j.part == part) {
+            j.amr = Some(robot);
+            j.phase = Phase::Carrying;
+            let to = j.to;
+            if let Some(i) = self.part_index(part) {
+                self.parts[i].flow = Some(Place::Riding { amr: robot, to });
+            }
+        }
+    }
+
+    /// Part `part` put down by its robot: handed over where it goes; or,
+    /// the robot stopped short (`failed`), put back to wait for another.
+    pub fn robot_done(&mut self, part: u64, failed: Option<String>) {
+        let now = self.last_tick.unwrap_or(0.0);
+        let Some(k) = self.jobs.iter().position(|j| j.part == part) else {
+            return;
+        };
+        let job = self.jobs[k].clone();
+        let Some(i) = self.part_index(part) else {
+            self.jobs.remove(k);
+            return;
+        };
+        self.parts[i].held = None;
+        match failed {
+            None => {
+                self.parts[i].flow = Some(Place::Moving {
+                    from: self.parts[i].world.translation,
+                    to: job.to,
+                    start: now,
+                    end: now,
+                });
+                self.jobs.remove(k);
+            }
+            Some(why) => {
+                self.parts[i].flow = Some(Place::Waiting {
+                    at: job.from,
+                    to: job.to,
+                });
+                self.jobs[k].amr = None;
+                self.jobs[k].phase = Phase::Waiting;
+                self.flow_problem = Some(why);
+            }
+        }
+        self.changed = true;
+    }
+
+    /// Says why the flow cannot go on as it should.
+    pub fn flow_trouble(&mut self, why: String) {
+        if self.flow_problem.as_ref() != Some(&why) {
+            self.flow_problem = Some(why);
+            self.changed = true;
+        }
+    }
+
     /// What each person is doing, for the timeline: walking, working (at a
     /// station at work, or handling a part), or idle.
     pub(super) fn operator_activities(&self) -> Vec<(u64, String, &'static str)> {
@@ -353,6 +429,10 @@ impl Cell {
             let job = self.jobs[k].clone();
             let idle = |cell: &Cell, a: u64| cell.rovers.get(&a).is_none_or(|r| r.legs.is_empty());
             let hand = job.by == 2;
+            // A robot's job is the view's, which runs robots.
+            if job.by == 3 {
+                continue;
+            }
             let next = match job.phase {
                 // By hand: the free person nearest the sender.
                 Phase::Waiting if hand => {

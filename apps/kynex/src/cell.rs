@@ -303,7 +303,8 @@ pub struct Props {
     /// Connector: what it takes (see [`PLUGS`]).
     pub plug: u32,
     /// Process flow: how a part is sent on: straight there (0), by AMR
-    /// (1) or by an operator (2, see `fleet`); and whether a station needs
+    /// (1), by an operator (2, see `fleet`) or by a robot (3, run by the
+    /// view: `Cell::robot_jobs`); and whether a station needs
     /// an operator at it to work (1).
     pub carrier: u32,
     pub crew: u32,
@@ -479,7 +480,7 @@ impl Props {
         self.capacity = few("capacity", self.capacity, 1000);
         self.carrier = v["carrier"]
             .as_f64()
-            .map_or(self.carrier, |x| x.round().clamp(0.0, 2.0) as u32);
+            .map_or(self.carrier, |x| x.round().clamp(0.0, 3.0) as u32);
         self.crew = v["crew"]
             .as_f64()
             .map_or(self.crew, |x| if x > 0.5 { 1 } else { 0 });

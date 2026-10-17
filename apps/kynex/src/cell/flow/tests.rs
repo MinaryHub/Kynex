@@ -307,11 +307,12 @@ fn products_go_their_own_ways_at_their_own_times() {
     assert_eq!(by.len(), 2, "{f}");
     let (a, b) = (by[0].1 as f64, by[1].1 as f64);
     assert!((a / (a + b) - 0.5).abs() < 0.1, "{by:?}");
-    // Each station made only its own.
-    assert_eq!(
-        cell.stations[&u[1]].made,
-        by[0].1 + cell.stations[&u[1]].out.len() as u64 - 0
-    );
+    // Each station made only its own: what it made reached the sink as
+    // its product, but for the few still on their way.
+    for (station, (_, sunk)) in [(u[1], &by[0]), (u[2], &by[1])] {
+        let made = cell.stations[&station].made;
+        assert!(made >= *sunk && made <= sunk + 3, "{made} made, {sunk} out");
+    }
 }
 
 #[test]

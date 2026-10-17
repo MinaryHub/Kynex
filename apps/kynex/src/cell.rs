@@ -915,6 +915,10 @@ pub struct Cell {
     /// each rack's shelves, lowest first.
     belt_room: BTreeMap<u64, u32>,
     shelf_tops: BTreeMap<u64, Vec<DVec3>>,
+    /// Where the flow's parts are set out on each component, and its
+    /// shelves, as found for the scene at a version with these
+    /// components: found again only when either changes.
+    docks_seen: Option<flow::Docks>,
     warmed: bool,
     just_warmed: bool,
     flow_start: Option<f64>,
@@ -3860,6 +3864,17 @@ impl Cell {
                 })
             })
             .collect();
+        // What a component has not, left out: a long flow's state is
+        // shorter by half.
+        let components: Vec<Value> = components
+            .into_iter()
+            .map(|mut v| {
+                if let Some(o) = v.as_object_mut() {
+                    o.retain(|_, x| !x.is_null());
+                }
+                v
+            })
+            .collect();
         json!({
             "flow": self.flow_summary(),
             "components": components,
@@ -3868,7 +3883,8 @@ impl Cell {
                 v["value"] = json!(self.signal_values.get(&s.name).copied().unwrap_or(0));
                 v
             }).collect::<Vec<_>>(),
-            "parts": self.parts.iter().map(|p| json!({
+            // The cell's own parts; a flow's are drawn in the scene.
+            "parts": self.parts.iter().filter(|p| p.flow.is_none()).map(|p| json!({
                 "uid": p.uid.to_string(),
                 "finished": p.finished,
                 "held": p.held.map(|h| h.0.to_string()),

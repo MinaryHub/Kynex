@@ -189,6 +189,16 @@ impl Order {
     }
 }
 
+/// Where the flow sets parts out, found for a scene at `version` with the
+/// flow components `objects`.
+#[derive(Debug)]
+pub struct Docks {
+    version: u64,
+    objects: Vec<u64>,
+    docks: BTreeMap<u64, (DVec3, DVec3, DVec3)>,
+    shelves: BTreeMap<u64, Vec<DVec3>>,
+}
+
 /// The flow's calendar and warm-up: work and rest in turn (minutes of
 /// each; no rest, no calendar), and the time at the start left out of its
 /// figures, seconds.
@@ -429,21 +439,108 @@ impl Cell {
         Some((top, along, across))
     }
 
-    /// Room for more at component `t`: what may still come to it.
-    fn room(&self, t: &Component) -> u32 {
+    /// Each component's dock and each rack's shelf tops, for the scene at
+    /// its version: the objects below each flow component found in one
+    /// pass over the scene, not one for each.
+    fn docks_of(
+        &mut self,
+        doc: &Document,
+        flow: &[Component],
+    ) -> (
+        BTreeMap<u64, (DVec3, DVec3, DVec3)>,
+        BTreeMap<u64, Vec<DVec3>>,
+    ) {
+        let key: Vec<u64> = flow.iter().map(|c| c.object).collect();
+        if let Some(seen) = &self.docks_seen {
+            if seen.version == doc.version() && seen.objects == key {
+                return (seen.docks.clone(), seen.shelves.clone());
+            }
+        }
+        // Each flow component by its scene object.
+        let ids: BTreeMap<ObjectId, (u64, bool)> = flow
+            .iter()
+            .filter_map(|c| Some((id_of(doc, c.object)?, (c.object, c.kind == Kind::Buffer))))
+            .collect();
+        let mut all: BTreeMap<u64, (DVec3, DVec3)> = BTreeMap::new();
+        let mut shelves: BTreeMap<u64, Vec<DVec3>> = BTreeMap::new();
+        for (o, x) in doc.objects() {
+            if ids.is_empty() {
+                break;
+            }
+            let shelf = x.name.starts_with("shelf");
+            let mut b = None;
+            // It and each object above it that is a flow component's.
+            let mut at = Some(o);
+            for depth in 0..64 {
+                let Some(a) = at else { break };
+                if let Some(&(object, buffer)) = ids.get(&a) {
+                    let Some(bb) = b.get_or_insert_with(|| bounds(doc, o)) else {
+                        break;
+                    };
+                    all.entry(object)
+                        .and_modify(|e| *e = (e.0.min(bb.0), e.1.max(bb.1)))
+                        .or_insert(*bb);
+                    if shelf && buffer && depth > 0 {
+                        let (lo, hi) = *bb;
+                        shelves.entry(object).or_default().push(DVec3::new(
+                            (lo.x + hi.x) / 2.0,
+                            (lo.y + hi.y) / 2.0,
+                            hi.z,
+                        ));
+                    }
+                }
+                at = doc.object(a).and_then(|x| x.parent);
+            }
+        }
+        for tops in shelves.values_mut() {
+            tops.sort_by(|a, b| a.z.total_cmp(&b.z));
+        }
+        let docks: BTreeMap<u64, (DVec3, DVec3, DVec3)> = ids
+            .iter()
+            .map(|(id, (object, _))| {
+                let world = doc.world_transform(*id);
+                let along = world.matrix3.x_axis.normalize_or_zero();
+                let across = world.matrix3.y_axis.normalize_or_zero();
+                let top = match all.get(object) {
+                    Some((lo, hi)) => DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, hi.z),
+                    None => world.translation,
+                };
+                (*object, (top, along, across))
+            })
+            .collect();
+        self.docks_seen = Some(Docks {
+            version: doc.version(),
+            objects: key,
+            docks: docks.clone(),
+            shelves: shelves.clone(),
+        });
+        (docks, shelves)
+    }
+
+    /// Parts on their way to each component: moving, waiting for or riding
+    /// on a carrier.
+    fn coming(&self) -> BTreeMap<u64, u32> {
+        let mut coming = BTreeMap::new();
+        for p in &self.parts {
+            if let Some(
+                Place::Moving { to, .. } | Place::Waiting { to, .. } | Place::Riding { to, .. },
+            ) = &p.flow
+            {
+                *coming.entry(*to).or_insert(0) += 1;
+            }
+        }
+        coming
+    }
+
+    /// Room for more at component `t`: what may still come to it, with
+    /// `coming` on their way to each.
+    fn room(&self, t: &Component, coming: &BTreeMap<u64, u32>) -> u32 {
         if t.kind == Kind::Sink {
             return u32::MAX;
         }
-        let s = self.stations.get(&t.object).cloned().unwrap_or_default();
-        let coming = self
-            .parts
-            .iter()
-            .filter(|p| {
-                matches!(&p.flow,
-                    Some(Place::Moving { to, .. } | Place::Waiting { to, .. } | Place::Riding { to, .. })
-                        if *to == t.object)
-            })
-            .count();
+        let coming = coming.get(&t.object).copied().unwrap_or(0) as usize;
+        let empty = Station::default();
+        let s = self.stations.get(&t.object).unwrap_or(&empty);
         let held = match t.kind {
             Kind::Station => s.queue.len(),
             Kind::Buffer => s.queue.len() + s.out.len(),
@@ -461,8 +558,13 @@ impl Cell {
         t.props.capacity.saturating_sub((held + coming) as u32)
     }
 
+    /// Where part `uid` is in the list: kept in the order they were made,
+    /// so found by halves; else looked for one by one.
     pub(super) fn part_index(&self, uid: u64) -> Option<usize> {
-        self.parts.iter().position(|p| p.uid == uid)
+        match self.parts.binary_search_by_key(&uid, |p| p.uid) {
+            Ok(i) => Some(i),
+            Err(_) => self.parts.iter().position(|p| p.uid == uid),
+        }
     }
 
     /// Moves the flow on by `dt` seconds. Returns whether it runs, and
@@ -504,12 +606,13 @@ impl Cell {
                     *until += dt;
                 }
             }
-            let docks: BTreeMap<u64, (DVec3, DVec3, DVec3)> = self
+            let flow: Vec<Component> = self
                 .components
                 .iter()
                 .filter(|c| c.kind.flow())
-                .filter_map(|c| Some((c.object, Self::dock(doc, c)?)))
+                .cloned()
                 .collect();
+            let (docks, _) = self.docks_of(doc, &flow);
             self.place_flow_parts(&docks, now);
             return (true, happened);
         }
@@ -519,10 +622,18 @@ impl Cell {
             .filter(|c| c.kind.flow())
             .cloned()
             .collect();
-        let docks: BTreeMap<u64, (DVec3, DVec3, DVec3)> = flow
+        let (docks, shelves) = self.docks_of(doc, &flow);
+        let by_object: BTreeMap<u64, &Component> = flow.iter().map(|c| (c.object, c)).collect();
+        // Each source's parts in the flow, for its kanban.
+        let mut in_flow: BTreeMap<u64, u32> = BTreeMap::new();
+        if flow
             .iter()
-            .filter_map(|c| Some((c.object, Self::dock(doc, c)?)))
-            .collect();
+            .any(|c| c.kind == Kind::Source && c.props.kanban > 0)
+        {
+            for p in self.parts.iter().filter(|p| p.flow.is_some()) {
+                *in_flow.entry(p.origin).or_insert(0) += 1;
+            }
+        }
 
         // Sources put parts in, while their way out has room.
         for c in flow.iter().filter(|c| c.kind == Kind::Source) {
@@ -530,11 +641,7 @@ impl Cell {
                 continue;
             };
             // A kanban: no more in until one of its own has left.
-            let mine = self
-                .parts
-                .iter()
-                .filter(|p| p.origin == c.object && p.flow.is_some())
-                .count() as u32;
+            let mine = in_flow.get(&c.object).copied().unwrap_or(0);
             let pulled = c.props.kanban == 0 || mine < c.props.kanban;
             let room =
                 (self.stations.get(&c.object).map_or(0, |s| s.out.len()) as u32) < c.props.capacity;
@@ -605,7 +712,7 @@ impl Cell {
             .collect();
         for (uid, to) in arrived {
             happened = true;
-            let Some(t) = flow.iter().find(|c| c.object == to) else {
+            let Some(&t) = by_object.get(&to) else {
                 // Its target gone: the part goes too.
                 if let Some(i) = self.part_index(uid) {
                     self.parts.remove(i);
@@ -822,13 +929,14 @@ impl Cell {
         }
 
         // What is done goes on, to the first of its next with room.
+        let mut coming = self.coming();
         for c in flow.iter().filter(|c| c.kind != Kind::Sink) {
             let next: Vec<&Component> = self
                 .flow_next
                 .get(&c.object)
                 .into_iter()
                 .flatten()
-                .filter_map(|n| flow.iter().find(|t| t.object == *n))
+                .filter_map(|n| by_object.get(n).copied())
                 .collect();
             if next.is_empty() {
                 continue;
@@ -854,11 +962,14 @@ impl Cell {
                 };
                 let open: Vec<usize> = (0..next.len())
                     .map(|k| (turn + k) % next.len())
-                    .filter(|k| takes(next[*k]) && self.room(next[*k]) > 0)
+                    .filter(|k| takes(next[*k]) && self.room(next[*k], &coming) > 0)
                     .collect();
                 let pick = match c.props.rule {
                     // The one with the fewest waiting and coming.
-                    1 => open.iter().copied().max_by_key(|k| self.room(next[*k])),
+                    1 => open
+                        .iter()
+                        .copied()
+                        .max_by_key(|k| self.room(next[*k], &coming)),
                     // Any of them, as it falls.
                     2 if !open.is_empty() => {
                         let r = self.uniform();
@@ -875,6 +986,7 @@ impl Cell {
                     continue;
                 };
                 happened = true;
+                *coming.entry(target.object).or_insert(0) += 1;
                 // By AMR, or by hand: it waits here for one.
                 if c.props.carrier > 0 {
                     self.parts[i].flow = Some(Place::Waiting {
@@ -927,21 +1039,7 @@ impl Cell {
             }
         }
         // A rack's shelves, where it has any: its parts set out on them.
-        self.shelf_tops = flow
-            .iter()
-            .filter(|c| c.kind == Kind::Buffer)
-            .filter_map(|c| {
-                let id = id_of(doc, c.object)?;
-                let mut tops: Vec<DVec3> = doc
-                    .objects()
-                    .filter(|(o, x)| is_below(doc, *o, id) && x.name.starts_with("shelf"))
-                    .filter_map(|(o, _)| bounds(doc, o))
-                    .map(|(lo, hi)| DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, hi.z))
-                    .collect();
-                tops.sort_by(|a, b| a.z.total_cmp(&b.z));
-                (!tops.is_empty()).then_some((c.object, tops))
-            })
-            .collect();
+        self.shelf_tops = shelves;
         self.place_flow_parts(&docks, now);
         self.changed |= happened;
         (true, happened)
@@ -951,6 +1049,13 @@ impl Cell {
     /// component — worked on, then done, then waiting — or on its way.
     fn place_flow_parts(&mut self, docks: &BTreeMap<u64, (DVec3, DVec3, DVec3)>, now: f64) {
         let mut spots: BTreeMap<u64, DVec3> = BTreeMap::new();
+        // Those waiting at each for a carrier.
+        let mut waiting_at: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        for p in &self.parts {
+            if let Some(Place::Waiting { at, .. }) = &p.flow {
+                waiting_at.entry(*at).or_default().push(p.uid);
+            }
+        }
         for (object, s) in &self.stations {
             let Some(&(top, along, across)) = docks.get(object) else {
                 continue;
@@ -962,13 +1067,7 @@ impl Cell {
                 .chain(s.out.iter())
                 .chain(s.queue.iter());
             // And those waiting here for an AMR.
-            let waiting: Vec<u64> = self
-                .parts
-                .iter()
-                .filter(|p| matches!(&p.flow, Some(Place::Waiting { at, .. }) if at == object))
-                .map(|p| p.uid)
-                .collect();
-            let order = order.chain(waiting.iter());
+            let order = order.chain(waiting_at.get(object).into_iter().flatten());
             let shelves = self.shelf_tops.get(object);
             for (k, uid) in order.enumerate() {
                 // On a rack: ten to a shelf, the lowest first; else rows of
@@ -1036,7 +1135,13 @@ impl Cell {
         let now = self.last_tick.unwrap_or(0.0);
         json!({
             "next": self.flow_next.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default(),
-            "at": Self::dock(doc, c).map(|d| [d.0.x, d.0.y, d.0.z]),
+            "at": self
+                .docks_seen
+                .as_ref()
+                .filter(|d| d.version == doc.version())
+                .and_then(|d| d.docks.get(&c.object).copied())
+                .or_else(|| Self::dock(doc, c))
+                .map(|d| [d.0.x, d.0.y, d.0.z]),
             "queue": s.queue.len(),
             "out": s.out.len(),
             "working": s.working.is_some(),

@@ -272,6 +272,10 @@ struct Stage {
     /// the viewers were last told.
     timeline: Option<Timeline>,
     timeline_told: Option<Instant>,
+    /// When the cell was last told, and whether the page has asked for
+    /// anything since: told at once if it has.
+    cell_told: Option<Instant>,
+    asked: bool,
     /// Saved variants of the cell, the last comparison of them, and whether
     /// they changed since they were last saved.
     scenarios: Vec<Value>,
@@ -329,6 +333,9 @@ const ONE_EDIT: Duration = Duration::from_millis(1500);
 
 /// How often the timeline goes to the viewers while it grows.
 const TIMELINE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+/// How often the cell is told while only the clock moves it on: a big
+/// flow's state is long to write.
+const CELL_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl Stage {
     /// From the project file `project`, or the default one.
@@ -380,6 +387,8 @@ impl Stage {
             clock: Clock::default(),
             timeline: None,
             timeline_told: None,
+            cell_told: None,
+            asked: false,
             scenarios: saved.scenarios,
             compared: Vec::new(),
             scenarios_changed: false,
@@ -456,6 +465,7 @@ impl Stage {
     /// anything to look at again.
     fn answer(&mut self, doc: &Document, asked: Vec<RobotRequest>) -> bool {
         let mut touched = false;
+        self.asked |= !asked.is_empty();
         for request in asked {
             let op = serde_json::from_str::<Value>(&request.body)
                 .ok()
@@ -1324,7 +1334,13 @@ impl Stage {
             server.state("timeline", &timeline.to_json().to_string());
             self.timeline_told = Some(Instant::now());
         }
-        server.state("cell", &self.cell.to_json(scene));
+        let due = replaced
+            || std::mem::take(&mut self.asked)
+            || self.cell_told.is_none_or(|t| t.elapsed() >= CELL_EVERY);
+        if due {
+            server.state("cell", &self.cell.to_json(scene));
+            self.cell_told = Some(Instant::now());
+        }
         server.state("library", &self.library.to_json());
         server.state("templates", self.library.thumbnails());
         server.state("scenarios", &self.scenarios_json());

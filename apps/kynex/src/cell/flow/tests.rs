@@ -658,3 +658,73 @@ fn the_cost_of_a_part_and_the_years_to_pay_the_line_back() {
     let want = 4000.0 * 10000.0 / ((300.0 * rate - 20000.0) * 4000.0);
     assert!((payback - want).abs() < 1e-9 && payback < 0.2, "{c}");
 }
+
+/// A big model, timed: twenty lines of ten stations, a buffer between
+/// each, parts fed every 2 s — hundreds of stations, thousands of parts.
+/// `cargo test --release -- --ignored a_big_flow --nocapture`.
+#[test]
+#[ignore]
+fn a_big_flow_keeps_up() {
+    let (lines, stations) = (20, 10);
+    let mut items = Vec::new();
+    for l in 0..lines {
+        let y = l as f64 * 3.0;
+        items.push(("flow_source", 0.0, y, json!({"feed": 2.0})));
+        for s in 0..stations {
+            let x = 2.0 + s as f64 * 4.0;
+            items.push(("flow_station", x, y, json!({"cycle": 3.0 + (s % 3) as f64})));
+            items.push(("flow_buffer", x + 2.0, y, json!({"capacity": 40})));
+        }
+        items.push(("flow_sink", 4.0 + stations as f64 * 4.0, y, json!({})));
+    }
+    let mut library = crate::library::Library::default();
+    for (template, x, y, _) in &items {
+        library
+            .handle(&json!({"op": "place", "template": template, "at": [x, y, 0.0]}).to_string());
+    }
+    let mut doc = Document::new();
+    library.apply(&mut doc);
+    let mut cell = Cell::default();
+    let roles = library.roles();
+    for (k, (uid, name, kind)) in roles.iter().enumerate() {
+        cell.ensure(*uid, name.clone(), *kind);
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "role", "object": uid.to_string(), "kind": kind.tag(), "props": items[k].3}),
+        );
+    }
+    let per_line = 2 + 2 * stations;
+    for l in 0..lines {
+        for i in 0..per_line - 1 {
+            let k = l * per_line + i;
+            link(&mut cell, &doc, roles[k].0, &[roles[k + 1].0]);
+        }
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut tick, mut json) = (Duration::ZERO, Duration::ZERO);
+    let mut t = 0.0;
+    let mut most_parts = 0;
+    while t < 1800.0 {
+        t += 0.1;
+        let a = Instant::now();
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        tick += a.elapsed();
+        most_parts = most_parts.max(cell.parts.len());
+        // Told once a second of the simulation.
+        if (t * 10.0).round() as u64 % 10 == 0 {
+            let a = Instant::now();
+            std::hint::black_box(cell.to_json(&doc));
+            json += a.elapsed();
+        }
+    }
+    let sunk = cell.flow_summary()["sunk"].as_u64().unwrap();
+    println!(
+        "{} stations, most parts {most_parts}, out {sunk}: a step {:?}, the state told {:?}",
+        lines * stations,
+        tick / 18000,
+        json / 1800,
+    );
+    assert!(sunk > 1000);
+}

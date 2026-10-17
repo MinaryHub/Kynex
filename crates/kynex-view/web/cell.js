@@ -89,7 +89,10 @@ const FIELDS = {
   amr: [
     ['speed', '주행 속도', 'mm/s', 1000],
     ['capacity', '적재량 (한 번에 나르는 수)', '개', 1],
+    ['battery', '배터리: 완충으로 주행 (0: 신경 쓰지 않음)', '분', 1],
+    ['charge', '완충까지 충전 시간', '분', 1],
   ],
+  amr_stop: [['charger', '충전소', '', 1, [[0, '아님'], [1, '충전소']]]],
   positioner: [['speed', '회전 속도', '°/s', 180 / Math.PI]],
   // A choice is a list of [value, label].
   door: [
@@ -376,7 +379,9 @@ export class CellPanel {
       actions = stops.length
         ? stops
             .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(s.name)}</button>`)
-            .join('') + (c.amr?.driving ? '<span class="muted">주행 중</span>' : '')
+            .join('') +
+          (c.amr?.driving ? '<span class="muted">주행 중</span>' : '') +
+          (c.amr?.battery != null ? `<span class="muted">배터리 ${Math.round(c.amr.battery * 100)}%${c.amr.charging ? ' · 충전하러 감/충전 중' : ''}</span>` : '')
         : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
     } else if (c && c.kind === 'amr_stop') {
       const others = this.cell.components.filter((s) => s.kind === 'amr_stop' && s.object !== c.object);

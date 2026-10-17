@@ -331,6 +331,12 @@ pub struct Props {
     /// fewest waiting (1), or at random (2).
     pub kanban: u32,
     pub rule: u32,
+    /// An AMR's battery: minutes it drives on a full charge (0: no
+    /// battery to mind), and minutes to charge it from empty; a stop's
+    /// being a charger (1).
+    pub battery: f64,
+    pub charge: f64,
+    pub charger: u32,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -374,6 +380,9 @@ impl Default for Props {
             policy: 0,
             kanban: 0,
             rule: 0,
+            battery: 0.0,
+            charge: 60.0,
+            charger: 0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -506,6 +515,15 @@ impl Props {
         self.scrap = v["scrap"]
             .as_f64()
             .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
+        self.battery = v["battery"]
+            .as_f64()
+            .map_or(self.battery, |x| x.clamp(0.0, 100000.0));
+        self.charge = v["charge"]
+            .as_f64()
+            .map_or(self.charge, |x| x.clamp(0.1, 100000.0));
+        self.charger = v["charger"]
+            .as_f64()
+            .map_or(self.charger, |x| if x > 0.5 { 1 } else { 0 });
         self.kanban = v["kanban"]
             .as_f64()
             .map_or(self.kanban, |x| x.clamp(0.0, 100000.0) as u32);
@@ -549,6 +567,9 @@ impl Props {
             "setup": self.setup,
             "policy": self.policy,
             "kanban": self.kanban,
+            "battery": self.battery,
+            "charge": self.charge,
+            "charger": self.charger,
             "rule": self.rule,
             "takes": self.takes,
             "makes": self.makes,
@@ -880,6 +901,12 @@ pub struct Cell {
     /// parts AMRs are to carry (see `fleet`).
     lanes: BTreeMap<u64, Vec<u64>>,
     holds: BTreeMap<u64, u64>,
+    /// Each AMR's charge, 0 to 1 (full if not here); those charging until
+    /// nearly full; and the stop each is waiting to drive to, held by
+    /// another.
+    energy: BTreeMap<u64, f64>,
+    charging: std::collections::BTreeSet<u64>,
+    blocked: BTreeMap<u64, u64>,
     jobs: Vec<fleet::Job>,
 }
 
@@ -2967,7 +2994,11 @@ impl Cell {
         let (carried, arrived) = self.convey(doc, dt);
         self.conveying = carried;
         let (driven, stopped) = self.drive_on(doc, dt);
-        (moving || carried || driven, finished || arrived || stopped)
+        let recharged = self.fleet_care(doc, dt);
+        (
+            moving || carried || driven,
+            finished || arrived || stopped || recharged,
+        )
     }
 
     /// Where AMR `c` stands now: where it was sent, or else where it is
@@ -3108,8 +3139,15 @@ impl Cell {
                     Leg::Via(stop) => {
                         // Held by another: waits where it is.
                         if self.holds.get(&stop).is_some_and(|a| *a != c.object) {
+                            self.blocked.insert(c.object, stop);
                             left = 0.0;
                             continue;
+                        }
+                        self.blocked.remove(&c.object);
+                        // Driving uses its battery.
+                        if c.props.battery > 0.0 {
+                            let e = self.energy.entry(c.object).or_insert(1.0);
+                            *e = (*e - left / (c.props.battery * 60.0)).max(0.0);
                         }
                         self.holds.insert(stop, c.object);
                         let Some(&(p, _)) = places.get(&stop) else {
@@ -3386,10 +3424,17 @@ impl Cell {
                             .get(&c.object)
                             .is_some_and(|r| !r.legs.is_empty());
                         let busy = if c.kind == Kind::Amr { "drive" } else { "turn" };
+                        let charging = !driving && self.charging.contains(&c.object);
                         (
                             c.object,
                             c.name.clone(),
-                            if driving { busy } else { "idle" },
+                            if driving {
+                                busy
+                            } else if charging {
+                                "charge"
+                            } else {
+                                "idle"
+                            },
                         )
                     }),
             )
@@ -3734,6 +3779,8 @@ impl Cell {
                             "driving": r.as_ref().is_some_and(|r| !r.legs.is_empty()),
                             "at": r.as_ref().map(|r| [r.at.x, r.at.y]),
                             "yaw": r.as_ref().map(|r| r.yaw),
+                            "battery": (c.props.battery > 0.0).then(|| self.energy.get(&c.object).copied().unwrap_or(1.0)),
+                            "charging": self.charging.contains(&c.object),
                             "follow": self.follows.get(&c.object),
                         })
                     }),

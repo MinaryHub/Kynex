@@ -50,6 +50,7 @@ const ACTIVITIES = {
   walk: ['보행', '#c08bff'],
   down: ['고장', '#d9534f'],
   rest: ['휴식', '#556070'],
+  charge: ['충전', '#d4b83a'],
   work: ['작업', '#2fbfa0'],
   idle: ['쉼', '#2f353f'],
 };

@@ -111,6 +111,17 @@ impl Cell {
     /// as the stop faces. None if the lanes do not lead there; straight
     /// there if there are no lanes.
     pub(super) fn route(&self, doc: &Document, from: DVec3, stop: u64) -> Result<Vec<Leg>, String> {
+        self.route_avoiding(doc, from, stop, None)
+    }
+
+    /// The same, not through stop `avoid`.
+    fn route_avoiding(
+        &self,
+        doc: &Document,
+        from: DVec3,
+        stop: u64,
+        avoid: Option<u64>,
+    ) -> Result<Vec<Leg>, String> {
         let places = self.stop_places(doc);
         let &(to, facing) = places.get(&stop).ok_or("no such stop")?;
         let mut legs = Vec::new();
@@ -144,7 +155,13 @@ impl Cell {
                 if n == stop {
                     break;
                 }
-                for m in self.lanes.get(&n).into_iter().flatten() {
+                for m in self
+                    .lanes
+                    .get(&n)
+                    .into_iter()
+                    .flatten()
+                    .filter(|m| Some(**m) != avoid)
+                {
                     let (Some(a), Some(b)) = (places.get(&n), places.get(m)) else {
                         continue;
                     };
@@ -204,8 +221,159 @@ impl Cell {
             .map(|c| c.object)
             .find(|a| {
                 !self.jobs.iter().any(|j| j.amr == Some(*a))
+                    && !self.charging.contains(a)
                     && self.rovers.get(a).is_none_or(|r| r.legs.is_empty())
             })
+    }
+
+    /// Looks after the fleet each step: an AMR low on charge (under a
+    /// fifth) and free goes to the nearest charger and charges there until
+    /// nearly full; and two AMRs each waiting for the stop the other holds
+    /// are got apart — one goes round another way if there is one, else
+    /// it is said. Returns whether anything changed.
+    pub(super) fn fleet_care(&mut self, doc: &Document, dt: f64) -> bool {
+        let mut changed = false;
+        let places = self.stop_places(doc);
+        let chargers: Vec<u64> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Stop && c.props.charger == 1)
+            .map(|c| c.object)
+            .collect();
+        let amrs: Vec<Component> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Amr && c.props.battery > 0.0 && c.mirror.is_none())
+            .cloned()
+            .collect();
+        for c in amrs {
+            let Some(r) = self.rover(doc, &c) else {
+                continue;
+            };
+            let idle = r.legs.is_empty();
+            let busy = self.jobs.iter().any(|j| j.amr == Some(c.object));
+            let e = *self.energy.entry(c.object).or_insert(1.0);
+            let at_charger = chargers.iter().find(|s| {
+                places
+                    .get(s)
+                    .is_some_and(|(p, _)| p.truncate().distance(r.at.truncate()) < 0.05)
+            });
+            if idle && at_charger.is_some() && self.charging.contains(&c.object) {
+                let e = self.energy.entry(c.object).or_insert(1.0);
+                *e = (*e + dt / (c.props.charge * 60.0)).min(1.0);
+                if *e >= 0.95 {
+                    self.charging.remove(&c.object);
+                    changed = true;
+                }
+                continue;
+            }
+            if e < 0.2 && idle && !busy && !self.charging.contains(&c.object) {
+                let nearest = chargers
+                    .iter()
+                    .filter_map(|s| {
+                        Some((*s, places.get(s)?.0.truncate().distance(r.at.truncate())))
+                    })
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(s, _)| s);
+                match nearest {
+                    Some(s) => {
+                        if self.send(doc, c.object, s).is_ok() {
+                            self.charging.insert(c.object);
+                            changed = true;
+                        }
+                    }
+                    None => {
+                        self.flow_problem = Some(format!(
+                            "{}: 배터리가 떨어져 가는데 충전소가 없습니다",
+                            c.name
+                        ))
+                    }
+                }
+            }
+        }
+        // Two waiting on each other.
+        let waits: Vec<(u64, u64)> = self.blocked.iter().map(|(a, s)| (*a, *s)).collect();
+        let mut stuck: Vec<(u64, u64)> = Vec::new();
+        for (a, s) in waits {
+            let Some(&b) = self.holds.get(&s) else {
+                continue;
+            };
+            let Some(&t) = self.blocked.get(&b) else {
+                continue;
+            };
+            if self.holds.get(&t) != Some(&a) || !self.blocked.contains_key(&a) {
+                continue;
+            }
+            // Either of the two goes round, or aside, whichever can; said
+            // only if neither can.
+            let Some(c) = self.components.iter().find(|c| c.object == a).cloned() else {
+                continue;
+            };
+            let Some(mut r) = self.rover(doc, &c) else {
+                continue;
+            };
+            let Some(dest) = r.legs.iter().rev().find_map(|l| match l {
+                Leg::Via(n) => Some(*n),
+                _ => None,
+            }) else {
+                continue;
+            };
+            // Round another way; or, if it is going to that very stop, aside
+            // to a free stop next to it first, to let the other by.
+            let round = if dest != s {
+                self.route_avoiding(doc, r.at, dest, Some(s)).ok()
+            } else {
+                let here = self
+                    .holds
+                    .iter()
+                    .find(|(stop, who)| **who == a && **stop != s)
+                    .map(|(stop, _)| *stop);
+                let aside = here.and_then(|h| {
+                    self.lanes
+                        .get(&h)?
+                        .iter()
+                        .copied()
+                        .find(|n| *n != s && !self.holds.contains_key(n))
+                });
+                aside.and_then(|n| {
+                    let mut legs = self.route(doc, r.at, n).ok()?;
+                    let there = places.get(&n)?.0;
+                    legs.extend(
+                        self.route(doc, DVec3::new(there.x, there.y, r.at.z), dest)
+                            .ok()?,
+                    );
+                    Some(legs)
+                })
+            };
+            match round {
+                Some(legs) => {
+                    r.legs = legs;
+                    self.rovers.insert(a, r);
+                    self.blocked.remove(&a);
+                    self.blocked.remove(&b);
+                    stuck.retain(|(x, y)| (*x, *y) != (b, a));
+                    changed = true;
+                }
+                None if !stuck.contains(&(b, a)) && self.blocked.contains_key(&b) => {
+                    // The other may yet get out of the way.
+                    stuck.push((a, b));
+                }
+                None => {
+                    let name = |u: u64| {
+                        self.components
+                            .iter()
+                            .find(|c| c.object == u)
+                            .map_or(String::new(), |c| c.name.clone())
+                    };
+                    self.flow_problem = Some(format!(
+                        "AMR 교착: {}와 {}가 서로의 정지 위치를 기다립니다 (비켜설 길이 없음)",
+                        name(a),
+                        name(b)
+                    ));
+                }
+            }
+        }
+        changed
     }
 
     /// Where a person stands to work at, or hand a part to, component

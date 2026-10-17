@@ -229,3 +229,77 @@ fn a_person_carries_parts_by_hand() {
     assert_eq!(cell.flow_summary()["sunk"], 1);
     assert!(cell.flow_summary()["problem"].is_null());
 }
+
+#[test]
+fn an_amr_low_on_charge_goes_to_charge_and_back_to_work() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.5, json!({"battery": 1.0, "charge": 0.5})),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("amr_stop", 3.0, -3.0, json!({"charger": 1})),
+        ("flow_source", 0.0, 0.0, json!({"feed": 10.0, "carrier": 1})),
+        ("flow_station", 6.0, 0.0, json!({"cycle": 1.0})),
+        ("flow_sink", 8.0, 0.0, Value::Null),
+    ]);
+    let (amr, s1, s2, charger, source, station, sink) = (u[0], u[1], u[2], u[3], u[4], u[5], u[6]);
+    lanes(&mut cell, &doc, s1, &[s2, charger]);
+    lanes(&mut cell, &doc, s2, &[s1, charger]);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    // A minute's driving on a full battery: low within a few trips.
+    let start = Instant::now();
+    let (mut t, mut charged, mut low) = (0.0, false, 1.0f64);
+    while t < 600.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        low = low.min(cell.energy.get(&amr).copied().unwrap_or(1.0));
+        if cell.charging.contains(&amr) && cell.rovers[&amr].legs.is_empty() {
+            charged = true;
+            assert!(cell
+                .activities(&doc)
+                .iter()
+                .any(|(o, _, a)| *o == amr && *a == "charge"));
+        }
+    }
+    assert!(low < 0.2, "it ran low: {low}");
+    assert!(charged, "and charged");
+    // Back at work after: parts kept coming out, the AMR's round trip
+    // (some 34 s a part) the pace.
+    assert!(
+        cell.flow_summary()["sunk"].as_u64().unwrap() >= 14,
+        "{}",
+        cell.flow_summary()
+    );
+}
+
+#[test]
+fn two_amrs_head_on_are_got_apart() {
+    // A lane A–B, and C off to the side linked to both: one AMR at A, one
+    // at B, each sent to the other's stop along A–B.
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, 0.0, Value::Null),
+        ("amr", 4.0, 0.0, Value::Null),
+        ("amr_stop", 0.0, 0.0, Value::Null),
+        ("amr_stop", 4.0, 0.0, Value::Null),
+        ("amr_stop", 2.0, 3.0, Value::Null),
+    ]);
+    let (one, two, a, b, c) = (u[0], u[1], u[2], u[3], u[4]);
+    lanes(&mut cell, &doc, a, &[b, c]);
+    lanes(&mut cell, &doc, c, &[a, b]);
+    // Each at its own stop, holding it.
+    cell.drive(&doc, one, a).unwrap();
+    cell.drive(&doc, two, b).unwrap();
+    let t = run(&mut cell, &doc, 0.0, 3.0);
+    cell.drive(&doc, one, b).unwrap();
+    cell.drive(&doc, two, a).unwrap();
+    run(&mut cell, &doc, t, 40.0);
+    let (p1, p2) = (at(&cell, one), at(&cell, two));
+    assert!((p1.x - 4.0).abs() < 1e-6 && p1.y.abs() < 1e-6, "{p1}");
+    assert!(p2.x.abs() < 1e-6 && p2.y.abs() < 1e-6, "{p2}");
+}

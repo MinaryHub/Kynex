@@ -859,6 +859,15 @@ not change the session's scene.
     where it goes, and unloads for 5 s. The flow bar shows the transports
     in hand and any problem, such as no stop near a station. Each AMR's
     lane in the timeline shows its driving and its utilization.
+  - **Battery**: an AMR's 배터리 (minutes of driving on a full charge)
+    runs down as it drives. Below a fifth and free, it drives to the
+    nearest stop marked **충전소** and charges there, at 완충까지 충전
+    시간, until nearly full. It takes no work meanwhile. Its inspector
+    shows the charge, and the timeline shows 충전.
+  - **Head-on**: two AMRs each waiting for the stop the other holds are
+    got apart. One goes round another way if the lanes have one, or
+    steps aside to a free stop next to it and lets the other by. Only if
+    neither can does the flow bar say so.
 - **Operators** (library 공정 흐름 → 작업자, or the role 작업자 on any
   object). An operator walks at 걷는 속도 (1.2 m/s), straight, and goes
   round others.

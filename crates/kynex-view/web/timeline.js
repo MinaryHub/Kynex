@@ -89,13 +89,15 @@ export class TimelinePanel {
       if (e.key === 'Enter') document.getElementById('sc-save').click();
       e.stopPropagation();
     });
-    document.getElementById('sc-run').addEventListener('click', () =>
+    document.getElementById('sc-run').addEventListener('click', () => {
+      // Nothing saved: said so, not a button that does nothing.
+      if (!this.scenarios.list.length) return this.ctx.toast('먼저 현재 구성 저장으로 시나리오를 저장하세요');
       this.send({
         action: 'run',
         seconds: Number(document.getElementById('sc-hours').value) * 3600,
         reps: Number(document.getElementById('sc-reps').value),
-      }),
-    );
+      });
+    });
     document.getElementById('sc-list').addEventListener('click', (e) => {
       const b = e.target.closest('[data-sc]');
       if (!b) return;
@@ -279,7 +281,9 @@ export class TimelinePanel {
     this.renderSweep();
     const stats = document.getElementById('tl-stats');
     stats.textContent = comparing ? '비교 실행 중…' : sweeping ? '탐색 실행 중…' : `시나리오 ${list.length}개`;
-    document.getElementById('sc-run').disabled = comparing || sweeping || !list.length;
+    const run = document.getElementById('sc-run');
+    run.disabled = comparing || sweeping;
+    run.textContent = comparing ? '실행 중…' : '▶ 모두 실행';
     const box = document.getElementById('sc-list');
     if (!list.length) {
       box.innerHTML =

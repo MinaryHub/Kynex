@@ -64,7 +64,8 @@ URDF first). The robot goes under **내 로봇**, is placed at the origin
 and selected, and is programmed, jogged and exported as any robot; its
 grip points `grip_a` and `grip_b`, if it has them, are grippers. The zip
 is kept in the project as it came (so the project opens anywhere) and is
-unpacked once, by its hash, into `%APPDATA%\kynexobots`, at most
+unpacked once, by its hash, into `%APPDATA%\kynex
+obots`, at most
 5000 files and 512 MB, nothing written outside that folder whatever a
 name in it says. It is read on a
 thread of its own, so the viewer goes on meanwhile. Files go to `POST
@@ -658,14 +659,29 @@ thumbnails: each drawn from the piece at its usual size
 - 물류: 벨트 컨베이어 (length, belt width, height), AMR (a mobile base
   with a top plate to carry a load; length, width, height), AMR 정지 위치
   (a frame its size on the floor, an arrow the way it faces).
-- 안전: 안전 펜스.
+- 안전: 안전 펜스, 보호 가드레일 (yellow posts and two rails).
+- 공장 내부 (`library/interior.rs`): 공장 벽체 (sandwich panels on a
+  concrete curb, their seams showing, a band of windows or none), H형강
+  기둥 (on its footing, its foot banded yellow and black), 바닥 구역 표시
+  (통로 green with a dashed middle, 작업 구역, 위험 구역 bordered yellow and
+  black, 보관 구역; lying just under the floor, so what stands on it does
+  not touch it), 천장 크레인 (a double-girder bridge on its runway, the
+  trolley and the hook hanging), 천장 조명 (high-bay lamps in a row), 셔터
+  도어 (with its guards and bollards), 천장 배관 (pipes on T-supports in the
+  colours of what they carry).
+- 산업 장비 (`library/interior.rs`): 지게차 (its forks at the height
+  asked), 파렛트 랙 (bays and levels, loaded or empty), 파렛트 (박스 적재),
+  드럼통 (파렛트), 작업대, 공구 캐비닛, 프레스, 공기 압축기, 제어반 (with
+  its screen, buttons and stack light), 집진기, 용접기.
 
 The conveyor, the injection moulding machine, the AMR and its stops come
-with their roles and run (see below).
+with their roles and run (see below). The factory's interior and the
+shop-floor equipment have none: they are there to be seen and laid out
+round, and a robot's collision check sees them as it sees the rest.
 
 Drag an entry onto the scene, or click it and then click the scene. It
 lands on the floor, or on top of whatever is under the pointer (a robot
-on its pedestal). A CNC machine is turned so its door faces the origin.
+on its pedestal). Everything lands unturned; turn it afterwards.
 Select a placed item, here or in the scene, and its gizmo is on it at
 once, at the item's origin and along its own axes, whichever part of it
 was picked: the equipment moves as one, as Visual Components moves a

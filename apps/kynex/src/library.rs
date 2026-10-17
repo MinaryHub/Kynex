@@ -90,6 +90,24 @@ const fn q(
     }
 }
 
+/// A choice among `choices`, by number.
+const fn c(
+    key: &'static str,
+    label: &'static str,
+    default: f64,
+    choices: &'static [&'static str],
+) -> Param {
+    Param {
+        key,
+        label,
+        default,
+        min: 0.0,
+        max: (choices.len() - 1) as f64,
+        choices,
+        unit: "",
+    }
+}
+
 /// The tools a robot can carry on its flange, by number (see [`tool_urdf`]).
 pub const TOOLS: &[&str] = &[
     "없음",
@@ -381,6 +399,161 @@ pub const TEMPLATES: &[Template] = &[
             p("width", "폭", 3.8, 1.0, 20.0),
             p("height", "높이", 2.0, 1.0, 3.0),
         ],
+    },
+    Template {
+        key: "guard_rail",
+        name: "보호 가드레일",
+        group: "안전",
+        params: &[p("length", "길이", 4.0, 1.0, 30.0)],
+    },
+    // The factory around the cell (`interior`).
+    Template {
+        key: "factory_wall",
+        name: "공장 벽체 (샌드위치 패널)",
+        group: "공장 내부",
+        params: &[
+            p("length", "길이", 12.0, 1.0, 60.0),
+            p("height", "높이", 7.0, 2.5, 15.0),
+            c("windows", "창", 1.0, interior::WINDOWS),
+        ],
+    },
+    Template {
+        key: "factory_column",
+        name: "H형강 기둥",
+        group: "공장 내부",
+        params: &[
+            p("height", "높이", 8.0, 3.0, 20.0),
+            p("size", "단면", 0.4, 0.2, 1.0),
+        ],
+    },
+    Template {
+        key: "floor_zone",
+        name: "바닥 구역 표시",
+        group: "공장 내부",
+        params: &[
+            p("length", "길이", 8.0, 0.5, 100.0),
+            p("width", "폭", 3.0, 0.5, 50.0),
+            p("line", "선 폭", 0.1, 0.03, 0.3),
+            c("kind", "구역", 0.0, interior::ZONES),
+        ],
+    },
+    Template {
+        key: "overhead_crane",
+        name: "천장 크레인",
+        group: "공장 내부",
+        // A double-girder bridge crane of a 10 t class.
+        params: &[
+            p("span", "스팬", 12.0, 4.0, 30.0),
+            p("length", "주행 길이", 18.0, 4.0, 80.0),
+            p("height", "레일 높이", 7.0, 4.0, 15.0),
+        ],
+    },
+    Template {
+        key: "ceiling_light",
+        name: "천장 조명 (하이베이)",
+        group: "공장 내부",
+        params: &[
+            q("count", "개수", 4.0, 1.0, 30.0, "개"),
+            p("spacing", "간격", 4.0, 1.0, 12.0),
+            p("height", "높이", 7.0, 3.0, 15.0),
+        ],
+    },
+    Template {
+        key: "roll_door",
+        name: "셔터 도어",
+        group: "공장 내부",
+        params: &[
+            p("width", "폭", 4.0, 2.0, 10.0),
+            p("height", "높이", 4.5, 2.0, 8.0),
+        ],
+    },
+    Template {
+        key: "pipe_rack",
+        name: "천장 배관",
+        group: "공장 내부",
+        params: &[
+            p("length", "길이", 12.0, 2.0, 60.0),
+            p("height", "높이", 5.0, 2.5, 12.0),
+        ],
+    },
+    // Equipment of the shop floor besides robots and machines (`interior`).
+    Template {
+        key: "forklift",
+        name: "지게차",
+        group: "산업 장비",
+        // A 2.5 t counterbalance truck.
+        params: &[p("fork_height", "포크 높이", 0.1, 0.0, 1.9)],
+    },
+    Template {
+        key: "pallet_rack",
+        name: "파렛트 랙",
+        group: "산업 장비",
+        params: &[
+            q("bays", "칸 수", 3.0, 1.0, 12.0, "칸"),
+            q("levels", "단 수", 4.0, 1.0, 8.0, "단"),
+            c("load", "적재", 1.0, interior::LOADS),
+        ],
+    },
+    Template {
+        key: "pallet_load",
+        name: "파렛트 (박스 적재)",
+        group: "산업 장비",
+        params: &[q("layers", "단 수", 3.0, 1.0, 6.0, "단")],
+    },
+    Template {
+        key: "drum_pallet",
+        name: "드럼통 (파렛트)",
+        group: "산업 장비",
+        params: &[],
+    },
+    Template {
+        key: "workbench",
+        name: "작업대",
+        group: "산업 장비",
+        params: &[p("length", "길이", 1.8, 1.0, 3.0)],
+    },
+    Template {
+        key: "tool_cabinet",
+        name: "공구 캐비닛",
+        group: "산업 장비",
+        params: &[],
+    },
+    Template {
+        key: "press",
+        name: "프레스",
+        group: "산업 장비",
+        // A straight-side mechanical press of some 200 t.
+        params: &[
+            p("height", "높이", 3.6, 2.5, 6.0),
+            p("width", "폭", 2.0, 1.2, 4.0),
+        ],
+    },
+    Template {
+        key: "air_compressor",
+        name: "공기 압축기",
+        group: "산업 장비",
+        params: &[],
+    },
+    Template {
+        key: "control_panel",
+        name: "제어반",
+        group: "산업 장비",
+        params: &[
+            p("width", "폭", 1.2, 0.6, 3.0),
+            p("height", "높이", 2.0, 1.2, 2.4),
+        ],
+    },
+    Template {
+        key: "dust_collector",
+        name: "집진기",
+        group: "산업 장비",
+        params: &[],
+    },
+    Template {
+        key: "welding_machine",
+        name: "용접기",
+        group: "산업 장비",
+        params: &[],
     },
 ];
 
@@ -2186,6 +2359,7 @@ fn build(item: &Item) -> Result<Built, String> {
             );
             fence(&mut doc, &c, l, w, h);
         }
+        key if interior::KEYS.contains(&key) => interior::build(&mut doc, item),
         other => return Err(format!("no template {other:?}")),
     }
     let order = doc.hierarchy().into_iter().map(|(id, _)| id).collect();
@@ -2786,5 +2960,6 @@ pub fn is_op(op: &str) -> bool {
 #[cfg(test)]
 mod tests;
 
+mod interior;
 mod model;
 pub use model::RobotModel;

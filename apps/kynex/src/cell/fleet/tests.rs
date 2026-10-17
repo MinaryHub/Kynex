@@ -278,6 +278,203 @@ fn an_amr_low_on_charge_goes_to_charge_and_back_to_work() {
     );
 }
 
+/// Kept busy — parts always waiting, two taken at once — it is still sent
+/// to charge once low, not given job after job until flat.
+#[test]
+fn a_busy_amr_low_on_charge_still_goes_to_charge() {
+    let (doc, mut cell, u) = floor(&[
+        (
+            "amr",
+            0.0,
+            -1.5,
+            json!({"battery": 1.0, "charge": 0.5, "capacity": 2}),
+        ),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("amr_stop", 3.0, -3.0, json!({"charger": 1})),
+        (
+            "flow_source",
+            0.0,
+            0.0,
+            json!({"feed": 3.0, "carrier": 1, "capacity": 6}),
+        ),
+        (
+            "flow_station",
+            6.0,
+            0.0,
+            json!({"cycle": 1.0, "capacity": 4}),
+        ),
+        ("flow_sink", 8.0, 0.0, Value::Null),
+    ]);
+    let (amr, s1, s2, charger, source, station, sink) = (u[0], u[1], u[2], u[3], u[4], u[5], u[6]);
+    lanes(&mut cell, &doc, s1, &[s2, charger]);
+    lanes(&mut cell, &doc, s2, &[s1, charger]);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut t, mut charged, mut low) = (0.0, false, 1.0f64);
+    while t < 600.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        low = low.min(cell.energy.get(&amr).copied().unwrap_or(1.0));
+        charged |= cell.charging.contains(&amr) && cell.rovers[&amr].legs.is_empty();
+    }
+    assert!(charged, "it charged");
+    assert!(low > 0.0, "never run flat: {low}");
+}
+
+/// In a running flow, an AMR left standing at a stop with nothing to do
+/// moves aside for one that has to pass — else a second and third AMR
+/// would only stand in the first one's way.
+#[test]
+fn an_idle_amr_in_the_way_moves_aside_in_a_running_flow() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.0, Value::Null),
+        ("amr", 4.0, -1.0, Value::Null),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 4.0, -1.0, Value::Null),
+        ("amr_stop", 8.0, -1.0, Value::Null),
+        ("amr_stop", 4.0, -4.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 20.0, "carrier": 1})),
+        ("flow_station", 8.0, 0.0, json!({"cycle": 1.0})),
+        ("flow_sink", 10.0, 0.0, Value::Null),
+    ]);
+    let (one, two, a, b, c, side) = (u[0], u[1], u[2], u[3], u[4], u[5]);
+    let (source, station, sink) = (u[6], u[7], u[8]);
+    lanes(&mut cell, &doc, a, &[b]);
+    lanes(&mut cell, &doc, b, &[a, c, side]);
+    lanes(&mut cell, &doc, c, &[b]);
+    lanes(&mut cell, &doc, side, &[b]);
+    // The second parked on B, the one stop between source and station.
+    cell.drive(&doc, two, b).unwrap();
+    let t = run(&mut cell, &doc, 0.0, 2.0);
+    assert!((at(&cell, two).x - 4.0).abs() < 1e-6);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, t, 90.0);
+    let s = cell.flow_summary();
+    assert!(s["sunk"].as_u64().unwrap() >= 2, "parts got through: {s}");
+    assert!(s["problem"].is_null(), "{s}");
+    // Whichever carried them, one of the two stood aside on the spur.
+    let aside = [one, two]
+        .iter()
+        .any(|r| (at(&cell, *r) - DVec3::new(4.0, -4.0, at(&cell, *r).z)).length() < 1e-6);
+    assert!(
+        aside,
+        "one went aside: {} {}",
+        at(&cell, one),
+        at(&cell, two)
+    );
+}
+
+/// With nothing to carry, an AMR in a running flow parks on a spur — a
+/// stop at a lane's end that serves nothing — and not where others load.
+#[test]
+fn an_amr_with_nothing_to_do_parks_off_the_way() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.0, Value::Null),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("amr_stop", 3.0, -6.0, Value::Null),
+        (
+            "flow_source",
+            0.0,
+            0.0,
+            json!({"feed": 600.0, "carrier": 1}),
+        ),
+        ("flow_station", 6.0, 0.0, json!({"cycle": 1.0})),
+        ("flow_sink", 8.0, 0.0, Value::Null),
+    ]);
+    let (amr, a, b, spur, source, station, sink) = (u[0], u[1], u[2], u[3], u[4], u[5], u[6]);
+    lanes(&mut cell, &doc, a, &[b]);
+    lanes(&mut cell, &doc, b, &[a, spur]);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    assert_eq!(
+        cell.parking(&doc),
+        vec![spur],
+        "the spur, not the ends served"
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    // The one part carried, then off to park.
+    run(&mut cell, &doc, 0.0, 60.0);
+    assert_eq!(cell.flow_summary()["sunk"], 1);
+    let p = at(&cell, amr);
+    assert!(
+        (p.x - 3.0).abs() < 1e-6 && (p.y + 6.0).abs() < 1e-6,
+        "parked: {p}"
+    );
+}
+
+/// A loop driven one way round: three AMRs busy on it never meet head on,
+/// and the parts keep coming through.
+#[test]
+fn amrs_on_a_one_way_loop_never_meet_head_on() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.0, json!({"capacity": 1})),
+        ("amr", 6.0, -1.0, json!({"capacity": 1})),
+        ("amr", 6.0, -5.0, json!({"capacity": 1})),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -5.0, Value::Null),
+        ("amr_stop", 0.0, -5.0, Value::Null),
+        (
+            "flow_source",
+            0.0,
+            0.0,
+            json!({"feed": 4.0, "carrier": 1, "capacity": 20}),
+        ),
+        (
+            "flow_station",
+            6.0,
+            0.0,
+            json!({"cycle": 1.0, "capacity": 10}),
+        ),
+        ("flow_sink", 8.0, 0.0, Value::Null),
+    ]);
+    let (a, b, c, d) = (u[3], u[4], u[5], u[6]);
+    let (source, station, sink) = (u[7], u[8], u[9]);
+    for (from, to) in [(a, b), (b, c), (c, d), (d, a)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "amr_lanes", "object": from.to_string(), "next": [to.to_string()], "oneway": true}),
+        );
+    }
+    assert_eq!(cell.lanes[&b], vec![c], "one way: B leads on to C only");
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 600.0);
+    let s = cell.flow_summary();
+    assert!(s["problem"].is_null(), "{s}");
+    // One loads at A and unloads at B at a time, 5 s each, the others
+    // queued behind: a part every 20 s or so, and none stuck.
+    assert!(s["sunk"].as_u64().unwrap() >= 25, "{}", s["sunk"]);
+}
+
 #[test]
 fn two_amrs_head_on_are_got_apart() {
     // A lane A–B, and C off to the side linked to both: one AMR at A, one

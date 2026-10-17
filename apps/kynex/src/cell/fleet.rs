@@ -2,8 +2,8 @@
 //! way along it, traffic kept apart, and parts of a process flow carried
 //! from station to station.
 //!
-//! Stops linked (`Cell::lanes`, both ways) make the network an AMR drives
-//! on: sent to a stop, it goes to the stop of the network nearest it, then
+//! Stops linked (`Cell::lanes`, both ways, or one way when asked) make
+//! the network an AMR drives on: sent to a stop, it goes to the stop of the network nearest it, then
 //! stop by stop along the shortest way. With no links it drives straight,
 //! as before.
 //!
@@ -33,6 +33,10 @@ const REACH: f64 = 0.6;
 /// How far from a flow component the stop it is served at may be, metres.
 const NEAR: f64 = 4.0;
 
+/// The share of a full charge under which an AMR takes no more jobs and,
+/// once free, goes to charge.
+const LOW: f64 = 0.2;
+
 /// A part to carry, and how far it has got.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Job {
@@ -61,9 +65,10 @@ pub enum Phase {
 }
 
 impl Cell {
-    /// Links stop `object` to the stops `next`, both ways: the lanes AMRs
-    /// drive along.
-    pub fn set_lanes(&mut self, object: u64, next: Vec<u64>) -> Result<(), String> {
+    /// Links stop `object` to the stops `next`, both ways — or, `oneway`,
+    /// from it to them only, as a loop driven one way round, where two
+    /// AMRs never meet head on: the lanes AMRs drive along.
+    pub fn set_lanes(&mut self, object: u64, next: Vec<u64>, oneway: bool) -> Result<(), String> {
         let is_stop = |u: u64| {
             self.components
                 .iter()
@@ -74,6 +79,14 @@ impl Cell {
         }
         if next.iter().any(|n| !is_stop(*n) || *n == object) {
             return Err("다른 AMR 정지 위치와만 이을 수 있습니다".into());
+        }
+        if oneway {
+            // From it only: the ways into it are the other stops' own.
+            self.lanes.insert(object, next);
+            self.lanes.retain(|_, v| !v.is_empty());
+            self.roles_changed = true;
+            self.changed = true;
+            return Ok(());
         }
         // Both ways: what was linked to it and is no more is unlinked too.
         for lanes in self.lanes.values_mut() {
@@ -213,11 +226,15 @@ impl Cell {
     }
 
     /// An AMR free for a job: one not driving, not on a job, not following
-    /// a real one.
+    /// a real one, and not low on charge — else, never free, it would be
+    /// given job after job and never go to charge.
     fn free_amr(&self) -> Option<u64> {
         self.components
             .iter()
             .filter(|c| c.kind == Kind::Amr && c.mirror.is_none())
+            .filter(|c| {
+                c.props.battery <= 0.0 || self.energy.get(&c.object).is_none_or(|e| *e >= LOW)
+            })
             .map(|c| c.object)
             .find(|a| {
                 !self.jobs.iter().any(|j| j.amr == Some(*a))
@@ -226,8 +243,39 @@ impl Cell {
             })
     }
 
-    /// Looks after the fleet each step: an AMR low on charge (under a
-    /// fifth) and free goes to the nearest charger and charges there until
+    /// The stops an AMR with nothing to do parks at: those at the end of a
+    /// lane — linked to one stop only, a spur off the way — that are no
+    /// charger and no flow component's stop. None if the lanes have none:
+    /// then an idle AMR stays where it is.
+    fn parking(&self, doc: &Document) -> Vec<u64> {
+        let served: HashSet<u64> = self
+            .components
+            .iter()
+            .filter(|c| c.kind.flow())
+            .filter_map(|c| self.stop_near(doc, c.object))
+            .collect();
+        self.components
+            .iter()
+            .filter(|c| c.kind == Kind::Stop && c.props.charger == 0)
+            .map(|c| c.object)
+            .filter(|s| self.lanes.get(s).is_some_and(|l| l.len() == 1))
+            .filter(|s| !served.contains(s))
+            .collect()
+    }
+
+    /// Whether AMR `amr` stands with nothing to do: not driving, on no
+    /// job, not charging, not following a real one.
+    fn idle_amr(&self, amr: u64) -> bool {
+        self.components
+            .iter()
+            .any(|c| c.object == amr && c.kind == Kind::Amr && c.mirror.is_none())
+            && !self.jobs.iter().any(|j| j.amr == Some(amr))
+            && !self.charging.contains(&amr)
+            && self.rovers.get(&amr).is_none_or(|r| r.legs.is_empty())
+    }
+
+    /// Looks after the fleet each step: an AMR low on charge (under
+    /// [`LOW`]) and free goes to the nearest charger and charges there until
     /// nearly full; and two AMRs each waiting for the stop the other holds
     /// are got apart — one goes round another way if there is one, else
     /// it is said. Returns whether anything changed.
@@ -267,7 +315,7 @@ impl Cell {
                 }
                 continue;
             }
-            if e < 0.2 && idle && !busy && !self.charging.contains(&c.object) {
+            if e < LOW && idle && !busy && !self.charging.contains(&c.object) {
                 let nearest = chargers
                     .iter()
                     .filter_map(|s| {
@@ -287,6 +335,93 @@ impl Cell {
                             "{}: 배터리가 떨어져 가는데 충전소가 없습니다",
                             c.name
                         ))
+                    }
+                }
+            }
+        }
+        // In a running flow, an AMR with nothing to do goes to park, out of
+        // the others' way: to the nearest free parking stop, if the lanes
+        // have any (see `parking`).
+        if self.flow_on {
+            let idle: Vec<Component> = self
+                .components
+                .iter()
+                .filter(|c| c.kind == Kind::Amr && self.idle_amr(c.object))
+                .cloned()
+                .collect();
+            let parks = if idle.is_empty() {
+                Vec::new()
+            } else {
+                self.parking(doc)
+            };
+            for c in idle.iter().filter(|_| !parks.is_empty()) {
+                let Some(r) = self.rover(doc, c) else {
+                    continue;
+                };
+                let near = |s: &u64| {
+                    places.get(s).map_or(f64::INFINITY, |(p, _)| {
+                        p.truncate().distance(r.at.truncate())
+                    })
+                };
+                if parks.iter().any(|s| near(s) < 0.05) {
+                    continue;
+                }
+                // Free: no one there, or on the way there.
+                let taken = |s: &u64| {
+                    self.holds.contains_key(s)
+                        || self.rovers.iter().any(|(a, o)| {
+                            *a != c.object
+                                && o.legs.iter().rev().find_map(|l| match l {
+                                    Leg::Via(n) => Some(*n),
+                                    _ => None,
+                                }) == Some(*s)
+                        })
+                };
+                let park = parks
+                    .iter()
+                    .filter(|s| !taken(s))
+                    .min_by(|a, b| near(a).total_cmp(&near(b)))
+                    .copied();
+                if let Some(s) = park {
+                    if self.send(doc, c.object, s).is_ok() {
+                        changed = true;
+                    }
+                }
+            }
+        }
+        // In a running flow, one waiting on a stop where an AMR stands with
+        // nothing to do: that one goes aside, to a free stop next to it —
+        // off the waiting one's way if it can. (Sent there by hand, out of
+        // a flow, it stays: it was put there.)
+        if self.flow_on {
+            let waits: Vec<(u64, u64)> = self.blocked.iter().map(|(a, s)| (*a, *s)).collect();
+            for (a, s) in waits {
+                let Some(&b) = self.holds.get(&s) else {
+                    continue;
+                };
+                if b == a || !self.idle_amr(b) {
+                    continue;
+                }
+                let ahead: Vec<u64> = self.rovers.get(&a).map_or(Vec::new(), |r| {
+                    r.legs
+                        .iter()
+                        .filter_map(|l| match l {
+                            Leg::Via(n) => Some(*n),
+                            _ => None,
+                        })
+                        .collect()
+                });
+                let aside = self
+                    .lanes
+                    .get(&s)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|n| !self.holds.contains_key(n))
+                    .min_by_key(|n| ahead.contains(n));
+                if let Some(n) = aside {
+                    if self.send(doc, b, n).is_ok() {
+                        changed = true;
                     }
                 }
             }

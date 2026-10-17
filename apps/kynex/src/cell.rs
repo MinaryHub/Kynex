@@ -11,7 +11,8 @@
 //! Sizes and times start at the roadmap's industry-typical values
 //! (docs/roadmap-vs-visual-components.md §4).
 
-use std::collections::{BTreeMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use kreate_math::{DAffine3, DVec3, SceneRgb};
@@ -813,6 +814,7 @@ impl Belt {
 
 /// An AMR's or a positioner's top plate: where it stands now, and the
 /// plate's box from its middle.
+#[derive(Clone)]
 struct Deck {
     object: u64,
     pose: DAffine3,
@@ -1122,8 +1124,37 @@ fn bounds(doc: &Document, id: ObjectId) -> Option<(DVec3, DVec3)> {
     (lo.x <= hi.x).then_some((lo, hi))
 }
 
+thread_local! {
+    /// Objects by identity, as last found, and the parts found by name
+    /// below them. `Document` finds an object by looking at every one, and
+    /// a running cell asks every step: what was found is kept, checked on
+    /// each use (still there, still that one), and looked for again only
+    /// when wrong — the scene changed — so no answer is ever stale.
+    static BY_UID: RefCell<HashMap<u64, ObjectId>> = RefCell::new(HashMap::new());
+    static NAMED: RefCell<HashMap<(ObjectId, &'static str), ObjectId>> =
+        RefCell::new(HashMap::new());
+}
+
 fn id_of(doc: &Document, uid: u64) -> Option<ObjectId> {
-    doc.object_by_uid(Uid::from_raw(uid))
+    let is = |id: ObjectId| doc.object_uid(id).map(|u| u.raw()) == Some(uid);
+    if let Some(id) = BY_UID
+        .with(|m| m.borrow().get(&uid).copied())
+        .filter(|id| is(*id))
+    {
+        return Some(id);
+    }
+    // Wrong or never found: every object's identity again, in one look —
+    // the first of any two with one identity, as `Document` finds it.
+    BY_UID.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        for (id, _) in doc.objects() {
+            if let Some(u) = doc.object_uid(id) {
+                m.entry(u.raw()).or_insert(id);
+            }
+        }
+        m.get(&uid).copied()
+    })
 }
 
 /// Roles read from names, for a scene built to the usual conventions:
@@ -1216,12 +1247,36 @@ fn links_below(doc: &Document, parent: ObjectId) -> bool {
         .any(|(id, _)| is_below(doc, id, parent))
 }
 
-/// A child of `parent`, at any depth, whose name holds `word`.
-fn part_named(doc: &Document, parent: ObjectId, word: &str) -> Option<ObjectId> {
-    doc.objects()
-        .filter(|(_, o)| o.name.to_lowercase().contains(word))
+/// A child of `parent`, at any depth, whose name holds `word` (lower case,
+/// ASCII), in any case. Asked every step of a running cell: what is below
+/// is looked at first, and no name is copied.
+fn part_named(doc: &Document, parent: ObjectId, word: &'static str) -> Option<ObjectId> {
+    let named = |id: ObjectId| {
+        doc.object(id).is_some_and(|o| {
+            o.name
+                .as_bytes()
+                .windows(word.len())
+                .any(|w| w.eq_ignore_ascii_case(word.as_bytes()))
+        })
+    };
+    let kept = NAMED.with(|m| m.borrow().get(&(parent, word)).copied());
+    if let Some(id) = kept.filter(|id| named(*id) && is_below(doc, *id, parent)) {
+        return Some(id);
+    }
+    let found = doc
+        .objects()
         .map(|(id, _)| id)
-        .find(|id| is_below(doc, *id, parent))
+        .filter(|id| is_below(doc, *id, parent))
+        .find(|id| named(*id))?;
+    NAMED.with(|m| {
+        let mut m = m.borrow_mut();
+        // Kept small: a scene's machines and AMRs, not every scene seen.
+        if m.len() > 4096 {
+            m.clear();
+        }
+        m.insert((parent, word), found);
+    });
+    Some(found)
 }
 
 impl Cell {
@@ -2164,7 +2219,7 @@ impl Cell {
                     .flatten()
                     .filter_map(|n| n.as_str().and_then(|s| s.parse::<u64>().ok()))
                     .collect();
-                self.set_lanes(uid("object")?, next)?;
+                self.set_lanes(uid("object")?, next, req["oneway"] == true)?;
             }
             "flow_products" => {
                 let object = uid("object")?;
@@ -3148,8 +3203,15 @@ impl Cell {
             .cloned()
             .collect();
         let places = self.stop_places(doc);
+        // Each deck is where its own AMR is, which only its own turn below
+        // moves: worked out once, not once an AMR.
+        let decks = if amrs.is_empty() {
+            Vec::new()
+        } else {
+            self.decks(doc)
+        };
         for c in amrs {
-            let deck = self.decks(doc).into_iter().find(|d| d.object == c.object);
+            let deck = decks.iter().find(|d| d.object == c.object).cloned();
             let r = self.rovers.get_mut(&c.object).expect("an AMR on its way");
             let before = pose_of(r.at, r.yaw);
             let mut left = dt;

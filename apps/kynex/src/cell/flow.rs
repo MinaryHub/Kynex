@@ -304,7 +304,9 @@ impl Cell {
             "start" => {
                 if !self.components.iter().any(|c| c.kind == Kind::Source) {
                     return Err(
-                        "공정 흐름에 소재 공급이 없습니다. 셀 역할 '소재 공급'을 정하세요".into(),
+                        "이 프로젝트에는 공정 흐름이 없습니다. 라이브러리 '공정 흐름'에서 \
+                                소재 공급·공정 스테이션·배출을 놓고 다음 공정으로 이으세요"
+                            .into(),
                     );
                 }
                 self.flow_on = true;

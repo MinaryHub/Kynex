@@ -479,11 +479,9 @@ export class LibraryPanel {
   placeAt(key, x, y) {
     const hit = this.ctx.pick(x, y);
     if (!hit) return;
-    // A machine's front (its −Y) turned to face the origin, where the robot
-    // usually stands: (sin ψ, −cos ψ) along (−x, −y).
+    // Placed unturned, whatever it is: turned afterwards in the inspector.
     const t = this.library.templates.find((t) => t.key === key);
-    const yaw = t?.group === '공작기계' || t?.group === '성형기' ? Math.atan2(-hit.x, hit.y) : 0;
-    this.send({ op: 'place', template: key, at: this.onGrid(hit), yaw, snap: !this.alt }, (a) =>
+    this.send({ op: 'place', template: key, at: this.onGrid(hit), yaw: 0, snap: !this.alt }, (a) =>
       this.ctx.toast(`${t?.name ?? key}을(를) 놓았습니다${a.snapped ? ` · ${a.snapped}에 맞붙였습니다` : ''}`),
     );
   }

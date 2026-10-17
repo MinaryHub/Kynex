@@ -279,6 +279,51 @@ pub fn replicate(session: &Document, saved: &Value, seconds: f64, reps: usize) -
     out
 }
 
+/// The most values a sweep tries.
+pub const MOST_VALUES: usize = 12;
+
+/// A sweep: scenario `base` run once for each of `values`, setting
+/// component `object`'s setting `prop` to it — a station's cycle, a
+/// buffer's capacity, how often a source feeds — each run `reps` times.
+/// Each result is the replication's, with the value it was run at.
+pub fn sweep(
+    session: &Document,
+    base: &Value,
+    object: &str,
+    prop: &str,
+    values: &[f64],
+    seconds: f64,
+    reps: usize,
+) -> Result<Vec<Value>, String> {
+    if values.is_empty() || values.len() > MOST_VALUES {
+        return Err(format!("값은 1–{MOST_VALUES}개입니다"));
+    }
+    let role = base["cell"]
+        .as_array()
+        .and_then(|c| c.iter().find(|r| r["object"] == object))
+        .ok_or("그 컴포넌트에는 셀 역할이 없습니다")?;
+    // Only a setting the component has, and a number.
+    if !role["props"][prop].is_number() {
+        return Err(format!("{prop}: 이 컴포넌트에 없는 설정입니다"));
+    }
+    let name = role["name"].as_str().unwrap_or_default().to_string();
+    Ok(values
+        .iter()
+        .map(|v| {
+            let mut s = base.clone();
+            for r in s["cell"].as_array_mut().into_iter().flatten() {
+                if r["object"] == object {
+                    r["props"][prop] = json!(v);
+                }
+            }
+            s["name"] = json!(format!("{name} {prop}={v}"));
+            let mut out = replicate(session, &s, seconds, reps);
+            out["value"] = json!(v);
+            out
+        })
+        .collect())
+}
+
 /// `kynex compare`: runs every scenario in the project file and prints how
 /// each did, side by side. The scene is the `.kreate` file `--file`, or
 /// none: a cell laid out from the library alone.
@@ -507,6 +552,54 @@ mod tests {
             text.contains("병목") && text.contains("공정 스테이션 1"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_sweep_runs_the_line_at_each_value_of_one_setting() {
+        let base = line("기준", 10.0);
+        let station = base["cell"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "station")
+            .unwrap()["object"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let runs = sweep(
+            &Document::new(),
+            &base,
+            &station,
+            "cycle",
+            &[5.0, 20.0, 30.0],
+            600.0,
+            1,
+        )
+        .unwrap();
+        assert_eq!(runs.len(), 3);
+        let rate: Vec<f64> = runs
+            .iter()
+            .map(|r| r["per_hour"].as_f64().unwrap())
+            .collect();
+        // Fed every 10 s: 5 s keeps up with the source, 20 s and 30 s set the pace.
+        assert!(
+            rate[0] > 330.0 && rate[1] < 190.0 && rate[2] < 130.0,
+            "{rate:?}"
+        );
+        assert_eq!(runs[1]["value"], 20.0);
+        assert!(runs[1]["name"].as_str().unwrap().contains("cycle=20"));
+        // A setting the station has not, or no values: said.
+        assert!(sweep(
+            &Document::new(),
+            &base,
+            &station,
+            "nonsense",
+            &[1.0],
+            60.0,
+            1
+        )
+        .is_err());
+        assert!(sweep(&Document::new(), &base, &station, "cycle", &[], 60.0, 1).is_err());
     }
 
     #[test]

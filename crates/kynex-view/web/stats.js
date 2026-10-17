@@ -175,6 +175,27 @@ export function seriesCharts(flow) {
   return `<div class="st-cols"><section><h3>공정 중 (WIP) 추이</h3>${lineChart(wip, { unit: '개' })}</section><section><h3>시간당 배출 추이</h3>${lineChart(rate, { unit: '' })}</section></div>`;
 }
 
+// A sweep's parts an hour at each value tried, with its 95 % interval.
+export function sweepChart(runs, { width = 520, height = 150 } = {}) {
+  const ok = runs.filter((r) => r.ok !== false);
+  if (ok.length < 2) return '';
+  const pad = { l: 40, r: 12, t: 10, b: 22 };
+  const w = width - pad.l - pad.r;
+  const h = height - pad.t - pad.b;
+  const top = Math.max(1e-9, ...ok.map((r) => r.per_hour + (r.per_hour_ci || 0)));
+  const x = (i) => pad.l + (ok.length === 1 ? w / 2 : (i / (ok.length - 1)) * w);
+  const y = (v) => pad.t + h - (v / top) * h;
+  const path = ok.map((r, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(r.per_hour).toFixed(1)}`).join(' ');
+  const marks = ok
+    .map((r, i) => {
+      const ci = r.per_hour_ci || 0;
+      const bar = ci > 0 ? `<line x1="${x(i)}" y1="${y(r.per_hour + ci)}" x2="${x(i)}" y2="${y(Math.max(0, r.per_hour - ci))}" class="st-axis"/>` : '';
+      return `${bar}<circle cx="${x(i)}" cy="${y(r.per_hour)}" r="3" class="st-dot"/><text x="${x(i)}" y="${height - 6}" text-anchor="middle">${r.shown}</text>`;
+    })
+    .join('');
+  return `<svg class="st-chart" viewBox="0 0 ${width} ${height}" width="100%"><text x="${pad.l - 6}" y="${y(top) + 4}" text-anchor="end">${Math.round(top)}</text><text x="${pad.l - 6}" y="${y(0) + 4}" text-anchor="end">0</text><line x1="${pad.l}" y1="${y(0)}" x2="${pad.l + w}" y2="${y(0)}" class="st-axis"/><path d="${path}" class="st-line"/>${marks}</svg>`;
+}
+
 // What the line costs: invested, an hour (write-off and wages), a part, and
 // the years to pay it back.
 export function costCards(flow, escapeHtml) {

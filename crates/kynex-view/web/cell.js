@@ -65,7 +65,7 @@ const ioName = (n, output) => {
 
 // Each kind's settings, as the inspector shows them: key, label, unit, and
 // how the shown number maps to KYNEX's.
-const FIELDS = {
+export const FIELDS = {
   cnc: [
     ['cycle', '가공 시간', 's', 1],
     ['door', '문 개폐', 's', 1],

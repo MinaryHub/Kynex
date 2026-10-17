@@ -250,6 +250,14 @@
           <button class="chip-btn" id="sc-csv" title="비교 결과를 CSV로 내려받기">CSV</button>
         </div>
         <div class="sc-list" id="sc-list"></div>
+        <div class="sc-bar" title="지금 구성에서 컴포넌트 설정 하나를 여러 값으로 바꿔 가며 실행해 비교합니다 (위의 실행 시간·반복 횟수로)">
+          <span class="muted">변수 탐색</span>
+          <select id="sw-object" aria-label="컴포넌트"></select>
+          <select id="sw-prop" aria-label="설정"></select>
+          <input id="sw-values" type="text" maxlength="120" placeholder="값들 (예: 20, 30, 40)" aria-label="값들">
+          <button class="chip-btn" id="sw-run" title="값마다 실행해 비교">▶ 탐색</button>
+        </div>
+        <div class="sc-list" id="sw-list"></div>
         <p class="sc-note muted">프로그램을 반복 실행하고, 작업자가 투입대를 계속 채우고 배출대의 완성품을 치운다고 봅니다.</p>
       </div>
     </div>

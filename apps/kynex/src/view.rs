@@ -279,6 +279,10 @@ struct Stage {
     scenarios_changed: bool,
     /// A comparison running away from the loop: its results, when done.
     comparing: Option<Receiver<Vec<Value>>>,
+    /// A sweep running there (what it varies, its results to come), and
+    /// the last one done.
+    sweeping: Option<(Value, Receiver<Result<Vec<Value>, String>>)>,
+    swept: Value,
     /// The PLC the cell's machines are wired to, and whether where it is
     /// changed since last saved.
     plc: crate::plc::Plc,
@@ -380,6 +384,8 @@ impl Stage {
             compared: Vec::new(),
             scenarios_changed: false,
             comparing: None,
+            sweeping: None,
+            swept: Value::Null,
             // Where the PLC is, from the file; never linked to it until
             // someone at this computer says so: a project from elsewhere
             // does not drive a PLC on opening.
@@ -693,6 +699,26 @@ impl Stage {
             self.cell.swap_pallets(scene, &runner.counted_pallets());
             touched |= self.cell.take_changed();
         }
+        // A sweep done.
+        if let Some((what, results)) = &self.sweeping {
+            match results.try_recv() {
+                Ok(found) => {
+                    let mut what = what.clone();
+                    match found {
+                        Ok(runs) => what["results"] = Value::Array(runs),
+                        Err(e) => what["error"] = Value::String(e),
+                    }
+                    self.swept = what;
+                    self.sweeping = None;
+                    touched = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.sweeping = None;
+                    touched = true;
+                }
+            }
+        }
         // A comparison done.
         if let Some(results) = &self.comparing {
             match results.try_recv() {
@@ -778,6 +804,7 @@ impl Stage {
             || !self.followers.is_empty()
             || !self.feeds.is_empty()
             || self.comparing.is_some()
+            || self.sweeping.is_some()
             || !self.importing.is_empty()
     }
 
@@ -1163,7 +1190,58 @@ impl Stage {
                 self.compared.clear();
                 self.scenarios_changed = true;
             }),
-            "run" if self.comparing.is_some() => Err("비교를 이미 실행하고 있습니다".into()),
+            "run" | "sweep" if self.comparing.is_some() || self.sweeping.is_some() => {
+                Err("비교를 이미 실행하고 있습니다".into())
+            }
+            // One setting of one component, tried at each of some values,
+            // on the cell as it stands.
+            "sweep" => (|| {
+                let object = req["object"].as_str().ok_or("no object")?.to_string();
+                let prop = req["prop"].as_str().ok_or("no prop")?.to_string();
+                let values: Vec<f64> = req["values"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_f64)
+                    .filter(|v| v.is_finite())
+                    .collect();
+                if values.is_empty() || values.len() > scenario::MOST_VALUES {
+                    return Err(format!("값은 1–{}개입니다", scenario::MOST_VALUES));
+                }
+                let seconds = req["seconds"]
+                    .as_f64()
+                    .unwrap_or(3600.0)
+                    .clamp(60.0, 86400.0);
+                let reps = req["reps"].as_u64().unwrap_or(1).clamp(1, 50) as usize;
+                let scene = self.base.as_ref().unwrap_or(doc);
+                let base = scenario::snapshot(
+                    "",
+                    self.posing.saved_programs(scene),
+                    self.cell.to_saved(),
+                    self.library.to_saved(),
+                );
+                let name = base["cell"]
+                    .as_array()
+                    .and_then(|c| c.iter().find(|r| r["object"] == object.as_str()))
+                    .map(|r| r["name"].clone())
+                    .ok_or("그 컴포넌트에는 셀 역할이 없습니다")?;
+                let what = serde_json::json!({
+                    "object": object, "name": name, "prop": prop,
+                    "label": req["label"].as_str().unwrap_or(&prop),
+                    "unit": req["unit"].as_str().unwrap_or_default(),
+                    "scale": req["scale"].as_f64().unwrap_or(1.0),
+                    "values": values,
+                });
+                let (send, results) = std::sync::mpsc::channel();
+                let session = doc.clone();
+                std::thread::spawn(move || {
+                    let _ = send.send(scenario::sweep(
+                        &session, &base, &object, &prop, &values, seconds, reps,
+                    ));
+                });
+                self.sweeping = Some((what, results));
+                Ok(())
+            })(),
             "run" => {
                 let seconds = req["seconds"]
                     .as_f64()
@@ -1214,6 +1292,8 @@ impl Stage {
             })).collect::<Vec<_>>(),
             "compared": self.compared,
             "comparing": self.comparing.is_some(),
+            "sweeping": self.sweeping.is_some(),
+            "swept": self.swept,
         })
         .to_string()
     }

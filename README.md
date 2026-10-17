@@ -794,6 +794,12 @@ not change the session's scene.
   - **시나리오 비교 → 반복**: 3, 5 or 10 runs, each with its own seed.
     Parts an hour and lead time are shown as mean ± the 95 % confidence
     interval (Student's t). `kynex compare --reps N` does the same.
+  - **시나리오 비교 → 변수 탐색**: pick a component, one of its
+    settings (a station's cycle, a buffer's capacity, a source's feed,
+    MTBF…) and up to 12 values. The cell as it stands runs at each value,
+    as long and as often as set above, and the table and chart give parts
+    an hour (± its interval), lead time, bottleneck and part cost at
+    each: where more buffer stops paying, how fast a station must be.
 - **Products, calendar and warm-up** in a process flow:
   - Products A to F. A source's **제품 비율** draws each part's product
     by its weight. Parts are coloured by product.

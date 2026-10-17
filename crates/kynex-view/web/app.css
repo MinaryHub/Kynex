@@ -950,6 +950,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .st-bar span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 10px; overflow: hidden; }
 .st-chart text { font-size: 10px; fill: var(--faint); }
 .st-line { fill: none; stroke: var(--info); stroke-width: 2; }
+.st-dot { fill: var(--info); }
+.sw-title { font-size: 12px; margin: 8px 0 4px; }
 .st-pace { stroke: var(--faint); stroke-dasharray: 4 4; }
 .st-axis { stroke: var(--faint); }
 .st-grid { stroke: var(--line); }

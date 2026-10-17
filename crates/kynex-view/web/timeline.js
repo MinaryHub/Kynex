@@ -7,7 +7,8 @@
 // one CNC machine, two, another gripper — run for hours away from the view
 // and compared (the `scenarios` event).
 
-import { costCards, csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, throughputChart } from './stats.js';
+import { costCards, csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, sweepChart, throughputChart } from './stats.js';
+import { FIELDS } from './cell.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -116,6 +117,33 @@ export class TimelinePanel {
       win.document.close();
     });
     document.getElementById('sc-csv').addEventListener('click', () => this.scenariosCsv());
+    // A sweep: one setting of one component at several values.
+    this.components = [];
+    document.getElementById('sw-object').addEventListener('change', () => this.sweepProps());
+    document.getElementById('sw-run').addEventListener('click', () => {
+      const object = document.getElementById('sw-object').value;
+      const field = this.sweepFields(object).find((f) => f[0] === document.getElementById('sw-prop').value);
+      if (!field) return this.ctx.toast('탐색할 컴포넌트와 설정을 고르세요');
+      const shown = document
+        .getElementById('sw-values')
+        .value.split(/[,\s]+/)
+        .filter(Boolean)
+        .map(Number);
+      if (!shown.length || shown.some((v) => !Number.isFinite(v))) return this.ctx.toast('값을 쉼표로 나눠 넣으세요 (예: 20, 30, 40)');
+      if (shown.length > 12) return this.ctx.toast('값은 12개까지입니다');
+      const [prop, label, unit, scale] = field;
+      this.send({
+        action: 'sweep',
+        object,
+        prop,
+        label,
+        unit,
+        scale,
+        values: shown.map((v) => v / scale),
+        seconds: Number(document.getElementById('sc-hours').value) * 3600,
+        reps: Number(document.getElementById('sc-reps').value),
+      });
+    });
     // The process flow: run, stop, reset.
     this.flowState = null;
     document.getElementById('flow-run').addEventListener('click', () =>
@@ -175,12 +203,83 @@ export class TimelinePanel {
     if (!this.box.hidden) this.render();
   }
 
+  // The settings of component `object` a sweep may vary: numbers, not
+  // choices.
+  sweepFields(object) {
+    const c = this.components.find((c) => c.object === object);
+    return ((c && FIELDS[c.kind]) || []).filter((f) => !f[4]);
+  }
+
+  // The sweep's components: those with settings to vary.
+  sweepObjects() {
+    const box = document.getElementById('sw-object');
+    const list = this.components.filter((c) => this.sweepFields(c.object).length);
+    const key = list.map((c) => `${c.object}:${c.name}`).join('|');
+    if (key === this.sweepKey) return;
+    this.sweepKey = key;
+    const was = box.value;
+    const { escapeHtml } = this.ctx;
+    box.innerHTML = list.map((c) => `<option value="${escapeHtml(c.object)}">${escapeHtml(c.name)}</option>`).join('');
+    if (list.some((c) => c.object === was)) box.value = was;
+    this.sweepProps();
+  }
+
+  sweepProps() {
+    const box = document.getElementById('sw-prop');
+    const was = box.value;
+    const { escapeHtml } = this.ctx;
+    const fields = this.sweepFields(document.getElementById('sw-object').value);
+    box.innerHTML = fields.map(([k, label, unit]) => `<option value="${k}">${escapeHtml(label)}${unit ? ` (${escapeHtml(unit)})` : ''}</option>`).join('');
+    if (fields.some((f) => f[0] === was)) box.value = was;
+  }
+
+  // The last sweep: a row and a point for each value.
+  renderSweep() {
+    const { escapeHtml } = this.ctx;
+    const { sweeping, swept, comparing } = this.scenarios;
+    this.sweepObjects();
+    document.getElementById('sw-run').disabled = !!(comparing || sweeping);
+    const box = document.getElementById('sw-list');
+    if (sweeping) {
+      box.innerHTML = '<p class="muted tl-empty">탐색 실행 중…</p>';
+      return;
+    }
+    if (!swept) {
+      box.innerHTML = '';
+      return;
+    }
+    if (swept.error) {
+      box.innerHTML = `<p class="sc-alarm">${escapeHtml(swept.error)}</p>`;
+      return;
+    }
+    const scale = swept.scale || 1;
+    const runs = (swept.results ?? []).map((r) => ({ ...r, shown: Math.round(r.value * scale * 1000) / 1000 }));
+    const best = Math.max(0, ...runs.filter((r) => r.ok !== false).map((r) => r.per_hour));
+    const unit = swept.unit ? ` (${escapeHtml(swept.unit)})` : '';
+    const rows = runs
+      .map((r) =>
+        r.ok === false
+          ? `<tr><td>${r.shown}</td><td colspan="5" class="sc-alarm">${escapeHtml(r.alarm || '')}</td></tr>`
+          : `<tr class="${r.per_hour === best && runs.length > 1 ? 'best' : ''}"><td>${r.shown}</td>
+             <td>${r.per_hour.toFixed(1)}${r.reps > 1 ? `<small> ±${r.per_hour_ci.toFixed(1)}</small>` : ''}</td>
+             <td>${r.lead_mean != null ? `${r.lead_mean.toFixed(0)} s` : '—'}</td>
+             <td>${r.bottleneck ? `${escapeHtml(r.bottleneck.name)} ${pct(r.bottleneck.busy)}` : '—'}</td>
+             <td>${r.per_part != null ? `${Math.round(r.per_part).toLocaleString('ko-KR')}원` : '—'}</td>
+             <td class="sc-alarm">${r.alarm ? escapeHtml(r.alarm) : ''}</td></tr>`,
+      )
+      .join('');
+    box.innerHTML = `<h3 class="sw-title">${escapeHtml(swept.name)} · ${escapeHtml(swept.label)}${unit}</h3>
+      <table class="sc-table"><thead><tr><th>${escapeHtml(swept.label)}${unit}</th><th>시간당</th><th>리드타임</th><th>병목</th><th>개당 원가</th><th>알람</th></tr></thead><tbody>${rows}</tbody></table>
+      ${sweepChart(runs)}`;
+  }
+
   renderScenarios() {
     const { escapeHtml } = this.ctx;
-    const { list, compared, comparing } = this.scenarios;
+    const { list, compared, comparing, sweeping } = this.scenarios;
+    this.renderSweep();
     const stats = document.getElementById('tl-stats');
-    stats.textContent = comparing ? '비교 실행 중…' : `시나리오 ${list.length}개`;
-    document.getElementById('sc-run').disabled = comparing || !list.length;
+    stats.textContent = comparing ? '비교 실행 중…' : sweeping ? '탐색 실행 중…' : `시나리오 ${list.length}개`;
+    document.getElementById('sc-run').disabled = comparing || sweeping || !list.length;
     const box = document.getElementById('sc-list');
     if (!list.length) {
       box.innerHTML =
@@ -237,6 +336,7 @@ export class TimelinePanel {
     const any = (cell.components ?? []).some((c) => c.flow);
     const f = cell.flow;
     this.flowState = f;
+    this.components = cell.components ?? [];
     document.getElementById('flow-bar').hidden = !any;
     if (!any || !f) return;
     document.getElementById('flow-run').textContent = f.on ? '■ 정지' : '▶ 실행';

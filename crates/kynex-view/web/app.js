@@ -12,6 +12,7 @@ import { CellPanel } from '/cell.js';
 import { PlcPanel } from '/plc.js';
 import { ProjectPanel } from '/project.js';
 import { FloorPanel } from '/floor.js';
+import { mountLevelSwitch } from '/level.js';
 import { LibraryPanel } from '/library.js';
 import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
@@ -674,6 +675,7 @@ function pick(x, y) {
 }
 
 const plcPanel = new PlcPanel({ toast, escapeHtml, robots: () => robotPanel.robots });
+mountLevelSwitch(document.getElementById('level-switch'));
 const projectPanel = new ProjectPanel({ toast, escapeHtml });
 // The site's drawing: looked at from above when first laid.
 const floorPanel = new FloorPanel({

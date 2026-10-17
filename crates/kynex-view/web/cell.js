@@ -4,6 +4,7 @@
 // parts, which arrive in the scene like any other object.
 
 import * as THREE from 'three';
+import { fieldsFor, getLevel, onLevel, roleShown } from './level.js';
 
 const KINDS = [
   ['', '없음'],
@@ -179,7 +180,7 @@ export class CellPanel {
     ctx.scene.add(this.markers);
     this.box = document.getElementById('insp-cell');
     this.kind = document.getElementById('cell-kind');
-    this.kind.innerHTML = KINDS.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
+    this.roles();
     this.kind.addEventListener('change', () => this.setRole());
     this.box.addEventListener('change', (e) => {
       if (e.target.dataset.prop) this.setRole();
@@ -314,6 +315,13 @@ export class CellPanel {
     // What the inspector last drew, so that a running machine's progress
     // does not redraw the fields under the pointer.
     this.drawn = { props: '', actions: '', io: '', plc: '' };
+    // Another level: the inspector drawn anew, with what it shows.
+    onLevel(() => {
+      this.drawn = { props: '', actions: '', io: '', plc: '' };
+      this.rolesKey = null;
+      const uid = this.ctx.selected();
+      if (uid != null) this.showFor(uid);
+    });
     document.getElementById('cell-auto').addEventListener('click', () =>
       this.send({ op: 'auto' }, (a) => this.ctx.toast(a.added ? `셀 역할 ${a.added}개를 이름으로 정했습니다` : '이름으로 정할 역할이 없습니다')),
     );
@@ -347,13 +355,24 @@ export class CellPanel {
     if (selected != null) this.showFor(selected);
   }
 
+  // The roles offered, as the level has them, and the one `kind` has.
+  roles(kind = '') {
+    const key = `${getLevel()}|${kind}`;
+    if (key === this.rolesKey) return;
+    this.rolesKey = key;
+    this.kind.innerHTML = KINDS.filter(([v]) => roleShown(v) || v === kind)
+      .map(([v, label]) => `<option value="${v}">${label}</option>`)
+      .join('');
+  }
+
   // The selected object's role, in the inspector.
   showFor(uid) {
     const { escapeHtml } = this.ctx;
     const c = this.componentOf(uid);
+    this.roles(c?.kind ?? '');
     if (document.activeElement !== this.kind) this.kind.value = c?.kind ?? '';
-    const fields = (c && FIELDS[c.kind]) || [];
-    const propsKey = `${uid}|${c?.kind}|${JSON.stringify(c?.props)}`;
+    const fields = c ? fieldsFor(c.kind, FIELDS[c.kind] || []) : [];
+    const propsKey = `${uid}|${c?.kind}|${getLevel()}|${JSON.stringify(c?.props)}`;
     if (propsKey !== this.drawn.props) {
       this.drawn.props = propsKey;
       document.getElementById('cell-props').innerHTML = this.fieldsHtml(c, fields);
@@ -473,7 +492,12 @@ export class CellPanel {
           })
           .join('');
       }
-      actions = `${nexts}<span class="muted">${state}</span>${products}${routes}`;
+      // A beginner's: where it sends and how it is doing; the rest on
+      // the way up.
+      actions =
+        getLevel() >= 2
+          ? `${nexts}<span class="muted">${state}</span>${products}${routes}`
+          : `${nexts}<span class="muted">${state}</span><span class="muted level-hint">시간 분포·고장·불량·제품·반송은 <b>중급</b>에서 정합니다</span>`;
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};
       const at = a.out >= 1 ? '전진 끝' : a.out <= 0 ? '후진 끝' : a.extending ? '전진 중' : '후진 중';

@@ -20,6 +20,7 @@ pub fn build_id() -> String {
         "/plc.js",
         "/project.js",
         "/floor.js",
+        "/level.js",
         "/app.css",
     ] {
         for b in get(path).map(|(_, body)| body).unwrap_or_default() {
@@ -49,6 +50,7 @@ pub fn get(path: &str) -> Option<(&'static str, &'static [u8])> {
         "/plc.js" => (JS, include_bytes!("../web/plc.js")),
         "/project.js" => (JS, include_bytes!("../web/project.js")),
         "/floor.js" => (JS, include_bytes!("../web/floor.js")),
+        "/level.js" => (JS, include_bytes!("../web/level.js")),
         "/app.css" => ("text/css; charset=utf-8", include_bytes!("../web/app.css")),
         "/vendor/three.module.min.js" => (JS, include_bytes!("../web/vendor/three.module.min.js")),
         "/vendor/OrbitControls.js" => (JS, include_bytes!("../web/vendor/OrbitControls.js")),

@@ -593,7 +593,10 @@ export class LibraryPanel {
         }
         // A length in millimetres; a time, an angle or a count as it is.
         if (p.unit && p.unit !== 'm') {
-          return `<label class="insp-field">${escapeHtml(p.label)}<input type="number" class="num" data-param="${p.key}" data-scale="1" value="${Math.round(v * 100) / 100}" min="${p.min}" max="${p.max}" step="${p.unit === '개' ? 1 : p.unit === '°' ? 15 : 1}"><span>${escapeHtml(p.unit)}</span></label>`;
+          // A time, a count or a speed is the cell role's too: a beginner
+          // sets it there, once.
+          const min = ['s', '개', 'm/s'].includes(p.unit) ? ' data-min="2"' : '';
+          return `<label class="insp-field"${min}>${escapeHtml(p.label)}<input type="number" class="num" data-param="${p.key}" data-scale="1" value="${Math.round(v * 100) / 100}" min="${p.min}" max="${p.max}" step="${p.unit === '개' ? 1 : p.unit === '°' ? 15 : 1}"><span>${escapeHtml(p.unit)}</span></label>`;
         }
         return `<label class="insp-field">${escapeHtml(p.label)}<input type="number" class="num" data-param="${p.key}" value="${Math.round(v * 1000)}" min="${Math.round(p.min * 1000)}" max="${Math.round(p.max * 1000)}" step="10"><span>mm</span></label>`;
       })
@@ -615,7 +618,7 @@ export class LibraryPanel {
         <label class="insp-field" title="X축으로 기울이기 (벽에 단 로봇은 90°, 천장에 거꾸로 단 로봇은 180°)">X축<input type="number" class="num" data-tilt="roll" value="${Math.round(deg(item.roll ?? 0))}" step="15"><span>°</span></label>
         <label class="insp-field" title="Y축으로 기울이기">Y축<input type="number" class="num" data-tilt="pitch" value="${Math.round(deg(item.pitch ?? 0))}" step="15"><span>°</span></label>
         ${params}
-        <label class="insp-field" title="장비 값과 설치비: 통계·시나리오의 투자비, 감가, 개당 원가, 회수 기간에 쓰입니다">투자비<input type="number" class="num" data-price value="${item.price ?? 0}" min="0" step="100"><span>만원</span></label>
+        <label class="insp-field" data-min="2" title="장비 값과 설치비: 통계·시나리오의 투자비, 감가, 개당 원가, 회수 기간에 쓰입니다">투자비<input type="number" class="num" data-price value="${item.price ?? 0}" min="0" step="100"><span>만원</span></label>
       </div>
       ${many > 1 ? `<div class="muted insp-group">함께 선택: 장비 ${many}개 · 핸들로 함께 옮기고 돌립니다</div>
       <label class="insp-field wide insp-align">정렬<select data-align>

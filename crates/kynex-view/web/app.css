@@ -985,3 +985,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .floor-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; }
 .floor-fields label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .floor-fields input { width: 72px; }
+
+/* The level: what the page shows, from a beginner's to everything. */
+body[data-level="1"] [data-min="2"],
+body[data-level="1"] [data-min="3"],
+body[data-level="2"] [data-min="3"] { display: none !important; }
+.level-switch { display: flex; gap: 2px; padding: 2px; margin-left: 12px; border: 1px solid var(--line-2); border-radius: 7px; }
+.level-switch button { padding: 3px 10px; border: 0; border-radius: 5px; background: none; color: var(--muted, #9aa3ad); font-size: 12px; cursor: pointer; }
+.level-switch button:hover { color: var(--text); }
+.level-switch button.on { background: var(--accent); color: #fff; }
+.level-hint { display: block; margin-top: 4px; font-size: 11px; }

@@ -584,6 +584,21 @@ by `Offs`. Names and comments are kept to ASCII; other letters become
 - The controller times moves in its own way, so a cycle on the robot is
   close to the planned cycle, but not equal to it.
 
+### Levels: beginner to expert
+
+**초급 / 중급 / 전문가** in the header sets how much the page shows; it is
+kept in the browser (`crates/kynex-view/web/level.js`). Nothing set at a
+higher level is lost at a lower one: it is only not shown.
+
+- **초급**: lay equipment out (on the site's drawing), link each to the
+  next, give each machine its one time — a station's 처리 시간, a source's
+  공급 간격, a buffer's 용량 — and run. The roles offered are the flow's.
+- **중급**: the factory's detail — time distributions, breakdowns, scrap,
+  products and orders, carrying by AMR, operator or robot, shifts and
+  warm-up, cost, repeated runs and sweeps.
+- **전문가**: everything — robot programs and their wiring, PLCs, and
+  following real equipment (MTConnect, umati, MQTT, RTDE).
+
 ### The site's drawing
 
 **부지 도면** on the toolbar lays a plan of the factory (PNG, JPEG or WebP,

@@ -491,7 +491,7 @@ export class RobotPanel {
           <div class="tcp-status"></div>
           <div class="tcp-sing" hidden></div>
         </div>
-        <div class="follow" title="실제 UR 로봇의 관절과 그리퍼 출력을 RTDE(포트 30004)로 받아 이 로봇을 똑같이 움직입니다. 로봇에는 아무것도 보내지 않습니다">
+        <div class="follow" data-min="3" title="실제 UR 로봇의 관절과 그리퍼 출력을 RTDE(포트 30004)로 받아 이 로봇을 똑같이 움직입니다. 로봇에는 아무것도 보내지 않습니다">
           <span class="section-title">실제 로봇</span>
           <input class="follow-host" type="text" data-opt="follow-host" maxlength="100" spellcheck="false" placeholder="UR 로봇 IP (예: 192.168.0.10)" aria-label="실제 로봇 주소" value="${escapeHtml(this.followHost(r.root))}">
           <button class="chip-btn" data-act="follow">따라가기</button>

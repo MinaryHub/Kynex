@@ -676,6 +676,12 @@ function pick(x, y) {
 
 const plcPanel = new PlcPanel({ toast, escapeHtml, robots: () => robotPanel.robots });
 mountLevelSwitch(document.getElementById('level-switch'));
+// Linking mode shown on its button.
+const linkButton = () => document.querySelector('[data-action="link"]');
+cellPanel.onLinking = (on) => {
+  linkButton()?.classList.toggle('on', on);
+  canvas.style.cursor = on ? 'crosshair' : '';
+};
 const projectPanel = new ProjectPanel({ toast, escapeHtml });
 // The site's drawing: looked at from above when first laid.
 const floorPanel = new FloorPanel({
@@ -1032,6 +1038,15 @@ canvas.addEventListener('pointerup', (e) => {
     if (shape) robotPanel.pickEdge(uidOf(shape), shape.point);
     return;
   }
+  // Linking: the equipment clicked, linked from the one before.
+  if (cellPanel.linking()) {
+    if (!hit) return;
+    const uids = [];
+    for (let at = uidOf(hit), n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
+    const to = cellPanel.linkTo(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+    if (to != null) select(to);
+    return;
+  }
   // Picking a door's hinge or a connector: a point on any shape.
   if (cellPanel.picking()) {
     const shape = hits.find((h) => h.batchId !== undefined);
@@ -1313,6 +1328,10 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
     floorPanel.panel.hidden = true;
     projectPanel.toggle();
   }
+  if (b.dataset.action === 'link') {
+    if (cellPanel.linking()) cellPanel.stopLinking();
+    else cellPanel.startLinking(selected);
+  }
   if (b.dataset.action === 'floor') {
     plcPanel.panel.hidden = true;
     projectPanel.panel.hidden = true;
@@ -1387,6 +1406,7 @@ window.addEventListener('keydown', (e) => {
     libraryPanel.arm(null);
     if (view.measure) setToggle('measure', false);
     if (cellPanel.picking()) return cellPanel.stopPicking();
+    if (cellPanel.linking()) return cellPanel.stopLinking();
     select(null);
   }
   else return;

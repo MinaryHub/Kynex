@@ -1249,7 +1249,19 @@ impl Cell {
         } else {
             0.0
         };
-        json!({ "availability": a, "performance": p, "quality": q, "oee": a * p * q, "good": s.good, "bad": s.bad })
+        // And the shares of the planned time it worked and was down: what
+        // makes it the bottleneck.
+        let share = |x: f64| if planned > 0.0 { (x / planned).min(1.0) } else { 0.0 };
+        json!({
+            "availability": a,
+            "performance": p,
+            "quality": q,
+            "oee": a * p * q,
+            "good": s.good,
+            "bad": s.bad,
+            "busy": share(s.busy),
+            "down": share(s.down),
+        })
     }
 
     /// The flow as a whole: running or not, what reached the sinks.

@@ -599,6 +599,20 @@ higher level is lost at a lower one: it is only not shown.
 - **전문가**: everything — robot programs and their wiring, PLCs, and
   following real equipment (MTConnect, umati, MQTT, RTDE).
 
+### Linking by clicking, and the bottleneck in colour
+
+**연결** on the toolbar (or **＋ 화면에서 잇기** in the inspector): click
+equipment in order — the source, each machine, the sink — and each is
+linked to the one before; it ends at a sink, or with Esc. Equipment not
+yet of the flow is made so as it is clicked: a CNC machine or a moulder a
+공정 스테이션 keeping its time (at 전문가, after asking: it was a robot
+cell's machine), one with no role the 소재 공급 if it is the first, else a
+공정 스테이션.
+
+Once the flow has run, a disc over each station goes from green (idle)
+through yellow to red (always at work or broken down), with its share of
+the time; the busiest is marked **병목**.
+
 ### The site's drawing
 
 **부지 도면** on the toolbar lays a plan of the factory (PNG, JPEG or WebP,

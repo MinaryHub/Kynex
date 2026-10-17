@@ -257,6 +257,7 @@ export class CellPanel {
         const list = have.includes(t) ? have.filter((x) => x !== t) : [...have, t];
         this.send({ op: 'flow_next', object, next: list });
       }
+      if (e.target.closest('[data-link-pick]')) return this.startLinking(this.ctx.selected());
       if (e.target.closest('[data-pick]')) {
         this.pickingFor = this.ctx.selected();
         this.showFor(this.pickingFor);
@@ -494,10 +495,12 @@ export class CellPanel {
       }
       // A beginner's: where it sends and how it is doing; the rest on
       // the way up.
+      const link = c.kind === 'sink' ? '' : '<button class="text-btn" data-link-pick title="3D 화면에서 다음 설비들을 차례로 눌러 잇습니다">＋ 화면에서 잇기</button>';
       actions =
-        getLevel() >= 2
+        link +
+        (getLevel() >= 2
           ? `${nexts}<span class="muted">${state}</span>${products}${routes}`
-          : `${nexts}<span class="muted">${state}</span><span class="muted level-hint">시간 분포·고장·불량·제품·반송은 <b>중급</b>에서 정합니다</span>`;
+          : `${nexts}<span class="muted">${state}</span><span class="muted level-hint">시간 분포·고장·불량·제품·반송은 <b>중급</b>에서 정합니다</span>`);
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};
       const at = a.out >= 1 ? '전진 끝' : a.out <= 0 ? '후진 끝' : a.extending ? '전진 중' : '후진 중';
@@ -655,6 +658,85 @@ export class CellPanel {
       .join('');
   }
 
+  // Linking in the 3D view: equipment clicked in order, each linked to the
+  // one before. `from` the last clicked, or none yet.
+  linking() {
+    return this.link != null;
+  }
+
+  startLinking(from = null) {
+    this.link = { from: from && this.sends(from) ? from : null };
+    this.onLinking?.(true);
+    this.ctx.toast(this.link.from ? '다음 공정이 될 설비를 차례로 누르세요 (Esc: 끝)' : '공급부터 배출까지 설비를 차례로 누르세요 (Esc: 끝)');
+  }
+
+  stopLinking() {
+    this.link = null;
+    this.onLinking?.(false);
+  }
+
+  // Whether a part can go on from component `object`.
+  sends(object) {
+    return ['source', 'station', 'buffer', 'conveyor'].includes(this.componentOf(object)?.kind);
+  }
+
+  // A click while linking, on object `uids` (it and those above it; `root`
+  // the placed equipment's, if it is some): the flow's equipment among them
+  // linked from the last. Equipment not yet of the flow is made so: a
+  // machine of a robot cell a station keeping its time, one with no role
+  // the source if it is the first, else a station. Returns the one clicked,
+  // to select.
+  linkTo(uids, root = null) {
+    let c = uids.map((u) => this.componentOf(u)).find((c) => c?.flow);
+    if (c) return this.linkOn(c.object, c.kind, c.name);
+    const machine = uids.map((u) => this.componentOf(u)).find((c) => c && ['cnc', 'molder'].includes(c.kind));
+    const object = machine?.object ?? (root != null && !this.componentOf(root) ? root : null);
+    if (object == null) {
+      this.ctx.toast('설비를 누르세요 (공정 흐름에 넣을 수 있는 것)');
+      return null;
+    }
+    if (machine && getLevel() >= 3 && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return null;
+    const kind = !machine && !this.link.from ? 'source' : 'station';
+    const props = machine ? { cycle: machine.props.cycle } : {};
+    this.send({ op: 'role', object, kind, props }, () => {
+      const made = this.componentOf(object);
+      this.linkOn(object, kind, made?.name ?? '', kind === 'source' ? '소재 공급으로 정했습니다' : '공정 스테이션으로 정했습니다 (공정 시간을 넣으세요)');
+    });
+    return object;
+  }
+
+  // Linking on to `object` of role `kind`: from the last, and on from it
+  // unless the parts end there. `note` said with it.
+  linkOn(object, kind, name, note = '') {
+    const from = this.link?.from;
+    if (!this.link) return null;
+    // The parts end there: linking ends with it.
+    const done = !['source', 'station', 'buffer', 'conveyor'].includes(kind);
+    const more = [note, done ? '배출까지 이었습니다' : ''].filter(Boolean).join(' · ');
+    const tail = more ? ` · ${more}` : '';
+    if (from && from !== object) {
+      if (kind === 'source') {
+        this.ctx.toast('소재 공급으로는 보낼 수 없습니다');
+        return null;
+      }
+      const have = this.componentOf(from)?.flow?.next ?? [];
+      const said = `${this.componentOf(from)?.name ?? ''} → ${name}${tail}`;
+      if (!have.includes(object)) {
+        this.send({ op: 'flow_next', object: from, next: [...have, object] }, () => this.ctx.toast(said));
+      } else {
+        this.ctx.toast(`이미 이어져 있습니다: ${said}`);
+      }
+    } else if (!from && done) {
+      this.ctx.toast('보내는 쪽(공급·공정·버퍼·컨베이어)부터 누르세요');
+      return null;
+    } else if (note) {
+      this.ctx.toast(`${name}: ${note}`);
+    }
+    if (done) this.stopLinking();
+    else this.link.from = object;
+    return object;
+  }
+
   // Picking a point on a shape for the selected door's hinge or connector.
   picking() {
     return this.pickingFor != null;
@@ -688,12 +770,66 @@ export class CellPanel {
   }
 
   // Each pallet's places and each chuck's seat, marked.
+  // How hard each station works, once the flow has run: a disc over it
+  // from green (idle) through yellow to red (always at work or down), and
+  // the busiest marked as the bottleneck.
+  drawLoads(at) {
+    const stations = this.cell.components.filter((c) => c.kind === 'station' && c.flow?.oee && at.has(c.object));
+    const load = (c) => (c.flow.oee.busy ?? 0) + (c.flow.oee.down ?? 0);
+    if (!stations.some((c) => load(c) > 0)) return;
+    const top = stations.reduce((b, c) => (load(c) > load(b) ? c : b), stations[0]);
+    for (const c of stations) {
+      const u = Math.min(1, load(c));
+      // Green to yellow to red.
+      const color = new THREE.Color().setHSL((1 - u) * 0.33, 0.85, 0.5);
+      const [x, y, z] = at.get(c.object);
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(0.28, 40),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthTest: false }),
+      );
+      disc.position.set(x, y, z + 0.03);
+      disc.renderOrder = 7;
+      this.markers.add(disc);
+      const text = c === top && stations.length > 1 ? `병목 ${Math.round(u * 100)}%` : `${Math.round(u * 100)}%`;
+      this.markers.add(this.label(text, x, y, z + 0.5, c === top && stations.length > 1));
+    }
+  }
+
+  // A word over the scene, always facing the camera.
+  label(text, x, y, z, strong) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const font = `600 ${strong ? 44 : 36}px system-ui, sans-serif`;
+    ctx.font = font;
+    const w = Math.ceil(ctx.measureText(text).width) + 28;
+    canvas.width = w;
+    canvas.height = 64;
+    ctx.font = font;
+    ctx.fillStyle = strong ? 'rgba(200, 40, 40, 0.92)' : 'rgba(20, 24, 30, 0.82)';
+    ctx.beginPath();
+    ctx.roundRect(0, 4, w, 56, 12);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 14, 33);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
+    // A size on the screen, whatever the distance.
+    sprite.material.sizeAttenuation = false;
+    sprite.scale.set((0.032 * w) / 64, 0.032, 1);
+    sprite.position.set(x, y, z);
+    sprite.renderOrder = 9;
+    return sprite;
+  }
+
   drawMarkers() {
     for (const child of [...this.markers.children]) {
       child.removeFromParent();
       // An arrow is a group: its shaft and its head each their own.
       child.traverse((o) => {
         o.geometry?.dispose();
+        o.material?.map?.dispose();
         o.material?.dispose();
       });
     }
@@ -742,6 +878,7 @@ export class CellPanel {
       }
     }
     for (const a of arrows) this.markers.add(a);
+    this.drawLoads(at);
     // The AMRs' lanes: a line between each two stops linked.
     const stops = new Map(this.cell.components.filter((c) => c.stop_at).map((c) => [c.object, c.stop_at]));
     const lanes = [];

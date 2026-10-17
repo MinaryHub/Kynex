@@ -615,3 +615,46 @@ fn the_fewest_waiting_rule_sends_more_to_the_quicker_station() {
     assert!(quick / slow > 3.0, "{quick} vs {slow}");
     assert!(lead_short < lead_turn, "{lead_short} vs {lead_turn}");
 }
+
+#[test]
+fn the_cost_of_a_part_and_the_years_to_pay_the_line_back() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 10.0})),
+        ("flow_station", 2.0, json!({"cycle": 5.0})),
+        ("flow_sink", 4.0, json!({})),
+        ("operator", 6.0, json!({"wage": 20000.0})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    // 4000 만원 of equipment, written off over 5 years of 4000 hours: 2000
+    // won an hour; a person at 20 000 an hour; a part brings in 300 won.
+    cell.set_investment(4000.0);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_settings", "hours": 4000.0, "years": 5.0, "margin": 300.0}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 3600.0);
+    let c = cell.cost();
+    assert!(
+        (c["write_off"].as_f64().unwrap() - 2000.0).abs() < 1e-6,
+        "{c}"
+    );
+    assert!(
+        (c["per_hour"].as_f64().unwrap() - 22000.0).abs() < 1e-6,
+        "{c}"
+    );
+    // About 360 parts an hour: some 61 won a part.
+    let rate = cell.flow_summary()["per_hour"].as_f64().unwrap();
+    let per_part = c["per_part"].as_f64().unwrap();
+    assert!(
+        (per_part - 22000.0 / rate).abs() < 1e-6 && (55.0..70.0).contains(&per_part),
+        "{c}"
+    );
+    // 300 × 360 − 20 000 = 88 000 won an hour earned: 4000 만원 in some
+    // 0.11 years.
+    let payback = c["payback"].as_f64().unwrap();
+    let want = 4000.0 * 10000.0 / ((300.0 * rate - 20000.0) * 4000.0);
+    assert!((payback - want).abs() < 1e-9 && payback < 0.2, "{c}");
+}

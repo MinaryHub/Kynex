@@ -569,6 +569,8 @@ pub struct Item {
     pub pitch: f64,
     /// Kept where it is: not moved, sized or removed until unlocked.
     pub locked: bool,
+    /// What it costs to buy and install, ten thousand won (만원).
+    pub price: f64,
 }
 
 impl Item {
@@ -859,6 +861,7 @@ impl Library {
                 roll: v["roll"].as_f64().unwrap_or(0.0),
                 pitch: v["pitch"].as_f64().unwrap_or(0.0),
                 locked: v["locked"] == true,
+                price: v["price"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0e9),
             });
             library.next = library.next.max(id);
         }
@@ -895,9 +898,15 @@ impl Library {
                     "roll": i.roll,
                     "pitch": i.pitch,
                     "locked": i.locked,
+                    "price": i.price,
                 })
             }))
             .collect()
+    }
+
+    /// What all the equipment placed costs, ten thousand won.
+    pub fn investment(&self) -> f64 {
+        self.items.iter().map(|i| i.price).sum()
     }
 
     pub fn take_items_changed(&mut self) -> bool {
@@ -990,6 +999,7 @@ impl Library {
                 roll: 0.0,
                 pitch: 0.0,
                 locked: false,
+                price: 0.0,
             };
             let mut item = item;
             let snapped = if req["snap"] == true {
@@ -1055,6 +1065,7 @@ impl Library {
                     at,
                     yaw,
                     locked: false,
+                    price: 0.0,
                     ..from.clone()
                 };
                 let built = self.build(&item)?;
@@ -1118,6 +1129,19 @@ impl Library {
                     self.removed.extend(gone);
                 }
             }
+            self.items_changed = true;
+            return Ok(json!({ "ok": true }));
+        }
+        // What an item costs.
+        if op == "price" {
+            let id = req["item"].as_u64().ok_or("no item")?;
+            let price = req["price"].as_f64().ok_or("no price")?.clamp(0.0, 1.0e9);
+            let item = self
+                .items
+                .iter_mut()
+                .find(|i| i.id == id)
+                .ok_or("no such item")?;
+            item.price = price;
             self.items_changed = true;
             return Ok(json!({ "ok": true }));
         }
@@ -1372,6 +1396,7 @@ impl Library {
                     roll: 0.0,
                     pitch: 0.0,
                     locked: false,
+                    price: 0.0,
                 };
                 if let Ok(built) = build(&item) {
                     out.insert(t.key.to_string(), triangles(&built.doc));
@@ -1500,6 +1525,7 @@ impl Library {
                 "roll": i.roll,
                 "pitch": i.pitch,
                 "locked": i.locked,
+                "price": i.price,
             })).collect::<Vec<_>>(),
         })
         .to_string()
@@ -2744,7 +2770,8 @@ fn fence(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
 pub fn is_op(op: &str) -> bool {
     matches!(
         op,
-        "place"
+        "price"
+            | "place"
             | "move"
             | "move_many"
             | "duplicate"

@@ -175,6 +175,23 @@ export function seriesCharts(flow) {
   return `<div class="st-cols"><section><h3>공정 중 (WIP) 추이</h3>${lineChart(wip, { unit: '개' })}</section><section><h3>시간당 배출 추이</h3>${lineChart(rate, { unit: '' })}</section></div>`;
 }
 
+// What the line costs: invested, an hour (write-off and wages), a part, and
+// the years to pay it back.
+export function costCards(flow, escapeHtml) {
+  const c = flow?.cost;
+  if (!c || (!c.investment && !c.wages)) return '';
+  const won = (x) => `${(Math.round(x) || 0).toLocaleString('ko-KR')}원`;
+  const cards = [
+    ['투자비', `${Math.round(c.investment).toLocaleString('ko-KR')}만원`],
+    ['시간당 비용', `${won(c.per_hour)} (감가 ${won(c.write_off)} + 인건비 ${won(c.wages)})`],
+    ['개당 원가', c.per_part != null ? won(c.per_part) : '—'],
+    ['회수 기간', c.payback != null ? `${c.payback.toFixed(1)}년` : c.margin ? '벌어 오는 돈이 인건비보다 적음' : '부품당 이익을 넣으면'],
+  ];
+  return `<section><h3>비용 <span class="muted">· 연간 ${c.hours}시간, ${c.years}년 감가</span></h3><div class="st-cards">${cards
+    .map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b class="num">${escapeHtml(v)}</b></div>`)
+    .join('')}</div></section>`;
+}
+
 // Each station's OEE — availability × performance × quality — and its
 // parts good and scrapped, when a process flow ran.
 export function oeeTable(flow, escapeHtml) {
@@ -231,6 +248,14 @@ export function csv(d, activities, flow) {
           row('리드타임 최소 (s)', flow.lead_min != null ? flow.lead_min.toFixed(2) : ''),
           row('리드타임 최대 (s)', flow.lead_max != null ? flow.lead_max.toFixed(2) : ''),
           row('불량 (개)', flow.scrapped ?? 0),
+          ...(flow.cost && (flow.cost.investment || flow.cost.wages)
+            ? [
+                row('투자비 (만원)', flow.cost.investment),
+                row('시간당 비용 (원)', flow.cost.per_hour.toFixed(0)),
+                row('개당 원가 (원)', flow.cost.per_part != null ? flow.cost.per_part.toFixed(1) : ''),
+                row('회수 기간 (년)', flow.cost.payback != null ? flow.cost.payback.toFixed(2) : ''),
+              ]
+            : []),
           ...(flow.orders
             ? [
                 row('주문 (건)', flow.orders.total),

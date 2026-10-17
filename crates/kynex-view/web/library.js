@@ -615,6 +615,7 @@ export class LibraryPanel {
         <label class="insp-field" title="X축으로 기울이기 (벽에 단 로봇은 90°, 천장에 거꾸로 단 로봇은 180°)">X축<input type="number" class="num" data-tilt="roll" value="${Math.round(deg(item.roll ?? 0))}" step="15"><span>°</span></label>
         <label class="insp-field" title="Y축으로 기울이기">Y축<input type="number" class="num" data-tilt="pitch" value="${Math.round(deg(item.pitch ?? 0))}" step="15"><span>°</span></label>
         ${params}
+        <label class="insp-field" title="장비 값과 설치비: 통계·시나리오의 투자비, 감가, 개당 원가, 회수 기간에 쓰입니다">투자비<input type="number" class="num" data-price value="${item.price ?? 0}" min="0" step="100"><span>만원</span></label>
       </div>
       ${many > 1 ? `<div class="muted insp-group">함께 선택: 장비 ${many}개 · 핸들로 함께 옮기고 돌립니다</div>
       <label class="insp-field wide insp-align">정렬<select data-align>
@@ -760,6 +761,8 @@ export class LibraryPanel {
       this.move(item.id, at, item.yaw);
     } else if (e.target.dataset.yaw !== undefined) {
       this.move(item.id, item.at, rad(v));
+    } else if (e.target.dataset.price !== undefined) {
+      this.send({ op: 'price', item: item.id, price: Math.max(0, v) });
     } else if (e.target.dataset.param) {
       const scale = e.target.dataset.choice !== undefined || e.target.dataset.scale === '1' ? 1 : 1000;
       this.send({ op: 'resize', item: item.id, params: { [e.target.dataset.param]: v / scale } });

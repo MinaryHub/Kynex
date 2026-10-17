@@ -341,6 +341,8 @@ pub struct Props {
     /// its start at hour 0): from, to; the same, all day.
     pub shift_from: f64,
     pub shift_to: f64,
+    /// An operator's wage, won an hour.
+    pub wage: f64,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -389,6 +391,7 @@ impl Default for Props {
             charger: 0,
             shift_from: 0.0,
             shift_to: 0.0,
+            wage: 0.0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -521,6 +524,9 @@ impl Props {
         self.scrap = v["scrap"]
             .as_f64()
             .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
+        self.wage = v["wage"]
+            .as_f64()
+            .map_or(self.wage, |x| x.clamp(0.0, 1.0e8));
         self.shift_from = v["shift_from"]
             .as_f64()
             .map_or(self.shift_from, |x| x.clamp(0.0, 24.0));
@@ -581,6 +587,7 @@ impl Props {
             "kanban": self.kanban,
             "battery": self.battery,
             "shift_from": self.shift_from,
+            "wage": self.wage,
             "shift_to": self.shift_to,
             "charge": self.charge,
             "charger": self.charger,
@@ -921,6 +928,8 @@ pub struct Cell {
     energy: BTreeMap<u64, f64>,
     /// The stations each operator may work at (none: all).
     skills: BTreeMap<u64, Vec<u64>>,
+    /// What the equipment placed cost, ten thousand won (the library's).
+    investment: f64,
     charging: std::collections::BTreeSet<u64>,
     blocked: BTreeMap<u64, u64>,
     jobs: Vec<fleet::Job>,

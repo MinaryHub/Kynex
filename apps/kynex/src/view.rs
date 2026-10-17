@@ -592,6 +592,7 @@ impl Stage {
                 crate::pose::mark(scene, runner.root, &mut self.placed);
             }
         }
+        self.cell.set_investment(self.library.investment());
         touched |= self.cell.tick(scene, time, now);
         // A process flow's warm-up over: its record begins again from here.
         if self.cell.take_warmed() {

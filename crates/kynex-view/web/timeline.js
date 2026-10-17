@@ -7,7 +7,7 @@
 // one CNC machine, two, another gripper — run for hours away from the view
 // and compared (the `scenarios` event).
 
-import { csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, throughputChart } from './stats.js';
+import { costCards, csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, throughputChart } from './stats.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -122,10 +122,20 @@ export class TimelinePanel {
       this.flowOp(this.flowState?.on ? 'stop' : 'start'),
     );
     document.getElementById('flow-reset').addEventListener('click', () => this.flowOp('reset'));
-    for (const id of ['flow-work', 'flow-rest', 'flow-warmup']) {
+    // The flow's settings, all of them each time: the calendar and the
+    // cost's figures.
+    for (const id of ['flow-work', 'flow-rest', 'flow-warmup', 'cost-hours', 'cost-years', 'cost-margin']) {
       document.getElementById(id).addEventListener('change', () => {
         const n = (id) => Number(document.getElementById(id).value) || 0;
-        post({ op: 'flow_settings', work: n('flow-work'), rest: n('flow-rest'), warmup: n('flow-warmup') * 60 }).then((a) => {
+        post({
+          op: 'flow_settings',
+          work: n('flow-work'),
+          rest: n('flow-rest'),
+          warmup: n('flow-warmup') * 60,
+          hours: n('cost-hours'),
+          years: n('cost-years'),
+          margin: n('cost-margin'),
+        }).then((a) => {
           if (!a.ok) this.ctx.toast(a.error || '설정을 바꾸지 못했습니다');
         });
       });
@@ -184,15 +194,17 @@ export class TimelinePanel {
         const r = byName.get(s.name);
         const cells = r
           ? r.ok === false
-            ? `<td colspan="6"></td><td class="sc-alarm">${escapeHtml(r.alarm || '')}</td>`
+            ? `<td colspan="8"></td><td class="sc-alarm">${escapeHtml(r.alarm || '')}</td>`
             : `<td>${r.parts}</td>
                <td class="sc-rate"><span class="sc-bar-rate" style="width:${best ? Math.round((r.per_hour / best) * 60) : 0}px"></span>${r.per_hour.toFixed(1)}${r.reps > 1 ? `<small> ±${r.per_hour_ci.toFixed(1)}</small>` : ''}</td>
                <td title="${escapeHtml(r.machine_lanes.map((m) => `${m.name} ${pct(m.utilization)}`).join(', '))}">${pct(mean(r.machine_lanes, 'utilization'))}</td>
                <td>${r.robot_lanes.length ? pct(mean(r.robot_lanes, 'work')) : '—'}</td>
                <td>${r.lead_mean != null ? `${r.lead_mean.toFixed(0)} s${r.reps > 1 && r.lead_ci != null ? `<small> ±${r.lead_ci.toFixed(0)}</small>` : ''}` : '—'}</td>
                <td>${r.bottleneck ? `${escapeHtml(r.bottleneck.name)} ${pct(r.bottleneck.busy)}` : '—'}</td>
+               <td>${r.investment ? `${Math.round(r.investment).toLocaleString('ko-KR')}만원` : '—'}</td>
+               <td>${r.per_part != null ? `${Math.round(r.per_part).toLocaleString('ko-KR')}원` : '—'}</td>
                <td class="sc-alarm">${r.alarm ? escapeHtml(r.alarm) : ''}</td>`
-          : '<td colspan="7" class="muted">아직 실행하지 않음</td>';
+          : '<td colspan="9" class="muted">아직 실행하지 않음</td>';
         const top = r && r.ok !== false && best > 0 && r.per_hour === best && compared.length > 1;
         return `<tr data-index="${i}" class="${top ? 'best' : ''}">
           <td>${escapeHtml(s.name)}</td><td>${s.machines}</td>${cells}
@@ -201,7 +213,7 @@ export class TimelinePanel {
       })
       .join('');
     box.innerHTML = `<table class="sc-table">
-      <thead><tr><th>시나리오</th><th>장비</th><th>완성</th><th>시간당</th><th>장비 가동률</th><th>로봇 작업</th><th>리드타임</th><th>병목</th><th>알람</th><th></th></tr></thead>
+      <thead><tr><th>시나리오</th><th>장비</th><th>완성</th><th>시간당</th><th>장비 가동률</th><th>로봇 작업</th><th>리드타임</th><th>병목</th><th>투자비</th><th>개당 원가</th><th>알람</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
 
@@ -238,6 +250,9 @@ export class TimelinePanel {
     set('flow-work', f.settings?.work);
     set('flow-rest', f.settings?.rest);
     set('flow-warmup', (f.settings?.warmup ?? 0) / 60);
+    set('cost-hours', f.settings?.hours);
+    set('cost-years', f.settings?.years);
+    set('cost-margin', f.settings?.margin);
     const now = f.resting ? ' · 휴식 중' : f.warming ? ' · 워밍업 중' : '';
     const by = (f.products ?? []).length > 1 ? ` · ${f.products.map((p) => `${p.product} ${p.sunk}`).join(' ')}` : '';
     const o = f.orders;
@@ -255,7 +270,7 @@ export class TimelinePanel {
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const byName = new Map(compared.map((r) => [r.name, r]));
-    const lines = [['시나리오', '장비', '완성', '시간당', '시간당 ±95%', '반복', '장비 가동률 (%)', '로봇 작업 (%)', '로봇 대기 (%)', '리드타임 (s)', '리드타임 ±95%', '병목', '병목 작업 (%)', '알람'].map(q).join(',')];
+    const lines = [['시나리오', '장비', '완성', '시간당', '시간당 ±95%', '반복', '장비 가동률 (%)', '로봇 작업 (%)', '로봇 대기 (%)', '리드타임 (s)', '리드타임 ±95%', '병목', '병목 작업 (%)', '투자비 (만원)', '개당 원가 (원)', '알람'].map(q).join(',')];
     for (const s of list) {
       const r = byName.get(s.name);
       if (!r) continue;
@@ -275,6 +290,8 @@ export class TimelinePanel {
           ok && r.lead_ci != null ? r.lead_ci.toFixed(1) : '',
           ok && r.bottleneck ? r.bottleneck.name : '',
           ok && r.bottleneck ? (r.bottleneck.busy * 100).toFixed(1) : '',
+          ok ? (r.investment ?? 0) : '',
+          ok && r.per_part != null ? r.per_part.toFixed(1) : '',
           r.alarm || '',
         ]
           .map(q)
@@ -307,6 +324,7 @@ export class TimelinePanel {
         <section><h3>누적 완성 수 <span class="muted">· 점선: 평균 속도</span></h3>${throughputChart(f)}</section>
       </div>
       <section><h3>작업·막힘·대기 <span class="muted">· 작업이 가장 많은 곳이 병목</span></h3>${laneTable(f, escapeHtml)}</section>
+      ${costCards(this.flowState, escapeHtml)}
       ${seriesCharts(this.flowState)}
       ${oeeTable(this.flowState, escapeHtml)}`;
   }

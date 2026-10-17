@@ -197,6 +197,12 @@ pub struct Settings {
     pub work: f64,
     pub rest: f64,
     pub warmup: f64,
+    /// For the cost: hours a year the line runs, years its equipment is
+    /// written off over, and what a part brings in above its material
+    /// (won); 0, the usual.
+    pub hours: f64,
+    pub years: f64,
+    pub margin: f64,
 }
 
 impl Settings {
@@ -206,11 +212,29 @@ impl Settings {
             work: n("work"),
             rest: n("rest"),
             warmup: n("warmup"),
+            hours: n("hours"),
+            years: n("years"),
+            margin: n("margin"),
         }
     }
 
     pub fn to_json(self) -> Value {
-        json!({ "work": self.work, "rest": self.rest, "warmup": self.warmup })
+        json!({
+            "work": self.work,
+            "rest": self.rest,
+            "warmup": self.warmup,
+            "hours": self.hours,
+            "years": self.years,
+            "margin": self.margin,
+        })
+    }
+
+    /// Hours a year, years: as set, or 4000 and 5.
+    pub fn horizon(self) -> (f64, f64) {
+        (
+            if self.hours > 0.0 { self.hours } else { 4000.0 },
+            if self.years > 0.0 { self.years } else { 5.0 },
+        )
     }
 
     pub fn is_default(self) -> bool {
@@ -1032,6 +1056,50 @@ impl Cell {
         })
     }
 
+    /// What the equipment placed cost (the library's), set by the view.
+    pub fn set_investment(&mut self, investment: f64) {
+        if (self.investment - investment).abs() > 1e-9 {
+            self.investment = investment;
+            self.changed = true;
+        }
+    }
+
+    /// The cost of the line as it ran: what was invested; its write-off and
+    /// its operators' wages an hour; what a part costs at the rate it came
+    /// out; and, with what a part brings in, the years to pay it back.
+    pub fn cost(&self) -> Value {
+        let (hours, years) = self.flow_cfg.horizon();
+        let wages: f64 = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Operator)
+            .map(|c| c.props.wage)
+            .sum();
+        let write_off = self.investment * 10000.0 / (hours * years);
+        let per_hour = write_off + wages;
+        let st = &self.flow_stats;
+        let now = self.last_tick.unwrap_or(0.0);
+        let elapsed = st.from.map_or(0.0, |f| (now - f).max(0.0));
+        let rate = if elapsed > 0.0 {
+            st.sunk as f64 / elapsed * 3600.0
+        } else {
+            0.0
+        };
+        let earned = self.flow_cfg.margin * rate - wages;
+        json!({
+            "investment": self.investment,
+            "write_off": write_off,
+            "wages": wages,
+            "per_hour": per_hour,
+            "per_part": (rate > 0.0).then(|| per_hour / rate),
+            "payback": (self.flow_cfg.margin > 0.0 && earned > 0.0 && self.investment > 0.0)
+                .then(|| self.investment * 10000.0 / (earned * hours)),
+            "hours": hours,
+            "years": years,
+            "margin": self.flow_cfg.margin,
+        })
+    }
+
     /// The orders: how many, done, done by their due time, and how late
     /// those that were not, on average (seconds).
     fn orders_summary(&self) -> Value {
@@ -1105,6 +1173,7 @@ impl Cell {
             "settings": self.flow_cfg.to_json(),
             "series": st.series,
             "orders": self.orders_summary(),
+            "cost": self.cost(),
             "resting": self.flow_on && self.flow_cfg.resting(self.flow_clock()),
             "warming": self.flow_on && !self.warmed && self.flow_cfg.warmup > 0.0,
             "stations": self

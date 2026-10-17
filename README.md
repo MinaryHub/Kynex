@@ -885,9 +885,18 @@ not change the session's scene.
   - **근무 시작 / 끝** (hours of the day, the flow's start being 0:00):
     off shift they take no new work, and the timeline shows 근무 외.
     The same start and end means all day.
-- **A robot on a track**
-- **A robot on a track**
-- **A robot on a track**
+- **What the line costs**
+  - **투자비** (만원) in an item's inspector: what it costs to buy and
+    install. An operator's **임금** (원/시) is their wage.
+  - In the 통계 tab, **연간 가동** (hours a year, 4000 if empty),
+    **감가** (years, 5 if empty) and **부품당 이익** (원: what a part
+    brings in above its material).
+  - After a run the 비용 cards show the investment; the cost an hour
+    (write-off over the years plus wages); the cost a part, at the
+    rate the run made them; and the years to pay the line back from
+    what the parts bring in less the wages.
+  - Scenarios list each one's 투자비 and 개당 원가, in the table and
+    its CSV, to weigh a faster line against what it costs.
 - **A robot on a track** (ABB IRB 1600 + 주행 트랙: 3 m of travel, 1.6
   m/s): the track is its first joint, jogged and solved with the arm. On
   a line or an arc the track goes evenly from end to end, as the

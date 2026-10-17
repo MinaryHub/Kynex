@@ -73,6 +73,7 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
         }
     }
     // A process flow, if there is one, runs too.
+    cell.set_investment(library.investment());
     let flow = cell.has_flow();
     if flow {
         cell.seed_flow(seed);
@@ -157,6 +158,13 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .filter(|(_, busy)| *busy > 0.0)
         .map(|(l, busy)| json!({ "name": l["name"], "busy": busy }));
+    // A part's cost at the rate this run made them.
+    let rate = if elapsed > 0.0 {
+        delivered as f64 / elapsed * 3600.0
+    } else {
+        0.0
+    };
+    let per_part = (rate > 0.0).then(|| cell.cost()["per_hour"].as_f64().unwrap_or(0.0) / rate);
     json!({
         "name": name,
         "ok": true,
@@ -167,6 +175,8 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
         "per_hour": if elapsed > 0.0 { delivered as f64 / elapsed * 3600.0 } else { 0.0 },
         "alarm": alarm,
         "lead_mean": flow.then(|| summary["lead_mean"].clone()),
+        "investment": library.investment(),
+        "per_part": per_part,
         "wip": flow.then(|| summary["wip"].clone()),
         "bottleneck": bottleneck,
         "machine_lanes": in_group("machine").map(|l| json!({

@@ -219,9 +219,12 @@
         <div class="tl-legend" id="tl-legend"></div>
       </div>
       <div class="tl-view" id="tl-view-stats" hidden>
-        <div class="sc-bar">
+        <div class="sc-bar flow-bar">
           <span class="muted">마지막 실행의 통계입니다</span>
           <span class="sc-gap"></span>
+          <label class="muted" title="개당 원가와 회수 기간을 셈하는 기준">연간 가동<input type="number" class="num flow-num" id="cost-hours" min="0" step="100" placeholder="4000">시간</label>
+          <label class="muted">감가<input type="number" class="num flow-num" id="cost-years" min="0" step="1" placeholder="5">년</label>
+          <label class="muted" title="부품 하나가 재료비를 빼고 벌어 오는 돈: 회수 기간 계산에">부품당 이익<input type="number" class="num flow-num" id="cost-margin" min="0" step="100">원</label>
           <button class="chip-btn" id="st-csv" title="요약, 장비별 상태 시간, 완성 시각, 전체 구간을 CSV로 내려받기 (엑셀에서 열림)">CSV 내보내기</button>
           <button class="chip-btn" id="st-report" title="차트와 표를 한 장에: 인쇄하거나 PDF로 저장">보고서 (PDF)</button>
         </div>

@@ -808,6 +808,18 @@ not change the session's scene.
     leaves the start out of every figure, the timeline and the scenario
     comparison included, so only the steady state counts.
   - The flow bar and summary count parts out by product.
+- **Conveyors, batches and racks** in a process flow:
+  - A conveyor can be picked as a 다음 공정. Its parts go onto the belt at
+    its start, one at a time, and ride it with the belt's own pace and
+    queueing. At its end they go on to the conveyor's own 다음 공정, so
+    belts can merge (several sending to one) and divert (one sending to
+    several, by room and by product).
+  - An AMR's **적재량** and an operator's **한 번에 드는 수**: parts
+    waiting to go from one place to the same place are carried together,
+    up to that many, side by side.
+  - A buffer's **꺼내는 순서**: first in first out, or last in first out.
+    Library **랙 창고**: a pallet rack whose parts sit on its shelves,
+    ten to a shelf, the lowest first.
 - **AMR lanes and traffic** (`apps/kynex/src/cell/fleet.rs`).
   - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
     go both ways and are drawn in orange. Sent to a stop, an AMR drives to

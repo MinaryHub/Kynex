@@ -388,6 +388,7 @@ impl Cell {
                         continue;
                     }
                     self.jobs[k].amr = Some(who);
+                    self.batch(k, who);
                     Phase::Fetching
                 }
                 Phase::Waiting => match self.free_amr() {
@@ -401,6 +402,7 @@ impl Cell {
                         match self.send(doc, amr, stop) {
                             Ok(()) => {
                                 self.jobs[k].amr = Some(amr);
+                                self.batch(k, amr);
                                 Phase::Fetching
                             }
                             Err(e) => {
@@ -475,21 +477,60 @@ impl Cell {
                 Some((c.object, pose_of(r.at, r.yaw)))
             })
             .collect();
+        // Several on board: side by side.
+        let mut seat: BTreeMap<u64, f64> = BTreeMap::new();
         for p in &mut self.parts {
             if let Some(Place::Riding { amr, .. }) = &p.flow {
                 let half = p.size().1 / 2.0;
+                let k = seat.entry(*amr).or_insert(0.0);
+                let side = *k * (2.0 * RAW.0 + 0.01);
+                *k += 1.0;
                 if let Some(top) = decks.get(amr) {
-                    p.world = DAffine3::from_translation(top.transform_point3(DVec3::Z * half));
+                    p.world = DAffine3::from_translation(top.transform_point3(DVec3::new(
+                        side - 0.1,
+                        0.0,
+                        half,
+                    )));
                 } else if let Some(pose) = people.get(amr) {
                     p.world = DAffine3::from_translation(pose.transform_point3(DVec3::new(
                         0.35,
-                        0.0,
+                        side - 0.05,
                         1.0 + half,
                     )));
                 }
             }
         }
         happened
+    }
+
+    /// Job `k` given to `carrier`: as many more waiting the same way — from
+    /// the same place to the same place, the same way carried — as it
+    /// carries at once (its 적재량), loaded and carried with it.
+    fn batch(&mut self, k: usize, carrier: u64) {
+        let most = self
+            .components
+            .iter()
+            .find(|c| c.object == carrier)
+            .map_or(1, |c| c.props.capacity.max(1)) as usize;
+        let (from, to, by) = (self.jobs[k].from, self.jobs[k].to, self.jobs[k].by);
+        let mut taken = 1;
+        for j in 0..self.jobs.len() {
+            if taken >= most {
+                break;
+            }
+            let other = &mut self.jobs[j];
+            // A job just done waits only to be cleared away: not one to take.
+            if j != k
+                && other.part != 0
+                && other.amr.is_none()
+                && other.phase == Phase::Waiting
+                && (other.from, other.to, other.by) == (from, to, by)
+            {
+                other.amr = Some(carrier);
+                other.phase = Phase::Fetching;
+                taken += 1;
+            }
+        }
     }
 }
 

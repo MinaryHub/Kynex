@@ -32,6 +32,8 @@ pub enum Place {
     Waiting { at: u64, to: u64 },
     /// On AMR `amr`'s top plate, to `to`.
     Riding { amr: u64, to: u64 },
+    /// On conveyor `0`'s belt, carried by it, to go on from its end.
+    Belt(u64),
 }
 
 /// A component of the flow as it stands.
@@ -327,6 +329,15 @@ impl Cell {
         let held = match t.kind {
             Kind::Station => s.queue.len(),
             Kind::Buffer => s.queue.len() + s.out.len(),
+            // One at a time onto a belt, its start clear.
+            Kind::Conveyor => {
+                return self
+                    .belt_room
+                    .get(&t.object)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_sub(coming as u32)
+            }
             _ => return 0,
         };
         t.props.capacity.saturating_sub((held + coming) as u32)
@@ -467,6 +478,19 @@ impl Cell {
                         self.parts[i].flow = Some(Place::At(to));
                     }
                 }
+                // Onto the belt at its start, standing, to be carried.
+                Kind::Conveyor => {
+                    let start = self
+                        .belts(doc)
+                        .into_iter()
+                        .find(|b| b.object == to)
+                        .map(|b| b.centre + b.along * (-b.length / 2.0 + RAW.0));
+                    if let (Some(i), Some(start)) = (self.part_index(uid), start) {
+                        let half = self.parts[i].size().1 / 2.0;
+                        self.parts[i].world = DAffine3::from_translation(start + DVec3::Z * half);
+                        self.parts[i].flow = Some(Place::Belt(to));
+                    }
+                }
                 _ => {
                     self.stations.entry(to).or_default().queue.push(uid);
                     if let Some(i) = self.part_index(uid) {
@@ -595,6 +619,36 @@ impl Cell {
             self.stations.insert(c.object, s);
         }
 
+        // Each belt of the flow: room for one more at its start; and the part
+        // at its end, if it is the flow's, out to the conveyor's next.
+        self.belt_room.clear();
+        for b in self.belts(doc) {
+            if !flow.iter().any(|c| c.object == b.object) {
+                continue;
+            }
+            let gap = 2.0 * RAW.0 + 0.005;
+            let start = -b.length / 2.0 + RAW.0;
+            let on: Vec<f64> = self
+                .parts
+                .iter()
+                .filter(|p| p.held.is_none() && matches!(p.flow, None | Some(Place::Belt(_))))
+                .filter_map(|p| b.along_of(p))
+                .collect();
+            let clear = !on.iter().any(|x| *x < start + gap);
+            let most = ((b.length - 2.0 * RAW.0) / gap).floor().max(1.0) as usize;
+            self.belt_room
+                .insert(b.object, u32::from(clear && on.len() < most));
+            if let Some(i) = b.at_end(&self.parts) {
+                if matches!(self.parts[i].flow, Some(Place::Belt(c)) if c == b.object) {
+                    let uid = self.parts[i].uid;
+                    let s = self.stations.entry(b.object).or_default();
+                    if !s.out.contains(&uid) {
+                        s.out.push(uid);
+                    }
+                }
+            }
+        }
+
         // What is done goes on, to the first of its next with room.
         for c in flow.iter().filter(|c| c.kind != Kind::Sink) {
             let next: Vec<&Component> = self
@@ -609,7 +663,15 @@ impl Cell {
             }
             loop {
                 let s = self.stations.entry(c.object).or_default();
-                let Some(&uid) = s.out.first() else { break };
+                // A buffer last in first out gives its newest.
+                let pick_at = if c.kind == Kind::Buffer && c.props.policy == 1 {
+                    s.out.len().saturating_sub(1)
+                } else {
+                    0
+                };
+                let Some(&uid) = s.out.get(pick_at) else {
+                    break;
+                };
                 let turn = s.turn;
                 let product = self.part_index(uid).map_or(0, |i| self.parts[i].product);
                 // A link that takes certain products takes no others.
@@ -624,7 +686,7 @@ impl Cell {
                 let Some(k) = pick else { break };
                 let target = next[k];
                 let s = self.stations.entry(c.object).or_default();
-                s.out.remove(0);
+                s.out.remove(pick_at);
                 s.turn = k + 1;
                 let Some(i) = self.part_index(uid) else {
                     continue;
@@ -648,7 +710,14 @@ impl Cell {
                 }
                 let from = self.parts[i].world.translation;
                 let to = docks.get(&target.object).map_or(from, |d| d.0);
-                let seconds = from.distance(to) / c.props.speed.max(0.01);
+                // Off a belt's end: handed over at a walk, not at the belt's
+                // own pace.
+                let speed = if c.kind == Kind::Conveyor {
+                    1.0
+                } else {
+                    c.props.speed
+                };
+                let seconds = from.distance(to) / speed.max(0.01);
                 self.parts[i].flow = Some(Place::Moving {
                     from,
                     to: target.object,
@@ -659,6 +728,22 @@ impl Cell {
         }
 
         happened |= self.carry_on(doc, now);
+        // A rack's shelves, where it has any: its parts set out on them.
+        self.shelf_tops = flow
+            .iter()
+            .filter(|c| c.kind == Kind::Buffer)
+            .filter_map(|c| {
+                let id = id_of(doc, c.object)?;
+                let mut tops: Vec<DVec3> = doc
+                    .objects()
+                    .filter(|(o, x)| is_below(doc, *o, id) && x.name.starts_with("shelf"))
+                    .filter_map(|(o, _)| bounds(doc, o))
+                    .map(|(lo, hi)| DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, hi.z))
+                    .collect();
+                tops.sort_by(|a, b| a.z.total_cmp(&b.z));
+                (!tops.is_empty()).then_some((c.object, tops))
+            })
+            .collect();
         self.place_flow_parts(&docks, now);
         self.changed |= happened;
         (true, happened)
@@ -686,10 +771,17 @@ impl Cell {
                 .map(|p| p.uid)
                 .collect();
             let order = order.chain(waiting.iter());
+            let shelves = self.shelf_tops.get(object);
             for (k, uid) in order.enumerate() {
-                // Rows of five across the top, from its middle.
+                // On a rack: ten to a shelf, the lowest first; else rows of
+                // five across the top, from its middle.
+                let (level, k) = match shelves {
+                    Some(tops) => (Some(tops[(k / 10).min(tops.len() - 1)]), k % 10),
+                    None => (None, k),
+                };
                 let (col, row) = ((k % 5) as f64 - 2.0, (k / 5) as f64);
-                spots.insert(*uid, top + along * col * PITCH + across * row * PITCH);
+                let base = level.unwrap_or(top);
+                spots.insert(*uid, base + along * col * PITCH + across * row * PITCH);
             }
         }
         for p in &mut self.parts {
@@ -714,8 +806,8 @@ impl Cell {
                     };
                     p.world = DAffine3::from_translation(from.lerp(target, t));
                 }
-                // Where its AMR is: placed by `carry_on`.
-                Some(Place::Riding { .. }) | None => {}
+                // Where its AMR is: placed by `carry_on`; on a belt, by it.
+                Some(Place::Riding { .. } | Place::Belt(_)) | None => {}
             }
         }
     }

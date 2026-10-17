@@ -262,7 +262,7 @@ impl Kind {
     pub fn flow(self) -> bool {
         matches!(
             self,
-            Kind::Source | Kind::Station | Kind::Buffer | Kind::Sink
+            Kind::Source | Kind::Station | Kind::Buffer | Kind::Sink | Kind::Conveyor
         )
     }
 }
@@ -322,6 +322,8 @@ pub struct Props {
     /// A station's change-over: seconds before a part of another product
     /// than the last it worked on.
     pub setup: f64,
+    /// A buffer's order: first in first out (0), or last in first out (1).
+    pub policy: u32,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -362,6 +364,7 @@ impl Default for Props {
             mttr: 0.0,
             scrap: 0.0,
             setup: 0.0,
+            policy: 0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -494,6 +497,9 @@ impl Props {
         self.scrap = v["scrap"]
             .as_f64()
             .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
+        self.policy = v["policy"]
+            .as_f64()
+            .map_or(self.policy, |x| if x > 0.5 { 1 } else { 0 });
         self.setup = v["setup"]
             .as_f64()
             .map_or(self.setup, |x| x.clamp(0.0, 36000.0));
@@ -526,6 +532,7 @@ impl Props {
             "mttr": self.mttr,
             "scrap": self.scrap,
             "setup": self.setup,
+            "policy": self.policy,
             "takes": self.takes,
             "makes": self.makes,
         })
@@ -840,6 +847,10 @@ pub struct Cell {
     cycles: BTreeMap<u64, Vec<f64>>,
     routes: BTreeMap<(u64, u64), Vec<u8>>,
     flow_cfg: flow::Settings,
+    /// Room on each belt of the flow for one more, this step; the tops of
+    /// each rack's shelves, lowest first.
+    belt_room: BTreeMap<u64, u32>,
+    shelf_tops: BTreeMap<u64, Vec<DVec3>>,
     warmed: bool,
     just_warmed: bool,
     flow_start: Option<f64>,
@@ -3238,7 +3249,9 @@ impl Cell {
                 .parts
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| p.held.is_none() && p.flow.is_none())
+                .filter(|(_, p)| {
+                    p.held.is_none() && matches!(p.flow, None | Some(flow::Place::Belt(_)))
+                })
                 .filter_map(|(i, p)| belt.along_of(p).map(|x| (i, x)))
                 .collect();
             on.sort_by(|a, b| b.1.total_cmp(&a.1));

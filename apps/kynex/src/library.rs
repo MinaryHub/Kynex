@@ -276,6 +276,16 @@ pub const TEMPLATES: &[Template] = &[
         params: &[q("capacity", "용량", 10.0, 1.0, 1000.0, "개")],
     },
     Template {
+        key: "flow_rack",
+        name: "랙 창고",
+        group: "공정 흐름",
+        // A pallet rack of shelves, parts kept on them level by level.
+        params: &[
+            q("levels", "단 수", 3.0, 1.0, 8.0, "단"),
+            q("capacity", "용량", 30.0, 1.0, 1000.0, "개"),
+        ],
+    },
+    Template {
         key: "flow_sink",
         name: "배출",
         group: "공정 흐름",
@@ -1915,6 +1925,36 @@ fn build(item: &Item) -> Result<Built, String> {
             );
             roles.push((person, Kind::Operator));
             props.push((person, json!({ "speed": item.param("speed") })));
+        }
+        "flow_rack" => {
+            let c = Colours::new(&mut doc);
+            let rack = doc.add_object(Object::new("rack", ObjectData::Empty));
+            let m = Some(rack);
+            let levels = item.param("levels").round().clamp(1.0, 8.0) as usize;
+            let (w, d, step) = (1.2, 0.5, 0.45);
+            let h = step * levels as f64 + 0.1;
+            for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                block(
+                    &mut doc,
+                    &format!("post_{x}{y}"),
+                    [0.04, 0.04, h],
+                    [x * (w / 2.0 - 0.02), y * (d / 2.0 - 0.02), h / 2.0],
+                    c.steel,
+                    m,
+                );
+            }
+            for k in 0..levels {
+                block(
+                    &mut doc,
+                    &format!("shelf_{k}"),
+                    [w, d, 0.03],
+                    [0.0, 0.0, 0.1 + step * k as f64],
+                    c.pallet,
+                    m,
+                );
+            }
+            roles.push((rack, Kind::Buffer));
+            props.push((rack, json!({ "capacity": item.param("capacity") })));
         }
         "flow_source" | "flow_station" | "flow_buffer" | "flow_sink" => {
             let c = Colours::new(&mut doc);

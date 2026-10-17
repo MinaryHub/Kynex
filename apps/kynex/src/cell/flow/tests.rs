@@ -397,3 +397,110 @@ fn a_calendar_rests_the_flow_and_a_warm_up_is_left_out() {
     let sunk = warm.flow_summary()["sunk"].as_u64().unwrap();
     assert!((59..=61).contains(&sunk), "{sunk}");
 }
+
+#[test]
+fn a_belt_carries_the_flow_s_parts_from_two_sources_to_a_station() {
+    // Two sources onto one 2 m belt (along X at the origin), its end
+    // handing over to a station beyond it.
+    let (doc, mut cell, u) = line(&[
+        ("conveyor", 0.0, json!({"speed": 0.5})),
+        ("flow_source", -1.5, json!({"feed": 6.0})),
+        ("flow_source", -1.5, json!({"feed": 6.0})),
+        ("flow_station", 1.8, json!({"cycle": 2.0, "capacity": 2})),
+        ("flow_sink", 3.5, json!({})),
+    ]);
+    let (belt, s1, s2, station, sink) = (u[0], u[1], u[2], u[3], u[4]);
+    link(&mut cell, &doc, s1, &[belt]);
+    link(&mut cell, &doc, s2, &[belt]);
+    link(&mut cell, &doc, belt, &[station]);
+    link(&mut cell, &doc, station, &[sink]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut t, mut on_belt) = (0.0, 0);
+    while t < 200.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        on_belt = on_belt.max(
+            cell.parts()
+                .iter()
+                .filter(|p| matches!(p.flow, Some(Place::Belt(b)) if b == belt))
+                .count(),
+        );
+    }
+    assert!(on_belt >= 2, "parts rode the belt: {on_belt}");
+    // Two parts every 6 s in, carried 2 m at 0.5 m/s: about 60 out of 66.
+    let sunk = cell.flow_summary()["sunk"].as_u64().unwrap();
+    assert!(sunk >= 55, "{sunk}");
+}
+
+#[test]
+fn an_amr_carries_as_many_as_it_takes_at_once() {
+    let (doc, mut cell, u) = line(&[
+        ("amr", 0.0, json!({"capacity": 3})),
+        ("amr_stop", 0.0, json!({})),
+        ("amr_stop", 8.0, json!({})),
+        (
+            "flow_source",
+            0.0,
+            json!({"feed": 2.0, "capacity": 6, "carrier": 1}),
+        ),
+        ("flow_station", 8.0, json!({"cycle": 1.0, "capacity": 6})),
+        ("flow_sink", 10.0, json!({})),
+    ]);
+    let (s1, s2, source, station, sink) = (u[1], u[2], u[3], u[4], u[5]);
+    let next: Vec<String> = vec![s2.to_string()];
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "amr_lanes", "object": s1.to_string(), "next": next}),
+    );
+    link(&mut cell, &doc, source, &[station]);
+    link(&mut cell, &doc, station, &[sink]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut t, mut most) = (0.0, 0);
+    while t < 300.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        most = most.max(
+            cell.parts()
+                .iter()
+                .filter(|p| matches!(p.flow, Some(Place::Riding { .. })))
+                .count(),
+        );
+    }
+    assert_eq!(most, 3, "three on board at once");
+    assert!(cell.flow_summary()["sunk"].as_u64().unwrap() > 20);
+}
+
+#[test]
+fn a_last_in_first_out_buffer_gives_its_newest() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 1.0})),
+        ("flow_buffer", 2.0, json!({"capacity": 10, "policy": 1})),
+        ("flow_station", 4.0, json!({"cycle": 10.0})),
+        ("flow_sink", 6.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    link(&mut cell, &doc, u[2], &[u[3]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut t, mut worked) = (0.0, Vec::new());
+    while t < 120.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        if let Some((_, parts)) = &cell.stations[&u[2]].working {
+            if worked.last() != Some(&parts[0]) {
+                worked.push(parts[0]);
+            }
+        }
+    }
+    // After the first, each taken is newer than any left waiting: the
+    // order is not the order they came in.
+    // The station took newer ones while older ones were left waiting in the
+    // buffer: the oldest still there is older than the last it took.
+    assert!(worked.windows(2).any(|w| w[1] > w[0] + 1), "{worked:?}");
+    let oldest = cell.stations[&u[1]].out.iter().min().copied().unwrap();
+    assert!(oldest < *worked.last().unwrap(), "{oldest} vs {worked:?}");
+}

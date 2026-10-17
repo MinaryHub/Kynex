@@ -86,7 +86,10 @@ const FIELDS = {
     ['feed', '소재 공급 간격 (0: 없음)', 's', 1],
     ['drain', '끝에서 치움 (1: 예)', '', 1],
   ],
-  amr: [['speed', '주행 속도', 'mm/s', 1000]],
+  amr: [
+    ['speed', '주행 속도', 'mm/s', 1000],
+    ['capacity', '적재량 (한 번에 나르는 수)', '개', 1],
+  ],
   positioner: [['speed', '회전 속도', '°/s', 180 / Math.PI]],
   // A choice is a list of [value, label].
   door: [
@@ -121,9 +124,13 @@ const FIELDS = {
   buffer: [
     ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR'], [2, '작업자']]],
     ['capacity', '용량', '개', 1],
+    ['policy', '꺼내는 순서', '', 1, [[0, '먼저 들어온 것 (FIFO)'], [1, '나중 들어온 것 (LIFO)']]],
     ['speed', '이송 속도', 'mm/s', 1000],
   ],
-  operator: [['speed', '걷는 속도', 'm/s', 1]],
+  operator: [
+    ['speed', '걷는 속도', 'm/s', 1],
+    ['capacity', '한 번에 드는 수', '개', 1],
+  ],
   sensor: [
     ['axis', '빔 방향', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
     ['travel', '빔 길이', 'mm', 1000],
@@ -362,7 +369,7 @@ export class CellPanel {
       // Where its parts go: every other part of the flow, those it sends
       // to on.
       const targets = this.cell.components.filter(
-        (t) => t.object !== c.object && ['station', 'buffer', 'sink'].includes(t.kind),
+        (t) => t.object !== c.object && ['station', 'buffer', 'sink', 'conveyor'].includes(t.kind),
       );
       const kindName = Object.fromEntries(KINDS);
       const nexts =
@@ -381,7 +388,9 @@ export class CellPanel {
           ? `배출 ${f.made}개`
           : c.kind === 'station'
             ? `${f.down ? '고장 · 수리 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
-            : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
+            : c.kind === 'conveyor'
+              ? `끝에서 기다림 ${f.out}`
+              : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
       // Products: as many as any source mixes.
       const last = (m) => (m ?? []).reduce((k, w, i) => (w > 0 ? i + 1 : k), 0);
       const used = Math.max(1, ...this.cell.components.map((s) => last(s.flow?.mix)));

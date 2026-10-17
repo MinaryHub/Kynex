@@ -63,6 +63,9 @@ pub struct Station {
     pub down: f64,
     pub good: u64,
     pub bad: u64,
+    /// The product it last worked on, for its change-over; seconds rested.
+    pub last: Option<u8>,
+    pub rested: f64,
 }
 
 /// What the sinks have seen since the flow started.
@@ -70,6 +73,8 @@ pub struct Station {
 pub struct Stats {
     pub from: Option<f64>,
     pub scrapped: u64,
+    /// Each product's parts out and their lead times' sum.
+    pub by_product: [(u64, f64); 6],
     pub sunk: u64,
     pub lead_sum: f64,
     pub lead_min: Option<f64>,
@@ -81,6 +86,57 @@ const PITCH: f64 = 2.0 * RAW.0 + 0.01;
 
 /// The seed a flow's random numbers start from unless one is given.
 pub const SEED: u64 = 1;
+
+/// The products a flow can carry, by number.
+pub const PRODUCTS: [&str; 6] = ["A", "B", "C", "D", "E", "F"];
+
+/// Each product's colour after A's (A keeps the parts' own).
+pub const PRODUCT_COLOURS: [[f32; 3]; 6] = [
+    [0.62, 0.64, 0.68],
+    [0.25, 0.55, 0.95],
+    [0.25, 0.78, 0.45],
+    [0.62, 0.40, 0.90],
+    [0.90, 0.35, 0.35],
+    [0.20, 0.75, 0.75],
+];
+
+/// The flow's calendar and warm-up: work and rest in turn (minutes of
+/// each; no rest, no calendar), and the time at the start left out of its
+/// figures, seconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Settings {
+    pub work: f64,
+    pub rest: f64,
+    pub warmup: f64,
+}
+
+impl Settings {
+    pub fn of(v: &Value) -> Self {
+        let n = |k: &str| v[k].as_f64().unwrap_or(0.0).clamp(0.0, 1.0e6);
+        Self {
+            work: n("work"),
+            rest: n("rest"),
+            warmup: n("warmup"),
+        }
+    }
+
+    pub fn to_json(self) -> Value {
+        json!({ "work": self.work, "rest": self.rest, "warmup": self.warmup })
+    }
+
+    pub fn is_default(self) -> bool {
+        self == Self::default()
+    }
+
+    /// Whether `t` seconds into the flow falls in a rest.
+    pub fn resting(self, t: f64) -> bool {
+        if self.rest <= 0.0 || self.work <= 0.0 {
+            return false;
+        }
+        let period = (self.work + self.rest) * 60.0;
+        t.rem_euclid(period) >= self.work * 60.0
+    }
+}
 
 impl Cell {
     /// The next random number of the flow, uniform in (0, 1): SplitMix64,
@@ -130,6 +186,7 @@ impl Cell {
                 }
                 self.flow_on = true;
                 self.flow_stats.from.get_or_insert(now);
+                self.flow_start.get_or_insert(now);
             }
             "stop" => self.flow_on = false,
             "reset" => {
@@ -145,6 +202,8 @@ impl Cell {
                 self.stations.clear();
                 self.jobs.clear();
                 self.rng = SEED;
+                self.warmed = false;
+                self.flow_start = None;
                 self.flow_problem = None;
                 self.flow_stats = Stats::default();
             }
@@ -157,6 +216,48 @@ impl Cell {
     /// Whether the flow runs.
     pub fn flow_running(&self) -> bool {
         self.flow_on
+    }
+
+    /// Seconds since the flow first started, rests and all: its calendar's
+    /// clock.
+    pub(super) fn flow_clock(&self) -> f64 {
+        let now = self.last_tick.unwrap_or(0.0);
+        self.flow_start.map_or(0.0, |f| (now - f).max(0.0))
+    }
+
+    /// Whether the warm-up has ended since this was last asked: the figures
+    /// begin again from here.
+    pub fn take_warmed(&mut self) -> bool {
+        std::mem::take(&mut self.just_warmed)
+    }
+
+    /// A product for a part source `object` puts in, drawn by its mix
+    /// (A alone if it has none).
+    fn product_of(&mut self, object: u64) -> u8 {
+        let mix = self.mix.get(&object).cloned().unwrap_or_default();
+        let total: f64 = mix.iter().sum();
+        if total <= 0.0 {
+            return 0;
+        }
+        let mut x = self.uniform() * total;
+        for (k, w) in mix.iter().enumerate() {
+            if x < *w {
+                return k as u8;
+            }
+            x -= w;
+        }
+        (mix.len() - 1) as u8
+    }
+
+    /// Station `c`'s mean time for product `product`: its own for it, or
+    /// else its one time.
+    fn cycle_of(&self, c: &Component, product: u8) -> f64 {
+        self.cycles
+            .get(&c.object)
+            .and_then(|t| t.get(product as usize))
+            .copied()
+            .filter(|t| *t > 0.0)
+            .unwrap_or(c.props.cycle)
     }
 
     /// Whether the cell has a process flow to run: a source.
@@ -243,6 +344,46 @@ impl Cell {
         }
         let now = self.last_tick.unwrap_or(0.0);
         let mut happened = false;
+        // Warmed up: what came before is left out of its figures.
+        if !self.warmed && self.flow_clock() >= self.flow_cfg.warmup {
+            self.warmed = true;
+            if self.flow_cfg.warmup > 0.0 {
+                self.just_warmed = true;
+                self.flow_stats = Stats {
+                    from: Some(now),
+                    ..Stats::default()
+                };
+                for s in self.stations.values_mut() {
+                    s.busy = 0.0;
+                    s.down = 0.0;
+                    s.rested = 0.0;
+                    s.good = 0;
+                    s.bad = 0;
+                }
+                happened = true;
+            }
+        }
+        // At rest: nothing comes in, nothing is worked on; what is on its
+        // way gets there; the clock of each cycle waits.
+        if self.flow_cfg.resting(self.flow_clock()) {
+            for s in self.stations.values_mut() {
+                s.rested += dt;
+                if let Some((end, _)) = s.working.as_mut() {
+                    *end += dt;
+                }
+                if let Some(until) = s.down_until.as_mut() {
+                    *until += dt;
+                }
+            }
+            let docks: BTreeMap<u64, (DVec3, DVec3, DVec3)> = self
+                .components
+                .iter()
+                .filter(|c| c.kind.flow())
+                .filter_map(|c| Some((c.object, Self::dock(doc, c)?)))
+                .collect();
+            self.place_flow_parts(&docks, now);
+            return (true, happened);
+        }
         let flow: Vec<Component> = self
             .components
             .iter()
@@ -273,9 +414,12 @@ impl Cell {
                 s.fed -= wait;
                 s.wait = next;
                 s.made += 1;
+                let product = self.product_of(c.object);
                 self.add_part(top + DVec3::Z * RAW.1 / 2.0, false);
                 let uid = self.parts.last().expect("just added").uid;
-                self.parts.last_mut().unwrap().flow = Some(Place::At(c.object));
+                let p = self.parts.last_mut().unwrap();
+                p.flow = Some(Place::At(c.object));
+                p.product = product;
                 self.stations.entry(c.object).or_default().out.push(uid);
                 happened = true;
             }
@@ -311,6 +455,9 @@ impl Cell {
                         st.lead_sum += lead;
                         st.lead_min = Some(st.lead_min.map_or(lead, |m| m.min(lead)));
                         st.lead_max = st.lead_max.max(lead);
+                        let b = &mut st.by_product[(p.product as usize) % PRODUCTS.len()];
+                        b.0 += 1;
+                        b.1 += lead;
                         self.stations.entry(to).or_default().made += 1;
                     }
                 }
@@ -430,7 +577,18 @@ impl Cell {
                 };
             if ready && manned {
                 let parts: Vec<u64> = s.queue.drain(..takes).collect();
-                let cycle = self.draw(c.props.cycle, c.props.dist, c.props.spread);
+                // Its time for this product, and a change-over if it is
+                // another than the last.
+                let product = parts
+                    .first()
+                    .and_then(|u| self.part_index(*u))
+                    .map_or(0, |i| self.parts[i].product);
+                let mean = self.cycle_of(c, product);
+                let mut cycle = self.draw(mean, c.props.dist, c.props.spread);
+                if s.last.is_some_and(|l| l != product) {
+                    cycle += c.props.setup;
+                }
+                s.last = Some(product);
                 s.working = Some((now + cycle, parts));
                 happened = true;
             }
@@ -453,9 +611,16 @@ impl Cell {
                 let s = self.stations.entry(c.object).or_default();
                 let Some(&uid) = s.out.first() else { break };
                 let turn = s.turn;
+                let product = self.part_index(uid).map_or(0, |i| self.parts[i].product);
+                // A link that takes certain products takes no others.
+                let takes = |t: &Component| {
+                    self.routes
+                        .get(&(c.object, t.object))
+                        .is_none_or(|p| p.contains(&product))
+                };
                 let pick = (0..next.len())
                     .map(|k| (turn + k) % next.len())
-                    .find(|k| self.room(next[*k]) > 0);
+                    .find(|k| takes(next[*k]) && self.room(next[*k]) > 0);
                 let Some(k) = pick else { break };
                 let target = next[k];
                 let s = self.stations.entry(c.object).or_default();
@@ -562,7 +727,9 @@ impl Cell {
             .filter(|c| c.kind == Kind::Station)
             .map(|c| {
                 let s = self.stations.get(&c.object);
+                let resting = self.flow_on && self.flow_cfg.resting(self.flow_clock());
                 let activity = match s {
+                    _ if resting => "rest",
                     Some(s) if s.down_until.is_some() => "down",
                     Some(s) if s.working.is_some() => "cut",
                     Some(s) if !s.out.is_empty() => "blocked",
@@ -586,6 +753,14 @@ impl Cell {
             "left": s.working.as_ref().map(|(end, _)| (end - now).max(0.0)),
             "made": s.made,
             "down": s.down_until.is_some(),
+            "mix": self.mix.get(&c.object),
+            "cycles": self.cycles.get(&c.object),
+            "routes": self
+                .routes
+                .iter()
+                .filter(|((from, _), _)| *from == c.object)
+                .map(|((_, to), p)| (to.to_string(), json!(p)))
+                .collect::<serde_json::Map<_, _>>(),
             "oee": (c.kind == Kind::Station).then(|| self.oee(c)),
         })
     }
@@ -596,7 +771,8 @@ impl Cell {
     pub(super) fn oee(&self, c: &Component) -> Value {
         let s = self.stations.get(&c.object).cloned().unwrap_or_default();
         let now = self.last_tick.unwrap_or(0.0);
-        let planned = self.flow_stats.from.map_or(0.0, |f| (now - f).max(0.0));
+        let planned =
+            (self.flow_stats.from.map_or(0.0, |f| (now - f).max(0.0)) - s.rested).max(0.0);
         let run = (planned - s.down).max(0.0);
         let made = s.good + s.bad;
         let a = if planned > 0.0 { run / planned } else { 0.0 };
@@ -629,6 +805,16 @@ impl Cell {
             "wip": self.parts.iter().filter(|p| p.flow.is_some()).count(),
             "carrying": self.jobs.len(),
             "scrapped": st.scrapped,
+            "products": st
+                .by_product
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.0 > 0)
+                .map(|(k, b)| json!({ "product": PRODUCTS[k], "sunk": b.0, "lead_mean": b.1 / b.0 as f64 }))
+                .collect::<Vec<_>>(),
+            "settings": self.flow_cfg.to_json(),
+            "resting": self.flow_on && self.flow_cfg.resting(self.flow_clock()),
+            "warming": self.flow_on && !self.warmed && self.flow_cfg.warmup > 0.0,
             "stations": self
                 .components
                 .iter()

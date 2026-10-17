@@ -49,6 +49,7 @@ const ACTIVITIES = {
   drive: ['주행', '#9b7bff'],
   walk: ['보행', '#c08bff'],
   down: ['고장', '#d9534f'],
+  rest: ['휴식', '#556070'],
   work: ['작업', '#2fbfa0'],
   idle: ['쉼', '#2f353f'],
 };
@@ -119,6 +120,14 @@ export class TimelinePanel {
       this.flowOp(this.flowState?.on ? 'stop' : 'start'),
     );
     document.getElementById('flow-reset').addEventListener('click', () => this.flowOp('reset'));
+    for (const id of ['flow-work', 'flow-rest', 'flow-warmup']) {
+      document.getElementById(id).addEventListener('change', () => {
+        const n = (id) => Number(document.getElementById(id).value) || 0;
+        post({ op: 'flow_settings', work: n('flow-work'), rest: n('flow-rest'), warmup: n('flow-warmup') * 60 }).then((a) => {
+          if (!a.ok) this.ctx.toast(a.error || '설정을 바꾸지 못했습니다');
+        });
+      });
+    }
     document.getElementById('tl-legend').innerHTML = Object.entries(ACTIVITIES)
       .map(([, [label, color]]) => `<span><i style="background:${color}"></i>${label}</span>`)
       .join('');
@@ -219,8 +228,18 @@ export class TimelinePanel {
     document.getElementById('flow-run').textContent = f.on ? '■ 정지' : '▶ 실행';
     const lead = f.lead_mean != null ? ` · 리드타임 평균 ${f.lead_mean.toFixed(1)} s (최소 ${f.lead_min.toFixed(1)}, 최대 ${f.lead_max.toFixed(1)})` : '';
     const amr = f.carrying ? ` · 운반 ${f.carrying}건` : '';
+    // The calendar's fields, as KYNEX has them, unless being typed in.
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (document.activeElement !== el) el.value = v ? Math.round(v * 100) / 100 : '';
+    };
+    set('flow-work', f.settings?.work);
+    set('flow-rest', f.settings?.rest);
+    set('flow-warmup', (f.settings?.warmup ?? 0) / 60);
+    const now = f.resting ? ' · 휴식 중' : f.warming ? ' · 워밍업 중' : '';
+    const by = (f.products ?? []).length > 1 ? ` · ${f.products.map((p) => `${p.product} ${p.sunk}`).join(' ')}` : '';
     const problem = f.problem ? ` · ⚠ ${f.problem}` : '';
-    document.getElementById('flow-state').textContent = `배출 ${f.sunk}개 · 시간당 ${f.per_hour.toFixed(1)}개 · 공정 중 ${f.wip}개${amr}${lead}${problem}`;
+    document.getElementById('flow-state').textContent = `배출 ${f.sunk}개${by} · 시간당 ${f.per_hour.toFixed(1)}개 · 공정 중 ${f.wip}개${amr}${lead}${now}${problem}`;
   }
 
   // The scenarios compared, as CSV.

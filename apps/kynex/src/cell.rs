@@ -319,6 +319,9 @@ pub struct Props {
     pub mtbf: f64,
     pub mttr: f64,
     pub scrap: f64,
+    /// A station's change-over: seconds before a part of another product
+    /// than the last it worked on.
+    pub setup: f64,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -358,6 +361,7 @@ impl Default for Props {
             mtbf: 0.0,
             mttr: 0.0,
             scrap: 0.0,
+            setup: 0.0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -490,6 +494,9 @@ impl Props {
         self.scrap = v["scrap"]
             .as_f64()
             .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
+        self.setup = v["setup"]
+            .as_f64()
+            .map_or(self.setup, |x| x.clamp(0.0, 36000.0));
     }
 
     fn to_json(self) -> Value {
@@ -518,6 +525,7 @@ impl Props {
             "mtbf": self.mtbf,
             "mttr": self.mttr,
             "scrap": self.scrap,
+            "setup": self.setup,
             "takes": self.takes,
             "makes": self.makes,
         })
@@ -633,6 +641,8 @@ pub struct Part {
     pub born: f64,
     /// Where it is in a process flow, if it is in one (see `flow`).
     pub flow: Option<flow::Place>,
+    /// Which product it is, 0 for A on (see `flow::PRODUCTS`).
+    pub product: u8,
 }
 
 impl Part {
@@ -823,6 +833,16 @@ pub struct Cell {
     /// The flow's random numbers: drawn in turn from its seed, the same
     /// run after run for one seed.
     rng: u64,
+    /// Products: each source's mix, by product; each station's time for
+    /// each (0: its own); the products each link of the flow takes (none:
+    /// all); and the calendar and warm-up (see `flow`).
+    mix: BTreeMap<u64, Vec<f64>>,
+    cycles: BTreeMap<u64, Vec<f64>>,
+    routes: BTreeMap<(u64, u64), Vec<u8>>,
+    flow_cfg: flow::Settings,
+    warmed: bool,
+    just_warmed: bool,
+    flow_start: Option<f64>,
     /// The lanes between stops, both ways; the stop each AMR holds; the
     /// parts AMRs are to carry (see `fleet`).
     lanes: BTreeMap<u64, Vec<u64>>,
@@ -1128,6 +1148,10 @@ impl Cell {
     pub fn adopt(&mut self, doc: &Document) {
         let mut waiting = Vec::new();
         for saved in std::mem::take(&mut self.pending) {
+            if saved["flow_settings"].is_object() {
+                self.flow_cfg = flow::Settings::of(&saved["flow_settings"]);
+                continue;
+            }
             let name = saved["name"].as_str().unwrap_or_default();
             let kind = saved["kind"].as_str().and_then(Kind::of);
             let by_uid = saved["object"]
@@ -1150,6 +1174,29 @@ impl Cell {
                     .filter_map(|n| n.as_str().and_then(|s| s.parse().ok()))
                     .collect();
                 self.flow_next.insert(object, next);
+            }
+            if let Some(object) = found {
+                let floats = |v: &Value| -> Option<Vec<f64>> {
+                    Some(v.as_array()?.iter().filter_map(Value::as_f64).collect())
+                };
+                if let Some(mix) = floats(&saved["mix"]) {
+                    self.mix.insert(object, mix);
+                }
+                if let Some(cycles) = floats(&saved["cycles"]) {
+                    self.cycles.insert(object, cycles);
+                }
+                if let Some(routes) = saved["routes"].as_object() {
+                    for (to, p) in routes {
+                        let (Ok(to), Some(p)) = (to.parse::<u64>(), p.as_array()) else {
+                            continue;
+                        };
+                        let p = p
+                            .iter()
+                            .filter_map(|x| x.as_u64().map(|x| x as u8))
+                            .collect();
+                        self.routes.insert((object, to), p);
+                    }
+                }
             }
             if let (Some(object), Some(lanes)) = (found, saved["lanes"].as_array()) {
                 let lanes: Vec<u64> = lanes
@@ -1233,8 +1280,18 @@ impl Cell {
                     "lanes": self.lanes.get(&c.object).map(|n| {
                         n.iter().map(u64::to_string).collect::<Vec<_>>()
                     }),
+                    "mix": self.mix.get(&c.object),
+                    "cycles": self.cycles.get(&c.object),
+                    "routes": self
+                        .routes
+                        .iter()
+                        .filter(|((from, _), _)| *from == c.object)
+                        .map(|((_, to), p)| (to.to_string(), json!(p)))
+                        .collect::<serde_json::Map<_, _>>(),
                 })
             })
+            // The flow's calendar and warm-up, with the roles.
+            .chain((!self.flow_cfg.is_default()).then(|| json!({ "flow_settings": self.flow_cfg.to_json() })))
             .chain(self.pending.iter().cloned())
             .collect()
     }
@@ -1688,6 +1745,7 @@ impl Cell {
             held: None,
             born: self.last_tick.unwrap_or(0.0),
             flow: None,
+            product: 0,
         });
         self.changed = true;
     }
@@ -2003,6 +2061,46 @@ impl Cell {
                     .filter_map(|n| n.as_str().and_then(|s| s.parse::<u64>().ok()))
                     .collect();
                 self.set_lanes(uid("object")?, next)?;
+            }
+            "flow_products" => {
+                let object = uid("object")?;
+                let floats = |key: &str| -> Vec<f64> {
+                    req[key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|x| x.as_f64().unwrap_or(0.0).clamp(0.0, 1.0e6))
+                        .take(flow::PRODUCTS.len())
+                        .collect()
+                };
+                if req["mix"].is_array() {
+                    self.mix.insert(object, floats("mix"));
+                }
+                if req["cycles"].is_array() {
+                    self.cycles.insert(object, floats("cycles"));
+                }
+                if let Some(to) = req["to"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                    let p: Vec<u8> = req["products"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|x| x.as_u64())
+                        .filter(|x| (*x as usize) < flow::PRODUCTS.len())
+                        .map(|x| x as u8)
+                        .collect();
+                    if p.is_empty() {
+                        self.routes.remove(&(object, to));
+                    } else {
+                        self.routes.insert((object, to), p);
+                    }
+                }
+                self.roles_changed = true;
+                self.changed = true;
+            }
+            "flow_settings" => {
+                self.flow_cfg = flow::Settings::of(&req);
+                self.roles_changed = true;
+                self.changed = true;
             }
             "flow_next" => {
                 let next = req["next"]
@@ -3436,12 +3534,29 @@ impl Cell {
         // One mesh and one colour for each kind of part, under fixed
         // identities.
         let mut meshes = BTreeMap::new();
-        for (k, finished) in [(1u64, false), (2, true)] {
-            let (r, h) = if finished { FINISHED } else { RAW };
-            let colour = if finished {
-                SceneRgb::new(0.95, 0.72, 0.25)
+        let kinds: std::collections::BTreeSet<(bool, u8)> =
+            self.parts.iter().map(|p| (p.finished, p.product)).collect();
+        for (finished, product) in kinds {
+            // Product A as parts always were; the others each a colour.
+            let k = if product == 0 {
+                1 + u64::from(finished)
             } else {
-                SceneRgb::new(0.62, 0.64, 0.68)
+                10 + 2 * u64::from(product) + u64::from(finished)
+            };
+            let (r, h) = if finished { FINISHED } else { RAW };
+            let colour = match (product, finished) {
+                (0, true) => SceneRgb::new(0.95, 0.72, 0.25),
+                (0, false) => SceneRgb::new(0.62, 0.64, 0.68),
+                (p, f) => {
+                    let [r, g, b] =
+                        flow::PRODUCT_COLOURS[(p as usize) % flow::PRODUCT_COLOURS.len()];
+                    let light = if f { 1.0 } else { 0.6 };
+                    SceneRgb::new(
+                        r * light + (1.0 - light) * 0.7,
+                        g * light + (1.0 - light) * 0.7,
+                        b * light + (1.0 - light) * 0.7,
+                    )
+                }
             };
             let material = doc.restore_material(
                 Material {
@@ -3463,12 +3578,12 @@ impl Cell {
                 Uid::from_raw(PARTS + k),
             );
             doc.set_mesh_slot(mesh, 0, Some(material));
-            meshes.insert(finished, mesh);
+            meshes.insert((finished, product), mesh);
         }
         for part in &self.parts {
             let mut object = Object::new(
                 if part.finished { "완성품" } else { "소재" },
-                ObjectData::Mesh(meshes[&part.finished]),
+                ObjectData::Mesh(meshes[&(part.finished, part.product)]),
             );
             let (_, rotation, translation) = part.world.to_scale_rotation_translation();
             object.transform.translation = translation;
@@ -3688,6 +3803,8 @@ pub fn is_op(op: &str) -> bool {
             | "flow"
             | "flow_next"
             | "amr_lanes"
+            | "flow_products"
+            | "flow_settings"
     )
 }
 

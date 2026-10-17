@@ -257,3 +257,142 @@ fn breakdowns_and_scrap_show_in_the_station_s_oee() {
     );
     assert!(s["scrapped"].as_u64().unwrap() > 0);
 }
+
+#[test]
+fn products_go_their_own_ways_at_their_own_times() {
+    // Half A, half B; station 1 takes A only, station 2 B only.
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 5.0, "capacity": 3})),
+        ("flow_station", 2.0, json!({"cycle": 4.0, "capacity": 5})),
+        ("flow_station", 2.0, json!({"cycle": 4.0, "capacity": 5})),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1], u[2]]);
+    link(&mut cell, &doc, u[1], &[u[3]]);
+    link(&mut cell, &doc, u[2], &[u[3]]);
+    let s = |x: u64| x.to_string();
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": s(u[0]), "mix": [1.0, 1.0]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": s(u[0]), "to": s(u[1]), "products": [0]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": s(u[0]), "to": s(u[2]), "products": [1]}),
+    );
+    // Kept with the roles.
+    let saved = cell.to_saved();
+    assert_eq!(saved[0]["mix"], json!([1.0, 1.0]));
+    assert_eq!(saved[0]["routes"][s(u[1])], json!([0]));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 2000.0);
+    let f = cell.flow_summary();
+    let by: Vec<(String, u64)> = f["products"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            (
+                p["product"].as_str().unwrap().to_string(),
+                p["sunk"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(by.len(), 2, "{f}");
+    let (a, b) = (by[0].1 as f64, by[1].1 as f64);
+    assert!((a / (a + b) - 0.5).abs() < 0.1, "{by:?}");
+    // Each station made only its own.
+    assert_eq!(
+        cell.stations[&u[1]].made,
+        by[0].1 + cell.stations[&u[1]].out.len() as u64 - 0
+    );
+}
+
+#[test]
+fn a_change_of_product_costs_its_setup() {
+    // A and B in turn at random, 10 s and 20 s, 5 s to change over: about
+    // 15 + 2.5 s a part, kept fed.
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 1.0, "capacity": 5})),
+        (
+            "flow_station",
+            2.0,
+            json!({"cycle": 99.0, "setup": 5.0, "capacity": 5}),
+        ),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    let s = |x: u64| x.to_string();
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": s(u[0]), "mix": [1.0, 1.0]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": s(u[1]), "cycles": [10.0, 20.0]}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 3500.0);
+    let made = cell.stations[&u[1]].made as f64;
+    assert!((made - 3500.0 / 17.5).abs() < 20.0, "{made}");
+}
+
+#[test]
+fn a_calendar_rests_the_flow_and_a_warm_up_is_left_out() {
+    let build = |settings: Value| {
+        let (doc, mut cell, u) = line(&[
+            ("flow_source", 0.0, json!({"feed": 10.0})),
+            ("flow_station", 2.0, json!({"cycle": 5.0})),
+            ("flow_sink", 4.0, json!({})),
+        ]);
+        link(&mut cell, &doc, u[0], &[u[1]]);
+        link(&mut cell, &doc, u[1], &[u[2]]);
+        let mut req = settings;
+        req["op"] = json!("flow_settings");
+        ask(&mut cell, &doc, req);
+        ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+        (doc, cell)
+    };
+    // Ten minutes at work, ten at rest: half as many out.
+    let (doc, mut free) = build(json!({}));
+    run(&mut free, &doc, 0.0, 2400.0);
+    let (doc2, mut shifts) = build(json!({"work": 10.0, "rest": 10.0}));
+    let start = Instant::now();
+    let mut t = 0.0;
+    let mut rested = false;
+    while t < 2400.0 {
+        t += 0.1;
+        shifts.tick(&doc2, t, start + Duration::from_secs_f64(t));
+        rested |= shifts.flow_activities()[0].2 == "rest";
+    }
+    assert!(rested);
+    let (a, b) = (
+        free.flow_summary()["sunk"].as_f64().unwrap(),
+        shifts.flow_summary()["sunk"].as_f64().unwrap(),
+    );
+    assert!((b / a - 0.5).abs() < 0.05, "{a} {b}");
+    // Rest is no loss of availability.
+    let oee = &shifts.flow_summary()["stations"][0];
+    assert!(oee["availability"].as_f64().unwrap() > 0.99, "{oee}");
+    // A warm-up of 600 s: its parts not counted, said once.
+    let (doc3, mut warm) = build(json!({"warmup": 600.0}));
+    let start = Instant::now();
+    let (mut t, mut told) = (0.0, 0);
+    while t < 1200.0 {
+        t += 0.1;
+        warm.tick(&doc3, t, start + Duration::from_secs_f64(t));
+        told += warm.take_warmed() as u32;
+    }
+    assert_eq!(told, 1);
+    let sunk = warm.flow_summary()["sunk"].as_u64().unwrap();
+    assert!((59..=61).contains(&sunk), "{sunk}");
+}

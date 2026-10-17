@@ -590,6 +590,12 @@ impl Stage {
             }
         }
         touched |= self.cell.tick(scene, time, now);
+        // A process flow's warm-up over: its record begins again from here.
+        if self.cell.take_warmed() {
+            self.timeline = Some(Timeline::new(time));
+            self.timeline_told = None;
+            touched = true;
+        }
         // Machines following real ones: their agents asked, their states
         // taken.
         let (feeds, sources): (Vec<_>, Vec<_>) = self

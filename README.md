@@ -794,6 +794,20 @@ not change the session's scene.
   - **시나리오 비교 → 반복**: 3, 5 or 10 runs, each with its own seed.
     Parts an hour and lead time are shown as mean ± the 95 % confidence
     interval (Student's t). `kynex compare --reps N` does the same.
+- **Products, calendar and warm-up** in a process flow:
+  - Products A to F. A source's **제품 비율** draws each part's product
+    by its weight. Parts are coloured by product.
+  - A station's **품종별 처리 시간** gives each product its own time
+    (blank: the station's own). **품종 교체 시간** is added when it
+    takes a part of another product than the last.
+  - Under a source's or station's 다음 공정, each link's product buttons
+    say which products go that way. None picked means all.
+  - In the flow bar, **근무 / 휴식** (minutes) runs the flow in turns:
+    at rest nothing comes in or is worked on, the timeline shows 휴식,
+    and rest is left out of OEE's planned time. **워밍업** (minutes)
+    leaves the start out of every figure, the timeline and the scenario
+    comparison included, so only the steady state counts.
+  - The flow bar and summary count parts out by product.
 - **AMR lanes and traffic** (`apps/kynex/src/cell/fleet.rs`).
   - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
     go both ways and are drawn in orange. Sent to a stop, an AMR drives to

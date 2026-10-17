@@ -98,6 +98,11 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
         }
         cell.tick(&doc, t, now);
         delivered += cell.supply(&doc);
+        // Warmed up: the figures from here.
+        if cell.take_warmed() {
+            timeline = Timeline::new(t);
+            delivered = 0;
+        }
         let mut lanes: Vec<Now> = runners
             .iter()
             .map(|r| Now {

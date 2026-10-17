@@ -108,6 +108,7 @@ const FIELDS = {
     ['cycle', '처리 시간', 's', 1],
     ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
     ['spread', '폭·σ', 's', 1],
+    ['setup', '품종 교체 시간', 's', 1],
     ['mtbf', '고장 간격 평균 (0: 없음)', 's', 1],
     ['mttr', '수리 시간 평균', 's', 1],
     ['scrap', '불량률', '%', 100],
@@ -165,6 +166,12 @@ export class CellPanel {
     this.kind.addEventListener('change', () => this.setRole());
     this.box.addEventListener('change', (e) => {
       if (e.target.dataset.prop) this.setRole();
+      // A source's mix, or a station's time for each product.
+      if (e.target.dataset.mix !== undefined || e.target.dataset.cycle !== undefined) {
+        const key = e.target.dataset.mix !== undefined ? 'mix' : 'cycle';
+        const values = [...this.box.querySelectorAll(`[data-${key}]`)].map((i) => Number(i.value) || 0);
+        this.send({ op: 'flow_products', object: this.ctx.selected(), [key === 'mix' ? 'mix' : 'cycles']: values });
+      }
     });
     this.box.addEventListener('click', (e) => {
       const act = e.target.closest('[data-cell]')?.dataset.cell;
@@ -182,6 +189,17 @@ export class CellPanel {
         const have = this.componentOf(object)?.lanes ?? [];
         const t = lane.dataset.lane;
         this.send({ op: 'amr_lanes', object, next: have.includes(t) ? have.filter((x) => x !== t) : [...have, t] });
+      }
+      // Which products a link takes: one more, or one fewer.
+      const chip = e.target.closest('[data-route-to]');
+      if (chip) {
+        const object = this.ctx.selected();
+        const routes = this.componentOf(object)?.flow?.routes ?? {};
+        const to = chip.dataset.routeTo;
+        const p = Number(chip.dataset.product);
+        const have = routes[to] ?? [];
+        const products = have.includes(p) ? have.filter((x) => x !== p) : [...have, p];
+        return this.send({ op: 'flow_products', object, to, products });
       }
       // A process flow's next: one more, or one fewer.
       const next = e.target.closest('[data-flow-next]');
@@ -364,7 +382,38 @@ export class CellPanel {
           : c.kind === 'station'
             ? `${f.down ? '고장 · 수리 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
             : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
-      actions = `${nexts}<span class="muted">${state}</span>`;
+      // Products: as many as any source mixes.
+      const last = (m) => (m ?? []).reduce((k, w, i) => (w > 0 ? i + 1 : k), 0);
+      const used = Math.max(1, ...this.cell.components.map((s) => last(s.flow?.mix)));
+      const names = ['A', 'B', 'C', 'D', 'E', 'F'];
+      let products = '';
+      if (c.kind === 'source') {
+        const mix = f.mix ?? [];
+        products = `<div class="flow-products"><span class="muted">제품 비율</span>${names
+          .map((n, i) => `<label>${n}<input type="number" class="num" data-mix="${i}" value="${mix[i] ?? (i === 0 && !mix.length ? 1 : 0)}" min="0" step="1"></label>`)
+          .join('')}</div>`;
+      } else if (c.kind === 'station' && used > 1) {
+        const cycles = f.cycles ?? [];
+        products = `<div class="flow-products"><span class="muted">품종별 처리 시간 (비우면 기본)</span>${names
+          .slice(0, used)
+          .map((n, i) => `<label>${n}<input type="number" class="num" data-cycle="${i}" value="${cycles[i] > 0 ? cycles[i] : ''}" min="0" step="1" placeholder="${c.props.cycle}"></label>`)
+          .join('')}</div>`;
+      }
+      // Each link's products, where there are several.
+      let routes = '';
+      if (used > 1 && c.kind !== 'sink' && f.next.length) {
+        routes = f.next
+          .map((to) => {
+            const t = this.componentOf(to);
+            const have = f.routes?.[to] ?? [];
+            return `<div class="flow-route"><span class="muted">→ ${escapeHtml(t?.name ?? to)}</span>${names
+              .slice(0, used)
+              .map((n, i) => `<button class="text-btn${have.includes(i) ? ' on' : ''}" data-route-to="${escapeHtml(to)}" data-product="${i}" title="이 길로 보낼 제품 (아무것도 고르지 않으면 모두)">${n}</button>`)
+              .join('')}${have.length ? '' : '<span class="muted">모두</span>'}</div>`;
+          })
+          .join('');
+      }
+      actions = `${nexts}<span class="muted">${state}</span>${products}${routes}`;
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};
       const at = a.out >= 1 ? '전진 끝' : a.out <= 0 ? '후진 끝' : a.extending ? '전진 중' : '후진 중';

@@ -7,7 +7,7 @@
 // one CNC machine, two, another gripper — run for hours away from the view
 // and compared (the `scenarios` event).
 
-import { csv, csvText, figures, laneTable, reportHtml, stateChart, summary, throughputChart } from './stats.js';
+import { csv, csvText, figures, laneTable, oeeTable, reportHtml, stateChart, summary, throughputChart } from './stats.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -48,6 +48,7 @@ const ACTIVITIES = {
   blocked: ['언로드 대기', '#e0a43a'],
   drive: ['주행', '#9b7bff'],
   walk: ['보행', '#c08bff'],
+  down: ['고장', '#d9534f'],
   work: ['작업', '#2fbfa0'],
   idle: ['쉼', '#2f353f'],
 };
@@ -85,7 +86,11 @@ export class TimelinePanel {
       e.stopPropagation();
     });
     document.getElementById('sc-run').addEventListener('click', () =>
-      this.send({ action: 'run', seconds: Number(document.getElementById('sc-hours').value) * 3600 }),
+      this.send({
+        action: 'run',
+        seconds: Number(document.getElementById('sc-hours').value) * 3600,
+        reps: Number(document.getElementById('sc-reps').value),
+      }),
     );
     document.getElementById('sc-list').addEventListener('click', (e) => {
       const b = e.target.closest('[data-sc]');
@@ -170,10 +175,10 @@ export class TimelinePanel {
           ? r.ok === false
             ? `<td colspan="6"></td><td class="sc-alarm">${escapeHtml(r.alarm || '')}</td>`
             : `<td>${r.parts}</td>
-               <td class="sc-rate"><span class="sc-bar-rate" style="width:${best ? Math.round((r.per_hour / best) * 60) : 0}px"></span>${r.per_hour.toFixed(1)}</td>
+               <td class="sc-rate"><span class="sc-bar-rate" style="width:${best ? Math.round((r.per_hour / best) * 60) : 0}px"></span>${r.per_hour.toFixed(1)}${r.reps > 1 ? `<small> ±${r.per_hour_ci.toFixed(1)}</small>` : ''}</td>
                <td title="${escapeHtml(r.machine_lanes.map((m) => `${m.name} ${pct(m.utilization)}`).join(', '))}">${pct(mean(r.machine_lanes, 'utilization'))}</td>
                <td>${r.robot_lanes.length ? pct(mean(r.robot_lanes, 'work')) : '—'}</td>
-               <td>${r.lead_mean != null ? `${r.lead_mean.toFixed(0)} s` : '—'}</td>
+               <td>${r.lead_mean != null ? `${r.lead_mean.toFixed(0)} s${r.reps > 1 && r.lead_ci != null ? `<small> ±${r.lead_ci.toFixed(0)}</small>` : ''}` : '—'}</td>
                <td>${r.bottleneck ? `${escapeHtml(r.bottleneck.name)} ${pct(r.bottleneck.busy)}` : '—'}</td>
                <td class="sc-alarm">${r.alarm ? escapeHtml(r.alarm) : ''}</td>`
           : '<td colspan="7" class="muted">아직 실행하지 않음</td>';
@@ -227,7 +232,7 @@ export class TimelinePanel {
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const byName = new Map(compared.map((r) => [r.name, r]));
-    const lines = [['시나리오', '장비', '완성', '시간당', '장비 가동률 (%)', '로봇 작업 (%)', '로봇 대기 (%)', '리드타임 (s)', '병목', '병목 작업 (%)', '알람'].map(q).join(',')];
+    const lines = [['시나리오', '장비', '완성', '시간당', '시간당 ±95%', '반복', '장비 가동률 (%)', '로봇 작업 (%)', '로봇 대기 (%)', '리드타임 (s)', '리드타임 ±95%', '병목', '병목 작업 (%)', '알람'].map(q).join(',')];
     for (const s of list) {
       const r = byName.get(s.name);
       if (!r) continue;
@@ -238,10 +243,13 @@ export class TimelinePanel {
           s.machines,
           ok ? r.parts : '',
           ok ? r.per_hour.toFixed(2) : '',
+          ok && r.per_hour_ci != null ? r.per_hour_ci.toFixed(2) : '',
+          ok ? (r.reps ?? 1) : '',
           ok ? (mean(r.machine_lanes, 'utilization') * 100).toFixed(1) : '',
           ok ? (mean(r.robot_lanes, 'work') * 100).toFixed(1) : '',
           ok ? (mean(r.robot_lanes, 'wait') * 100).toFixed(1) : '',
           ok && r.lead_mean != null ? r.lead_mean.toFixed(1) : '',
+          ok && r.lead_ci != null ? r.lead_ci.toFixed(1) : '',
           ok && r.bottleneck ? r.bottleneck.name : '',
           ok && r.bottleneck ? (r.bottleneck.busy * 100).toFixed(1) : '',
           r.alarm || '',
@@ -275,7 +283,8 @@ export class TimelinePanel {
         <section><h3>장비별 상태</h3>${stateChart(f, ACTIVITIES, escapeHtml)}</section>
         <section><h3>누적 완성 수 <span class="muted">· 점선: 평균 속도</span></h3>${throughputChart(f)}</section>
       </div>
-      <section><h3>작업·막힘·대기 <span class="muted">· 작업이 가장 많은 곳이 병목</span></h3>${laneTable(f, escapeHtml)}</section>`;
+      <section><h3>작업·막힘·대기 <span class="muted">· 작업이 가장 많은 곳이 병목</span></h3>${laneTable(f, escapeHtml)}</section>
+      ${oeeTable(this.flowState, escapeHtml)}`;
   }
 
   render() {

@@ -98,12 +98,19 @@ const FIELDS = {
   source: [
     ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR'], [2, '작업자']]],
     ['feed', '공급 간격', 's', 1],
+    ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
+    ['spread', '폭·σ', 's', 1],
     ['capacity', '내보낼 자리', '개', 1],
     ['speed', '이송 속도', 'mm/s', 1000],
   ],
   station: [
     ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR'], [2, '작업자']]],
     ['cycle', '처리 시간', 's', 1],
+    ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
+    ['spread', '폭·σ', 's', 1],
+    ['mtbf', '고장 간격 평균 (0: 없음)', 's', 1],
+    ['mttr', '수리 시간 평균', 's', 1],
+    ['scrap', '불량률', '%', 100],
     ['crew', '작업자', '', 1, [[0, '필요 없음'], [1, '작업자 필요']]],
     ['capacity', '대기 자리', '개', 1],
     ['takes', '투입 수 (2 이상: 조립)', '개', 1],
@@ -355,7 +362,7 @@ export class CellPanel {
         c.kind === 'sink'
           ? `배출 ${f.made}개`
           : c.kind === 'station'
-            ? `${f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 대기 ${f.queue} · 완료 ${f.made}`
+            ? `${f.down ? '고장 · 수리 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
             : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
       actions = `${nexts}<span class="muted">${state}</span>`;
     } else if (c && c.kind === 'actuator') {

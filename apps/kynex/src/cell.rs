@@ -307,6 +307,18 @@ pub struct Props {
     /// an operator at it to work (1).
     pub carrier: u32,
     pub crew: u32,
+    /// Process flow: how a station's cycle and a source's feed vary about
+    /// their mean: fixed (0), uniform (1) or triangular (2) within
+    /// `spread` either side, normal (3) with `spread` its standard
+    /// deviation, exponential (4) about the mean alone (see `flow::draw`).
+    pub dist: u32,
+    pub spread: f64,
+    /// A station's breakdowns: the mean time it works between them and the
+    /// mean time a repair takes, seconds (0: it does not break down); and
+    /// the share of what it makes that is scrap.
+    pub mtbf: f64,
+    pub mttr: f64,
+    pub scrap: f64,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -341,6 +353,11 @@ impl Default for Props {
             plug: 0,
             carrier: 0,
             crew: 0,
+            dist: 0,
+            spread: 0.0,
+            mtbf: 0.0,
+            mttr: 0.0,
+            scrap: 0.0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -461,6 +478,18 @@ impl Props {
             .map_or(self.crew, |x| if x > 0.5 { 1 } else { 0 });
         self.takes = few("takes", self.takes, 20);
         self.makes = few("makes", self.makes, 20);
+        self.dist = v["dist"]
+            .as_f64()
+            .map_or(self.dist, |x| x.round().clamp(0.0, 4.0) as u32);
+        self.spread = v["spread"]
+            .as_f64()
+            .map_or(self.spread, |x| x.clamp(0.0, 36000.0));
+        let hours = |key: &str, now: f64| v[key].as_f64().map_or(now, |x| x.clamp(0.0, 1.0e7));
+        self.mtbf = hours("mtbf", self.mtbf);
+        self.mttr = hours("mttr", self.mttr);
+        self.scrap = v["scrap"]
+            .as_f64()
+            .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
     }
 
     fn to_json(self) -> Value {
@@ -484,6 +513,11 @@ impl Props {
             "capacity": self.capacity,
             "carrier": self.carrier,
             "crew": self.crew,
+            "dist": self.dist,
+            "spread": self.spread,
+            "mtbf": self.mtbf,
+            "mttr": self.mttr,
+            "scrap": self.scrap,
             "takes": self.takes,
             "makes": self.makes,
         })
@@ -786,6 +820,9 @@ pub struct Cell {
     flow_stats: flow::Stats,
     /// What last kept the flow from going on as it should, for the page.
     flow_problem: Option<String>,
+    /// The flow's random numbers: drawn in turn from its seed, the same
+    /// run after run for one seed.
+    rng: u64,
     /// The lanes between stops, both ways; the stop each AMR holds; the
     /// parts AMRs are to carry (see `fleet`).
     lanes: BTreeMap<u64, Vec<u64>>,
@@ -1952,7 +1989,12 @@ impl Cell {
             "signals" => self.set_signals(&req["signals"])?,
             // The process flow: started, stopped, reset; where a part of it
             // sends its parts.
-            "flow" => self.flow(req["action"].as_str().unwrap_or(""))?,
+            "flow" => {
+                if let Some(seed) = req["seed"].as_u64() {
+                    self.seed_flow(seed);
+                }
+                self.flow(req["action"].as_str().unwrap_or(""))?
+            }
             "amr_lanes" => {
                 let next = req["next"]
                     .as_array()
@@ -3651,6 +3693,8 @@ pub fn is_op(op: &str) -> bool {
 
 mod fleet;
 mod flow;
+#[cfg(test)]
+pub use flow::SEED;
 
 #[cfg(test)]
 mod tests {

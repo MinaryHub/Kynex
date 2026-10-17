@@ -775,6 +775,25 @@ not change the session's scene.
     shows parts out, parts an hour, parts in process and lead time (mean,
     least, most). Each station gets a lane in the timeline: working,
     blocked, idle, and its utilization. Robot programs can run alongside.
+- **Variation, breakdowns and scrap** in a process flow, so that results
+  carry the spread a real floor has:
+  - **시간 분포** for a source's 공급 간격 and a station's 처리 시간:
+    고정, 균등 ±폭, 삼각 ±폭, 정규 σ, or 지수 (about the mean alone). The
+    random numbers come from a seed, so one seed gives one run, the same
+    each time.
+  - A station's **고장 간격 평균** (MTBF, time at work between
+    breakdowns) and **수리 시간 평균** (MTTR), both exponential. Broken
+    down, it pauses its cycle. It shows 고장 · 수리 중 and a red 고장
+    span in the timeline.
+  - **불량률**: that share of what a station makes is scrapped. It is
+    counted and goes no further.
+  - **OEE** per station: availability (time not broken down) ×
+    performance (its mean cycle for each part made, over the time it
+    could work) × quality (good of all made). Shown in the inspector,
+    the 통계 tab, the CSV and the report.
+  - **시나리오 비교 → 반복**: 3, 5 or 10 runs, each with its own seed.
+    Parts an hour and lead time are shown as mean ± the 95 % confidence
+    interval (Student's t). `kynex compare --reps N` does the same.
 - **AMR lanes and traffic** (`apps/kynex/src/cell/fleet.rs`).
   - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
     go both ways and are drawn in orange. Sent to a stop, an AMR drives to

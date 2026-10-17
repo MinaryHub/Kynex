@@ -983,12 +983,14 @@ impl Stage {
                     .unwrap_or(3600.0)
                     .clamp(60.0, 86400.0);
                 // Away from the loop: an hour of a few cells takes seconds.
+                // Each as often as asked, its own random numbers each time.
+                let reps = req["reps"].as_u64().unwrap_or(1).clamp(1, 50) as usize;
                 let (send, results) = std::sync::mpsc::channel();
                 let (session, scenarios) = (doc.clone(), self.scenarios.clone());
                 std::thread::spawn(move || {
                     let compared = scenarios
                         .iter()
-                        .map(|s| scenario::simulate(&session, s, seconds))
+                        .map(|s| scenario::replicate(&session, s, seconds, reps))
                         .collect();
                     let _ = send.send(compared);
                 });

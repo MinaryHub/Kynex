@@ -6,7 +6,7 @@
 //! kynex view ADDRESS|--kreate [--key KEY] [--port 8090] [--lan] [--open]
 //! kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 //! kynex inspect FILE.kreate [--json]
-//! kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--json]
+//! kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--reps 1] [--json]
 //! ```
 //!
 //! `link` joins the shared session a Kreate opened (File ▸ Shared Session ▸
@@ -60,7 +60,7 @@ kynex                                   (KYNEX on its own, in the browser)
 kynex view [--port 8090] [--lan] [--open] [--project FILE]
 kynex view ADDRESS|--kreate [--key KEY] [--name NAME] [--port 8090] [--lan] [--open] [--project FILE]
 kynex view --file FILE.kreate [--port 8090] [--lan] [--open] [--project FILE]
-kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--json]
+kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--reps 1] [--json]
 kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 kynex inspect FILE.kreate [--json]
 kynex bench [--tier cell|line|factory|factory-xl|all] [--browser] [--port 8091]";

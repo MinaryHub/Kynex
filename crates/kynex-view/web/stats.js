@@ -138,6 +138,19 @@ export function summary(f, flow) {
   return out;
 }
 
+// Each station's OEE — availability × performance × quality — and its
+// parts good and scrapped, when a process flow ran.
+export function oeeTable(flow, escapeHtml) {
+  const rows = (flow?.stations ?? []).filter((s) => s.good + s.bad > 0);
+  if (!rows.length) return '';
+  return `<section><h3>스테이션 OEE <span class="muted">· 가용성 × 성능 × 품질</span></h3><table class="st-table"><thead><tr><th>스테이션</th><th>OEE</th><th>가용성</th><th>성능</th><th>품질</th><th>양품</th><th>불량</th></tr></thead><tbody>${rows
+    .map(
+      (s) =>
+        `<tr><td>${escapeHtml(s.name)}</td><td><b>${pct(s.oee)}</b></td><td>${pct(s.availability)}</td><td>${pct(s.performance)}</td><td>${pct(s.quality)}</td><td>${s.good}</td><td>${s.bad}</td></tr>`,
+    )
+    .join('')}</tbody></table></section>`;
+}
+
 // Each lane's shares: at work, blocked, waiting, idle — the table.
 export function laneTable(f, escapeHtml) {
   const row = (l) => {
@@ -180,6 +193,12 @@ export function csv(d, activities, flow) {
           row('리드타임 평균 (s)', flow.lead_mean != null ? flow.lead_mean.toFixed(2) : ''),
           row('리드타임 최소 (s)', flow.lead_min != null ? flow.lead_min.toFixed(2) : ''),
           row('리드타임 최대 (s)', flow.lead_max != null ? flow.lead_max.toFixed(2) : ''),
+          row('불량 (개)', flow.scrapped ?? 0),
+          '',
+          row('스테이션', 'OEE (%)', '가용성 (%)', '성능 (%)', '품질 (%)', '양품', '불량'),
+          ...(flow.stations ?? []).map((s) =>
+            row(s.name, (s.oee * 100).toFixed(1), (s.availability * 100).toFixed(1), (s.performance * 100).toFixed(1), (s.quality * 100).toFixed(1), s.good, s.bad),
+          ),
         ]
       : []),
     '',
@@ -259,6 +278,7 @@ ${throughputChart(f, { width: 680, height: 200 })}
 <p class="muted">점선: 처음부터 지금까지의 평균 속도</p>
 <h2>작업·막힘·대기</h2>
 ${laneTable(f, escapeHtml)}
+${oeeTable(flow, escapeHtml).replace('<section><h3>', '<h2>').replace('</h3>', '</h2>').replace('</section>', '')}
 <h2>장비별 시간</h2>
 <table><thead><tr><th>장비</th>${used.map((a) => `<th>${escapeHtml(activities[a]?.[0] ?? a)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
 </body></html>`;

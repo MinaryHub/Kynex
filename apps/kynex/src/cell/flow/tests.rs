@@ -174,3 +174,86 @@ fn a_station_s_time_set_on_its_equipment_is_its_role_s() {
         library.handle(&json!({"op": "resize", "item": 1, "params": {"cycle": 20.0}}).to_string());
     assert_eq!(resized.props[0].1["cycle"], 20.0, "{:?}", resized.props);
 }
+
+#[test]
+fn times_vary_as_their_distribution_says_and_repeat_for_a_seed() {
+    let mut cell = Cell::default();
+    let sample = |cell: &mut Cell, dist: u32, spread: f64| -> (f64, f64) {
+        let xs: Vec<f64> = (0..40000).map(|_| cell.draw(60.0, dist, spread)).collect();
+        let mean = xs.iter().sum::<f64>() / xs.len() as f64;
+        let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / xs.len() as f64;
+        (mean, var.sqrt())
+    };
+    cell.seed_flow(7);
+    // Fixed; uniform ±10 (σ 10/√3); triangular ±10 (σ 10/√6); normal σ 5;
+    // exponential (σ the mean).
+    for (dist, spread, sd) in [
+        (0, 10.0, 0.0),
+        (1, 10.0, 10.0 / 3f64.sqrt()),
+        (2, 10.0, 10.0 / 6f64.sqrt()),
+        (3, 5.0, 5.0),
+        (4, 0.0, 60.0),
+    ] {
+        let (m, s) = sample(&mut cell, dist, spread);
+        assert!((m - 60.0).abs() < 0.02 * 60.0, "{dist}: mean {m}");
+        assert!(
+            (s - sd).abs() < 0.03 * sd.max(1.0),
+            "{dist}: sd {s}, not {sd}"
+        );
+    }
+    // One seed, one sequence.
+    cell.seed_flow(42);
+    let a: Vec<f64> = (0..5).map(|_| cell.draw(10.0, 4, 0.0)).collect();
+    cell.seed_flow(42);
+    let b: Vec<f64> = (0..5).map(|_| cell.draw(10.0, 4, 0.0)).collect();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn breakdowns_and_scrap_show_in_the_station_s_oee() {
+    // A station always fed, 10 s a part; it works 100 s between breakdowns
+    // on average and takes 50 s to repair; a fifth of what it makes is
+    // scrap.
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 5.0, "capacity": 3})),
+        (
+            "flow_station",
+            2.0,
+            json!({"cycle": 10.0, "capacity": 3, "mtbf": 100.0, "mttr": 50.0, "scrap": 0.2}),
+        ),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow", "action": "start", "seed": 3}),
+    );
+    let start = Instant::now();
+    let mut t = 0.0;
+    let mut down = false;
+    while t < 20000.0 {
+        t += 0.25;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        down |= cell.flow_activities()[0].2 == "down";
+    }
+    assert!(down, "it broke down");
+    let s = cell.flow_summary();
+    let st = &s["stations"][0];
+    // Available two thirds of the time; nearly always at work when it is;
+    // four in five good.
+    let a = st["availability"].as_f64().unwrap();
+    let q = st["quality"].as_f64().unwrap();
+    assert!((a - 2.0 / 3.0).abs() < 0.05, "{st}");
+    assert!(st["performance"].as_f64().unwrap() > 0.9, "{st}");
+    assert!((q - 0.8).abs() < 0.03, "{st}");
+    let oee = st["oee"].as_f64().unwrap();
+    assert!((oee - a * st["performance"].as_f64().unwrap() * q).abs() < 1e-9);
+    // What reached the sink is the good ones.
+    assert_eq!(
+        s["sunk"].as_u64().unwrap(),
+        st["good"].as_u64().unwrap() - (cell.parts().iter().filter(|p| p.finished).count() as u64)
+    );
+    assert!(s["scrapped"].as_u64().unwrap() > 0);
+}

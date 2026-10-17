@@ -51,12 +51,25 @@ pub struct Station {
     pub turn: usize,
     /// The operator it has called, who works at it (see `fleet`).
     pub crew: Option<u64>,
+    /// A source's wait for its next part, drawn as each comes.
+    pub wait: f64,
+    /// Seconds of work left before it next breaks down; broken down until
+    /// then.
+    pub fail_in: Option<f64>,
+    pub down_until: Option<f64>,
+    /// Since the flow started: seconds at work, broken down, and the parts
+    /// made good and scrapped — its OEE.
+    pub busy: f64,
+    pub down: f64,
+    pub good: u64,
+    pub bad: u64,
 }
 
 /// What the sinks have seen since the flow started.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stats {
     pub from: Option<f64>,
+    pub scrapped: u64,
     pub sunk: u64,
     pub lead_sum: f64,
     pub lead_min: Option<f64>,
@@ -65,6 +78,44 @@ pub struct Stats {
 
 /// Room between parts set out on a component, metres.
 const PITCH: f64 = 2.0 * RAW.0 + 0.01;
+
+/// The seed a flow's random numbers start from unless one is given.
+pub const SEED: u64 = 1;
+
+impl Cell {
+    /// The next random number of the flow, uniform in (0, 1): SplitMix64,
+    /// the same sequence for one seed.
+    pub(super) fn uniform(&mut self) -> f64 {
+        self.rng = self.rng.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.rng;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        ((z >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    }
+
+    /// A time about `mean`, as `dist` and `spread` say (see `Props::dist`);
+    /// never below zero.
+    pub(super) fn draw(&mut self, mean: f64, dist: u32, spread: f64) -> f64 {
+        let x = match dist {
+            1 => mean + spread * (2.0 * self.uniform() - 1.0),
+            2 => mean + spread * (self.uniform() - self.uniform()),
+            3 => {
+                // Box–Muller.
+                let (a, b) = (self.uniform(), self.uniform());
+                mean + spread * (-2.0 * a.ln()).sqrt() * (std::f64::consts::TAU * b).cos()
+            }
+            4 => -mean * self.uniform().ln(),
+            _ => mean,
+        };
+        x.max(0.0)
+    }
+
+    /// Starts the flow's random numbers again from `seed`.
+    pub fn seed_flow(&mut self, seed: u64) {
+        self.rng = seed;
+    }
+}
 
 impl Cell {
     /// Starts the flow, stops it where it is, or takes its parts away.
@@ -93,6 +144,7 @@ impl Cell {
                 self.removed.extend(gone);
                 self.stations.clear();
                 self.jobs.clear();
+                self.rng = SEED;
                 self.flow_problem = None;
                 self.flow_stats = Stats::default();
             }
@@ -207,17 +259,19 @@ impl Cell {
             let Some(&(top, ..)) = docks.get(&c.object) else {
                 continue;
             };
-            let s = self.stations.entry(c.object).or_default();
             if c.props.feed <= 0.0 {
                 continue;
             }
-            // The first at once, then one every feed.
+            let s = self.stations.entry(c.object).or_default();
+            // The first at once, then one every feed, as drawn.
             s.fed += dt;
-            if s.made == 0 && s.out.is_empty() {
-                s.fed = s.fed.max(c.props.feed);
-            }
-            if s.fed >= c.props.feed && (s.out.len() as u32) < c.props.capacity {
-                s.fed -= c.props.feed;
+            let first = s.made == 0;
+            if s.fed >= s.wait && (s.out.len() as u32) < c.props.capacity {
+                let wait = if first && s.wait == 0.0 { 0.0 } else { s.wait };
+                let next = self.draw(c.props.feed, c.props.dist, c.props.spread);
+                let s = self.stations.entry(c.object).or_default();
+                s.fed -= wait;
+                s.wait = next;
                 s.made += 1;
                 self.add_part(top + DVec3::Z * RAW.1 / 2.0, false);
                 let uid = self.parts.last().expect("just added").uid;
@@ -275,11 +329,42 @@ impl Cell {
             }
         }
 
-        // Stations: a cycle done, and the next begun.
+        // Stations: broken down and repaired, a cycle done, the next begun.
         for c in flow.iter().filter(|c| c.kind == Kind::Station) {
             let s = self.stations.entry(c.object).or_default().clone();
             let mut s = s;
-            if let Some((end, parts)) = s.working.clone() {
+            if c.props.mtbf > 0.0 && s.fail_in.is_none() && s.down_until.is_none() {
+                s.fail_in = Some(self.draw(c.props.mtbf, 4, 0.0));
+            }
+            match s.down_until {
+                // Broken down: the work waits, its end put off.
+                Some(until) if now < until => {
+                    s.down += dt;
+                    if let Some((end, _)) = s.working.as_mut() {
+                        *end += dt;
+                    }
+                }
+                Some(_) => {
+                    s.down_until = None;
+                    s.fail_in = Some(self.draw(c.props.mtbf, 4, 0.0));
+                    happened = true;
+                }
+                None => {
+                    if s.working.is_some() {
+                        s.busy += dt;
+                        if let Some(left) = s.fail_in.as_mut() {
+                            *left -= dt;
+                            if *left <= 0.0 {
+                                s.fail_in = None;
+                                let repair = self.draw(c.props.mttr, 4, 0.0);
+                                s.down_until = Some(now + repair);
+                                happened = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((end, parts)) = s.working.clone().filter(|_| s.down_until.is_none()) {
                 if now >= end {
                     s.working = None;
                     s.made += 1;
@@ -287,12 +372,14 @@ impl Cell {
                     s.crew = None;
                     happened = true;
                     // The first goes on as the product; the rest are in it.
+                    // Scrap, as often as the station makes it, goes.
+                    let scrapped = c.props.scrap > 0.0 && self.uniform() < c.props.scrap;
                     let mut made = Vec::new();
                     for (k, uid) in parts.iter().enumerate() {
                         let Some(i) = self.part_index(*uid) else {
                             continue;
                         };
-                        if k == 0 {
+                        if k == 0 && !scrapped {
                             self.parts[i].finished = true;
                             made.push(*uid);
                         } else {
@@ -300,12 +387,19 @@ impl Cell {
                             self.removed.push(*uid);
                         }
                     }
+                    if scrapped {
+                        s.bad += 1;
+                        self.flow_stats.scrapped += 1;
+                        self.stations.insert(c.object, s.clone());
+                    } else {
+                        s.good += 1;
+                    }
                     // More than one out: the rest made here, as old as it.
                     let born = made
                         .first()
                         .and_then(|u| self.part_index(*u))
                         .map_or(now, |i| self.parts[i].born);
-                    for _ in 1..c.props.makes {
+                    for _ in (1..c.props.makes).filter(|_| !scrapped) {
                         let at = docks.get(&c.object).map_or(DVec3::ZERO, |d| d.0);
                         self.add_part(at + DVec3::Z * FINISHED.1 / 2.0, true);
                         let p = self.parts.last_mut().unwrap();
@@ -317,7 +411,10 @@ impl Cell {
                 }
             }
             let takes = c.props.takes.max(1) as usize;
-            let ready = s.working.is_none() && s.out.is_empty() && s.queue.len() >= takes;
+            let ready = s.working.is_none()
+                && s.down_until.is_none()
+                && s.out.is_empty()
+                && s.queue.len() >= takes;
             // A station that needs a person works once one is at it: called
             // if none is, waited for while they walk.
             let manned = c.props.crew == 0
@@ -333,7 +430,8 @@ impl Cell {
                 };
             if ready && manned {
                 let parts: Vec<u64> = s.queue.drain(..takes).collect();
-                s.working = Some((now + c.props.cycle, parts));
+                let cycle = self.draw(c.props.cycle, c.props.dist, c.props.spread);
+                s.working = Some((now + cycle, parts));
                 happened = true;
             }
             self.stations.insert(c.object, s);
@@ -465,6 +563,7 @@ impl Cell {
             .map(|c| {
                 let s = self.stations.get(&c.object);
                 let activity = match s {
+                    Some(s) if s.down_until.is_some() => "down",
                     Some(s) if s.working.is_some() => "cut",
                     Some(s) if !s.out.is_empty() => "blocked",
                     _ => "idle",
@@ -486,7 +585,32 @@ impl Cell {
             "working": s.working.is_some(),
             "left": s.working.as_ref().map(|(end, _)| (end - now).max(0.0)),
             "made": s.made,
+            "down": s.down_until.is_some(),
+            "oee": (c.kind == Kind::Station).then(|| self.oee(c)),
         })
+    }
+
+    /// Station `c`'s OEE since the flow started: availability (the time it
+    /// was not broken down), performance (its mean cycle over the time it
+    /// could work, for each part made) and quality (good of all made).
+    pub(super) fn oee(&self, c: &Component) -> Value {
+        let s = self.stations.get(&c.object).cloned().unwrap_or_default();
+        let now = self.last_tick.unwrap_or(0.0);
+        let planned = self.flow_stats.from.map_or(0.0, |f| (now - f).max(0.0));
+        let run = (planned - s.down).max(0.0);
+        let made = s.good + s.bad;
+        let a = if planned > 0.0 { run / planned } else { 0.0 };
+        let p = if run > 0.0 {
+            (made as f64 * c.props.cycle / run).min(1.0)
+        } else {
+            0.0
+        };
+        let q = if made > 0 {
+            s.good as f64 / made as f64
+        } else {
+            0.0
+        };
+        json!({ "availability": a, "performance": p, "quality": q, "oee": a * p * q, "good": s.good, "bad": s.bad })
     }
 
     /// The flow as a whole: running or not, what reached the sinks.
@@ -504,6 +628,17 @@ impl Cell {
             "lead_max": (st.sunk > 0).then_some(st.lead_max),
             "wip": self.parts.iter().filter(|p| p.flow.is_some()).count(),
             "carrying": self.jobs.len(),
+            "scrapped": st.scrapped,
+            "stations": self
+                .components
+                .iter()
+                .filter(|c| c.kind == Kind::Station)
+                .map(|c| {
+                    let mut v = self.oee(c);
+                    v["name"] = json!(c.name);
+                    v
+                })
+                .collect::<Vec<_>>(),
             "problem": self.flow_problem,
         })
     }

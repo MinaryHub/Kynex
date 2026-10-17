@@ -35,7 +35,13 @@ pub fn snapshot(name: &str, programs: Vec<Value>, cell: Vec<Value>, library: Vec
 /// the simulation's clock, and says how the cell did: the parts it
 /// delivered and their rate, each machine's utilization, each robot's work
 /// and waiting, and the alarm that stopped it, if one did.
+#[cfg(test)]
 pub fn simulate(session: &Document, saved: &Value, seconds: f64) -> Value {
+    simulate_seeded(session, saved, seconds, crate::cell::SEED)
+}
+
+/// The same, the flow's random numbers drawn from `seed`.
+pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u64) -> Value {
     let list = |key: &str| saved[key].as_array().cloned().unwrap_or_default();
     let name = saved["name"].as_str().unwrap_or_default();
     let mut library = Library::from_saved(&list("library"));
@@ -69,6 +75,7 @@ pub fn simulate(session: &Document, saved: &Value, seconds: f64) -> Value {
     // A process flow, if there is one, runs too.
     let flow = cell.has_flow();
     if flow {
+        cell.seed_flow(seed);
         if let Err(e) = cell.flow("start") {
             return failed(name, &e);
         }
@@ -170,6 +177,93 @@ pub fn simulate(session: &Document, saved: &Value, seconds: f64) -> Value {
     })
 }
 
+/// Student's t for a 95 % interval with `n` runs (n − 1 degrees of
+/// freedom).
+fn t95(n: usize) -> f64 {
+    const T: [f64; 10] = [12.71, 4.30, 3.18, 2.78, 2.57, 2.45, 2.36, 2.31, 2.26, 2.23];
+    T.get(n.saturating_sub(2)).copied().unwrap_or(1.96)
+}
+
+/// The mean of `xs`, and the half-width of its 95 % confidence interval.
+fn mean_ci(xs: &[f64]) -> (f64, f64) {
+    let n = xs.len();
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let mean = xs.iter().sum::<f64>() / n as f64;
+    if n < 2 {
+        return (mean, 0.0);
+    }
+    let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+    (mean, t95(n) * (var / n as f64).sqrt())
+}
+
+/// Scenario `saved` run `reps` times, each with its own seed (1, 2, …):
+/// its figures their means, parts an hour and lead time each with the
+/// half-width of a 95 % confidence interval, the bottleneck the one most
+/// often found. One run failing, the scenario does.
+pub fn replicate(session: &Document, saved: &Value, seconds: f64, reps: usize) -> Value {
+    let reps = reps.clamp(1, 50);
+    let runs: Vec<Value> = (1..=reps as u64)
+        .map(|seed| simulate_seeded(session, saved, seconds, seed))
+        .collect();
+    if let Some(failed) = runs.iter().find(|r| r["ok"] == false) {
+        return failed.clone();
+    }
+    let of = |key: &str| -> Vec<f64> { runs.iter().filter_map(|r| r[key].as_f64()).collect() };
+    let (per_hour, per_hour_ci) = mean_ci(&of("per_hour"));
+    let (parts, _) = mean_ci(&of("parts"));
+    let leads = of("lead_mean");
+    let lead = (!leads.is_empty()).then(|| mean_ci(&leads));
+    // Each lane's shares, averaged over the runs, by its place.
+    let lanes = |group: &str, keys: &[&str]| -> Vec<Value> {
+        let first = runs[0][group].as_array().cloned().unwrap_or_default();
+        first
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let mut v = l.clone();
+                for k in keys {
+                    let xs: Vec<f64> = runs
+                        .iter()
+                        .filter_map(|r| r[group][i][*k].as_f64())
+                        .collect();
+                    v[*k] = json!(mean_ci(&xs).0);
+                }
+                v
+            })
+            .collect()
+    };
+    // The bottleneck most often, at its mean share.
+    let mut found: Vec<(String, Vec<f64>)> = Vec::new();
+    for r in &runs {
+        if let (Some(name), Some(busy)) = (
+            r["bottleneck"]["name"].as_str(),
+            r["bottleneck"]["busy"].as_f64(),
+        ) {
+            match found.iter_mut().find(|(n, _)| n == name) {
+                Some((_, b)) => b.push(busy),
+                None => found.push((name.to_string(), vec![busy])),
+            }
+        }
+    }
+    let bottleneck = found
+        .iter()
+        .max_by_key(|(_, b)| b.len())
+        .map(|(name, b)| json!({ "name": name, "busy": mean_ci(b).0, "times": b.len() }));
+    let mut out = runs[0].clone();
+    out["reps"] = json!(reps);
+    out["parts"] = json!(parts.round() as u64);
+    out["per_hour"] = json!(per_hour);
+    out["per_hour_ci"] = json!(per_hour_ci);
+    out["lead_mean"] = lead.map_or(Value::Null, |l| json!(l.0));
+    out["lead_ci"] = lead.map_or(Value::Null, |l| json!(l.1));
+    out["bottleneck"] = bottleneck.unwrap_or(Value::Null);
+    out["machine_lanes"] = json!(lanes("machine_lanes", &["utilization", "blocked"]));
+    out["robot_lanes"] = json!(lanes("robot_lanes", &["work", "wait"]));
+    out
+}
+
 /// `kynex compare`: runs every scenario in the project file and prints how
 /// each did, side by side. The scene is the `.kreate` file `--file`, or
 /// none: a cell laid out from the library alone.
@@ -177,6 +271,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     let mut project = crate::paths::default_project();
     let mut file = None;
     let mut hours = 1.0;
+    let mut reps = 1;
     let mut as_json = false;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -189,6 +284,13 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
                     .and_then(|h| h.parse::<f64>().ok())
                     .filter(|h| *h > 0.0 && *h <= 24.0)
                     .ok_or("--hours needs a number of hours, up to 24")?
+            }
+            "--reps" => {
+                reps = it
+                    .next()
+                    .and_then(|r| r.parse::<usize>().ok())
+                    .filter(|r| (1..=50).contains(r))
+                    .ok_or("--reps needs a number of runs, 1 to 50")?
             }
             "--json" => as_json = true,
             a => return Err(format!("unknown argument {a:?}")),
@@ -216,7 +318,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
     };
     let results: Vec<Value> = scenarios
         .iter()
-        .map(|s| simulate(&session, s, hours * 3600.0))
+        .map(|s| replicate(&session, s, hours * 3600.0, reps))
         .collect();
     if as_json {
         for r in &results {
@@ -390,5 +492,32 @@ mod tests {
             text.contains("병목") && text.contains("공정 스테이션 1"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn runs_repeated_with_their_own_seeds_give_a_mean_and_its_interval() {
+        let mut saved = line("들쭉날쭉", 9.0);
+        // The station's times exponential about 9 s.
+        for role in saved["cell"].as_array_mut().unwrap() {
+            if role["kind"] == "station" {
+                role["props"]["dist"] = json!(4);
+            }
+        }
+        let r = replicate(&Document::new(), &saved, 1800.0, 5);
+        assert_eq!(r["reps"], 5);
+        let (rate, ci) = (
+            r["per_hour"].as_f64().unwrap(),
+            r["per_hour_ci"].as_f64().unwrap(),
+        );
+        // Fed every 10 s, worked about every 9: under 360 an hour, and the
+        // runs differ.
+        assert!(rate > 250.0 && rate < 360.0, "{r}");
+        assert!(ci > 0.0 && ci < 40.0, "{r}");
+        // The same seeds, the same answer.
+        let again = replicate(&Document::new(), &saved, 1800.0, 5);
+        assert_eq!(again["per_hour"], r["per_hour"]);
+        // Fixed times vary not at all.
+        let fixed = replicate(&Document::new(), &line("고정", 9.0), 1800.0, 3);
+        assert!(fixed["per_hour_ci"].as_f64().unwrap() < 1e-9, "{fixed}");
     }
 }

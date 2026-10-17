@@ -829,6 +829,20 @@ not change the session's scene.
   - A buffer's **꺼내는 순서**: first in first out, or last in first out.
     Library **랙 창고**: a pallet rack whose parts sit on its shelves,
     ten to a shelf, the lowest first.
+- **Orders, kanban, dispatch rules and trends** in a process flow:
+  - A source's **주문표 → CSV 불러오기**: a line per order, `release
+    (minutes), product (A–F or 1–6), quantity, due (minutes, may be
+    empty)`. A heading line is passed over. The source then releases
+    each order's parts as its time comes, instead of by 공급 간격. The
+    flow bar shows orders done, on time, and the mean lateness of those
+    that were not.
+  - A source's **칸반**: no new part goes in while that many of its own
+    are still in the flow. It pulls, rather than pushes.
+  - **다음 공정 고르기** on a source, station or buffer: 번갈아 (in turn,
+    the first with room), 대기 적은 곳 (the one with the fewest waiting
+    and coming), or 무작위.
+  - The 통계 tab draws parts in process (WIP) and parts out an hour as
+    they went over the run. The CSV carries the orders' figures.
 - **AMR lanes and traffic** (`apps/kynex/src/cell/fleet.rs`).
   - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
     go both ways and are drawn in orange. Sent to a stop, an AMR drives to

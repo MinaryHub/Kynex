@@ -77,6 +77,10 @@ pub struct Stats {
     pub scrapped: u64,
     /// Each product's parts out and their lead times' sum.
     pub by_product: [(u64, f64); 6],
+    /// Seconds from the start, parts in the flow and parts out so far,
+    /// sampled as it runs.
+    pub series: Vec<[f64; 3]>,
+    pub sampled: f64,
     pub sunk: u64,
     pub lead_sum: f64,
     pub lead_min: Option<f64>,
@@ -101,6 +105,89 @@ pub const PRODUCT_COLOURS: [[f32; 3]; 6] = [
     [0.90, 0.35, 0.35],
     [0.20, 0.75, 0.75],
 ];
+
+/// An order: so many parts of a product, released at a time into the
+/// flow, wanted done by its due time (0: whenever); seconds from the
+/// flow's start. And how far it has got.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Order {
+    pub at: f64,
+    pub product: u8,
+    pub qty: u32,
+    pub due: f64,
+    pub released: u32,
+    pub done: u32,
+    pub finished: Option<f64>,
+}
+
+impl Order {
+    pub fn to_json(&self) -> Value {
+        json!([self.at, self.product, self.qty, self.due])
+    }
+
+    pub fn of(v: &Value) -> Option<Self> {
+        let a = v.as_array()?;
+        Some(Self {
+            at: a.first()?.as_f64()?.max(0.0),
+            product: (a.get(1)?.as_u64()? as usize).min(PRODUCTS.len() - 1) as u8,
+            qty: a.get(2)?.as_u64()?.clamp(1, 100000) as u32,
+            due: a.get(3).and_then(Value::as_f64).unwrap_or(0.0).max(0.0),
+            ..Self::default()
+        })
+    }
+
+    /// Orders written as CSV: a line each, `release (minutes), product
+    /// (A–F or 1–6), quantity, due (minutes, may be empty)`; a heading
+    /// line, if there is one, passed over.
+    pub fn parse(text: &str) -> Result<Vec<Order>, String> {
+        let mut out = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let cells: Vec<&str> = line.split([',', '\t', ';']).map(str::trim).collect();
+            if cells.iter().all(|c| c.is_empty()) {
+                continue;
+            }
+            let at = cells[0].parse::<f64>();
+            if at.is_err() && n == 0 {
+                continue; // a heading
+            }
+            let bad = || {
+                format!(
+                    "주문표 {}번째 줄: 시각(분), 제품, 수량, 납기(분)이어야 합니다",
+                    n + 1
+                )
+            };
+            let at = at.map_err(|_| bad())?;
+            let product = cells.get(1).ok_or_else(bad)?;
+            let product = PRODUCTS
+                .iter()
+                .position(|p| p.eq_ignore_ascii_case(product))
+                .or_else(|| product.parse::<usize>().ok().and_then(|k| k.checked_sub(1)))
+                .filter(|k| *k < PRODUCTS.len())
+                .ok_or_else(bad)? as u8;
+            let qty = cells
+                .get(2)
+                .and_then(|q| q.parse::<u32>().ok())
+                .filter(|q| *q > 0)
+                .ok_or_else(bad)?;
+            let due = match cells.get(3) {
+                Some(d) if !d.is_empty() => d.parse::<f64>().map_err(|_| bad())?,
+                _ => 0.0,
+            };
+            if out.len() >= 10000 {
+                return Err("주문은 10000줄까지입니다".into());
+            }
+            out.push(Order {
+                at: at.max(0.0) * 60.0,
+                product,
+                qty: qty.min(100000),
+                due: due.max(0.0) * 60.0,
+                ..Order::default()
+            });
+        }
+        out.sort_by(|a, b| a.at.total_cmp(&b.at));
+        Ok(out)
+    }
+}
 
 /// The flow's calendar and warm-up: work and rest in turn (minutes of
 /// each; no rest, no calendar), and the time at the start left out of its
@@ -205,6 +292,13 @@ impl Cell {
                 self.jobs.clear();
                 self.rng = SEED;
                 self.warmed = false;
+                for orders in self.orders.values_mut() {
+                    for o in orders {
+                        o.released = 0;
+                        o.done = 0;
+                        o.finished = None;
+                    }
+                }
                 self.flow_start = None;
                 self.flow_problem = None;
                 self.flow_stats = Stats::default();
@@ -411,6 +505,41 @@ impl Cell {
             let Some(&(top, ..)) = docks.get(&c.object) else {
                 continue;
             };
+            // A kanban: no more in until one of its own has left.
+            let mine = self
+                .parts
+                .iter()
+                .filter(|p| p.origin == c.object && p.flow.is_some())
+                .count() as u32;
+            let pulled = c.props.kanban == 0 || mine < c.props.kanban;
+            let room =
+                (self.stations.get(&c.object).map_or(0, |s| s.out.len()) as u32) < c.props.capacity;
+            // With orders: each released as its time comes, part by part.
+            if self.orders.contains_key(&c.object) {
+                let clock = self.flow_clock();
+                let next = self.orders.get_mut(&c.object).and_then(|orders| {
+                    orders
+                        .iter_mut()
+                        .enumerate()
+                        .find(|(_, o)| o.at <= clock && o.released < o.qty)
+                        .map(|(k, o)| (k, o.product))
+                });
+                if let (Some((k, product)), true, true) = (next, pulled, room) {
+                    self.orders.get_mut(&c.object).unwrap()[k].released += 1;
+                    self.add_part(top + DVec3::Z * RAW.1 / 2.0, false);
+                    let uid = self.parts.last().expect("just added").uid;
+                    let p = self.parts.last_mut().unwrap();
+                    p.flow = Some(Place::At(c.object));
+                    p.product = product;
+                    p.origin = c.object;
+                    p.order = k as u32 + 1;
+                    let s = self.stations.entry(c.object).or_default();
+                    s.made += 1;
+                    s.out.push(uid);
+                    happened = true;
+                }
+                continue;
+            }
             if c.props.feed <= 0.0 {
                 continue;
             }
@@ -418,7 +547,11 @@ impl Cell {
             // The first at once, then one every feed, as drawn.
             s.fed += dt;
             let first = s.made == 0;
-            if s.fed >= s.wait && (s.out.len() as u32) < c.props.capacity {
+            if !pulled {
+                // Held back, it waits no longer than its feed when let go.
+                s.fed = s.fed.min(s.wait);
+            }
+            if s.fed >= s.wait && room && pulled {
                 let wait = if first && s.wait == 0.0 { 0.0 } else { s.wait };
                 let next = self.draw(c.props.feed, c.props.dist, c.props.spread);
                 let s = self.stations.entry(c.object).or_default();
@@ -431,6 +564,7 @@ impl Cell {
                 let p = self.parts.last_mut().unwrap();
                 p.flow = Some(Place::At(c.object));
                 p.product = product;
+                p.origin = c.object;
                 self.stations.entry(c.object).or_default().out.push(uid);
                 happened = true;
             }
@@ -469,6 +603,20 @@ impl Cell {
                         let b = &mut st.by_product[(p.product as usize) % PRODUCTS.len()];
                         b.0 += 1;
                         b.1 += lead;
+                        // Its order a part nearer done; done, when.
+                        if p.order > 0 {
+                            let clock = self.flow_clock();
+                            if let Some(o) = self
+                                .orders
+                                .get_mut(&p.origin)
+                                .and_then(|o| o.get_mut(p.order as usize - 1))
+                            {
+                                o.done += 1;
+                                if o.done >= o.qty && o.finished.is_none() {
+                                    o.finished = Some(clock);
+                                }
+                            }
+                        }
                         self.stations.entry(to).or_default().made += 1;
                     }
                 }
@@ -680,9 +828,20 @@ impl Cell {
                         .get(&(c.object, t.object))
                         .is_none_or(|p| p.contains(&product))
                 };
-                let pick = (0..next.len())
+                let open: Vec<usize> = (0..next.len())
                     .map(|k| (turn + k) % next.len())
-                    .find(|k| takes(next[*k]) && self.room(next[*k]) > 0);
+                    .filter(|k| takes(next[*k]) && self.room(next[*k]) > 0)
+                    .collect();
+                let pick = match c.props.rule {
+                    // The one with the fewest waiting and coming.
+                    1 => open.iter().copied().max_by_key(|k| self.room(next[*k])),
+                    // Any of them, as it falls.
+                    2 if !open.is_empty() => {
+                        let r = self.uniform();
+                        Some(open[((r * open.len() as f64) as usize).min(open.len() - 1)])
+                    }
+                    _ => open.first().copied(),
+                };
                 let Some(k) = pick else { break };
                 let target = next[k];
                 let s = self.stations.entry(c.object).or_default();
@@ -728,6 +887,21 @@ impl Cell {
         }
 
         happened |= self.carry_on(doc, now);
+        // The series: every so often, more seldom as the run grows long.
+        let from = self.flow_stats.from.unwrap_or(now);
+        let t = now - from;
+        let every = (t / 400.0).max(5.0);
+        if t >= self.flow_stats.sampled + every || self.flow_stats.series.is_empty() {
+            let wip = self.parts.iter().filter(|p| p.flow.is_some()).count() as f64;
+            let sunk = self.flow_stats.sunk as f64;
+            self.flow_stats.series.push([t, wip, sunk]);
+            self.flow_stats.sampled = t;
+            if self.flow_stats.series.len() > 1000 {
+                let kept: Vec<[f64; 3]> =
+                    self.flow_stats.series.iter().step_by(2).copied().collect();
+                self.flow_stats.series = kept;
+            }
+        }
         // A rack's shelves, where it has any: its parts set out on them.
         self.shelf_tops = flow
             .iter()
@@ -846,6 +1020,7 @@ impl Cell {
             "made": s.made,
             "down": s.down_until.is_some(),
             "mix": self.mix.get(&c.object),
+            "orders": self.orders.get(&c.object).map(Vec::len),
             "cycles": self.cycles.get(&c.object),
             "routes": self
                 .routes
@@ -854,6 +1029,29 @@ impl Cell {
                 .map(|((_, to), p)| (to.to_string(), json!(p)))
                 .collect::<serde_json::Map<_, _>>(),
             "oee": (c.kind == Kind::Station).then(|| self.oee(c)),
+        })
+    }
+
+    /// The orders: how many, done, done by their due time, and how late
+    /// those that were not, on average (seconds).
+    fn orders_summary(&self) -> Value {
+        let all: Vec<&Order> = self.orders.values().flatten().collect();
+        if all.is_empty() {
+            return Value::Null;
+        }
+        let done: Vec<&&Order> = all.iter().filter(|o| o.finished.is_some()).collect();
+        let late: Vec<f64> = done
+            .iter()
+            .filter(|o| o.due > 0.0)
+            .map(|o| o.finished.unwrap() - o.due)
+            .filter(|l| *l > 0.0)
+            .collect();
+        json!({
+            "total": all.len(),
+            "released": all.iter().filter(|o| o.released > 0).count(),
+            "done": done.len(),
+            "on_time": done.len() - late.len(),
+            "late_mean": (!late.is_empty()).then(|| late.iter().sum::<f64>() / late.len() as f64),
         })
     }
 
@@ -905,6 +1103,8 @@ impl Cell {
                 .map(|(k, b)| json!({ "product": PRODUCTS[k], "sunk": b.0, "lead_mean": b.1 / b.0 as f64 }))
                 .collect::<Vec<_>>(),
             "settings": self.flow_cfg.to_json(),
+            "series": st.series,
+            "orders": self.orders_summary(),
             "resting": self.flow_on && self.flow_cfg.resting(self.flow_clock()),
             "warming": self.flow_on && !self.warmed && self.flow_cfg.warmup > 0.0,
             "stations": self

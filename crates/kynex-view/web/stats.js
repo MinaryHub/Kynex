@@ -138,6 +138,43 @@ export function summary(f, flow) {
   return out;
 }
 
+// One line over time: `points` [t, value], against `t` from 0 to its
+// last, the value from 0 to its most.
+function lineChart(points, { width = 520, height = 130, unit = '' } = {}) {
+  if (points.length < 2) return '';
+  const pad = { l: 34, r: 10, t: 8, b: 20 };
+  const w = width - pad.l - pad.r;
+  const h = height - pad.t - pad.b;
+  const T = Math.max(points[points.length - 1][0], 1e-9);
+  const V = Math.max(1e-9, ...points.map((p) => p[1]));
+  const x = (t) => pad.l + (t / T) * w;
+  const y = (v) => pad.t + h - (v / V) * h;
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join(' ');
+  const minutes = T / 60;
+  const step = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480].find((s) => minutes / s <= 6) || 960;
+  let ticks = '';
+  for (let m = 0; m <= minutes + 1e-9; m += step) {
+    ticks += `<text x="${x(m * 60)}" y="${height - 5}" text-anchor="middle">${m}분</text>`;
+  }
+  ticks += `<text x="${pad.l - 6}" y="${y(V) + 4}" text-anchor="end">${Math.round(V)}${unit}</text><text x="${pad.l - 6}" y="${y(0) + 4}" text-anchor="end">0</text><line x1="${pad.l}" y1="${y(V)}" x2="${pad.l + w}" y2="${y(V)}" class="st-grid"/>`;
+  return `<svg class="st-chart" viewBox="0 0 ${width} ${height}" width="100%">${ticks}<line x1="${pad.l}" y1="${y(0)}" x2="${pad.l + w}" y2="${y(0)}" class="st-axis"/><path d="${path}" class="st-line"/></svg>`;
+}
+
+// A process flow over time: its parts in process, and parts out an hour
+// (over each stretch between samples, smoothed over a few).
+export function seriesCharts(flow) {
+  const s = flow?.series ?? [];
+  if (s.length < 3) return '';
+  const wip = s.map(([t, w]) => [t, w]);
+  const rate = [];
+  const k = Math.max(1, Math.round(s.length / 30));
+  for (let i = k; i < s.length; i++) {
+    const dt = s[i][0] - s[i - k][0];
+    if (dt > 0) rate.push([s[i][0], ((s[i][2] - s[i - k][2]) / dt) * 3600]);
+  }
+  return `<div class="st-cols"><section><h3>공정 중 (WIP) 추이</h3>${lineChart(wip, { unit: '개' })}</section><section><h3>시간당 배출 추이</h3>${lineChart(rate, { unit: '' })}</section></div>`;
+}
+
 // Each station's OEE — availability × performance × quality — and its
 // parts good and scrapped, when a process flow ran.
 export function oeeTable(flow, escapeHtml) {
@@ -194,6 +231,14 @@ export function csv(d, activities, flow) {
           row('리드타임 최소 (s)', flow.lead_min != null ? flow.lead_min.toFixed(2) : ''),
           row('리드타임 최대 (s)', flow.lead_max != null ? flow.lead_max.toFixed(2) : ''),
           row('불량 (개)', flow.scrapped ?? 0),
+          ...(flow.orders
+            ? [
+                row('주문 (건)', flow.orders.total),
+                row('주문 완료 (건)', flow.orders.done),
+                row('납기 준수 (건)', flow.orders.on_time),
+                row('평균 지연 (s)', flow.orders.late_mean != null ? flow.orders.late_mean.toFixed(1) : ''),
+              ]
+            : []),
           '',
           row('스테이션', 'OEE (%)', '가용성 (%)', '성능 (%)', '품질 (%)', '양품', '불량'),
           ...(flow.stations ?? []).map((s) =>

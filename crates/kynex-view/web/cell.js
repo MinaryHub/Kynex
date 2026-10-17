@@ -100,7 +100,9 @@ const FIELDS = {
   ],
   source: [
     ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR'], [2, '작업자'], [3, '로봇']]],
+    ['rule', '다음 공정 고르기', '', 1, [[0, '번갈아'], [1, '대기 적은 곳'], [2, '무작위']]],
     ['feed', '공급 간격', 's', 1],
+    ['kanban', '칸반: 공정 안 최대 수 (0: 없음)', '개', 1],
     ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
     ['spread', '폭·σ', 's', 1],
     ['capacity', '내보낼 자리', '개', 1],
@@ -108,6 +110,7 @@ const FIELDS = {
   ],
   station: [
     ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR'], [2, '작업자'], [3, '로봇']]],
+    ['rule', '다음 공정 고르기', '', 1, [[0, '번갈아'], [1, '대기 적은 곳'], [2, '무작위']]],
     ['cycle', '처리 시간', 's', 1],
     ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
     ['spread', '폭·σ', 's', 1],
@@ -123,6 +126,7 @@ const FIELDS = {
   ],
   buffer: [
     ['carrier', '보내는 방법', '', 1, [[0, '직접'], [1, 'AMR'], [2, '작업자'], [3, '로봇']]],
+    ['rule', '다음 공정 고르기', '', 1, [[0, '번갈아'], [1, '대기 적은 곳'], [2, '무작위']]],
     ['capacity', '용량', '개', 1],
     ['policy', '꺼내는 순서', '', 1, [[0, '먼저 들어온 것 (FIFO)'], [1, '나중 들어온 것 (LIFO)']]],
     ['speed', '이송 속도', 'mm/s', 1000],
@@ -196,6 +200,27 @@ export class CellPanel {
         const have = this.componentOf(object)?.lanes ?? [];
         const t = lane.dataset.lane;
         this.send({ op: 'amr_lanes', object, next: have.includes(t) ? have.filter((x) => x !== t) : [...have, t] });
+      }
+      // A source's orders: from a CSV file, or none.
+      if (e.target.closest('[data-orders-load]')) {
+        const object = this.ctx.selected();
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.csv,.txt';
+        input.hidden = true;
+        document.body.appendChild(input);
+        input.addEventListener('change', async () => {
+          input.remove();
+          const file = input.files?.[0];
+          if (!file) return;
+          if (file.size > 2 * 1024 * 1024) return this.ctx.toast('주문표가 너무 큽니다 (2 MB까지)');
+          this.send({ op: 'flow_orders', object, csv: await file.text() }, () => this.ctx.toast('주문표를 넣었습니다'));
+        });
+        input.click();
+        return;
+      }
+      if (e.target.closest('[data-orders-clear]')) {
+        return this.send({ op: 'flow_orders', object: this.ctx.selected(), csv: '' });
       }
       // Which products a link takes: one more, or one fewer.
       const chip = e.target.closest('[data-route-to]');
@@ -401,6 +426,7 @@ export class CellPanel {
         products = `<div class="flow-products"><span class="muted">제품 비율</span>${names
           .map((n, i) => `<label>${n}<input type="number" class="num" data-mix="${i}" value="${mix[i] ?? (i === 0 && !mix.length ? 1 : 0)}" min="0" step="1"></label>`)
           .join('')}</div>`;
+        products += `<div class="flow-products"><span class="muted">주문표${f.orders ? ` ${f.orders}건 (공급 간격 대신 주문대로)` : ''}</span><button class="text-btn" data-orders-load title="CSV: 시각(분), 제품(A–F), 수량, 납기(분) — 한 줄에 주문 하나">CSV 불러오기</button>${f.orders ? '<button class="text-btn quiet" data-orders-clear>지우기</button>' : ''}</div>`;
       } else if (c.kind === 'station' && used > 1) {
         const cycles = f.cycles ?? [];
         products = `<div class="flow-products"><span class="muted">품종별 처리 시간 (비우면 기본)</span>${names

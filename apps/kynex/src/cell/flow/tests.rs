@@ -504,3 +504,114 @@ fn a_last_in_first_out_buffer_gives_its_newest() {
     let oldest = cell.stations[&u[1]].out.iter().min().copied().unwrap();
     assert!(oldest < *worked.last().unwrap(), "{oldest} vs {worked:?}");
 }
+
+#[test]
+fn orders_from_a_table_are_made_and_judged_by_their_due_times() {
+    let orders = Order::parse("시각(분),제품,수량,납기(분)\n0,A,4,5\n1,B,3,2\n\n3,2,1,").unwrap();
+    assert_eq!(orders.len(), 3);
+    assert_eq!(
+        (
+            orders[1].at,
+            orders[1].product,
+            orders[1].qty,
+            orders[1].due
+        ),
+        (60.0, 1, 3, 120.0)
+    );
+    assert_eq!((orders[2].product, orders[2].due), (1, 0.0));
+    assert!(Order::parse("0,Z,1,1").is_err());
+
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 999.0, "capacity": 2})),
+        ("flow_station", 2.0, json!({"cycle": 20.0})),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_orders", "object": u[0].to_string(), "csv": "0,A,4,5\n1,B,3,2\n3,B,1,"}),
+    );
+    // Kept with the roles.
+    assert_eq!(cell.to_saved()[0]["orders"][1], json!([60.0, 1, 3, 120.0]));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 600.0);
+    let f = cell.flow_summary();
+    let o = &f["orders"];
+    // All made: 8 parts of 20 s. The first order by its due (5 min); the
+    // second, behind it, not by its 2 minutes.
+    assert_eq!(o["total"], 3, "{o}");
+    assert_eq!(o["done"], 3, "{o}");
+    assert_eq!(o["on_time"], 2, "{o}");
+    assert!(o["late_mean"].as_f64().unwrap() > 0.0, "{o}");
+    assert_eq!(f["sunk"], 8);
+    // Nothing but the orders: the feed never came round.
+    assert_eq!(cell.stations[&u[0]].made, 8);
+}
+
+#[test]
+fn a_kanban_holds_the_parts_in_the_flow_to_its_number() {
+    let build = |kanban: u32| {
+        let (doc, mut cell, u) = line(&[
+            ("flow_source", 0.0, json!({"feed": 1.0, "kanban": kanban})),
+            ("flow_buffer", 2.0, json!({"capacity": 50})),
+            ("flow_station", 4.0, json!({"cycle": 10.0})),
+            ("flow_sink", 6.0, json!({})),
+        ]);
+        link(&mut cell, &doc, u[0], &[u[1]]);
+        link(&mut cell, &doc, u[1], &[u[2]]);
+        link(&mut cell, &doc, u[2], &[u[3]]);
+        ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+        let start = Instant::now();
+        let (mut t, mut most) = (0.0, 0);
+        while t < 300.0 {
+            t += 0.1;
+            cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+            most = most.max(cell.parts().len());
+        }
+        (most, cell.flow_summary())
+    };
+    let (pushed, _) = build(0);
+    let (pulled, f) = build(3);
+    assert!(pushed > 40, "{pushed}");
+    assert!(pulled <= 3, "{pulled}");
+    // The same parts out: the station sets the pace either way.
+    assert!(f["sunk"].as_u64().unwrap() >= 28, "{f}");
+    // Its series: parts in the flow and out, as it ran.
+    let series = f["series"].as_array().unwrap();
+    assert!(series.len() > 20);
+    let last = series.last().unwrap();
+    assert!(
+        last[1].as_f64().unwrap() <= 3.0 && last[2].as_f64().unwrap() >= 25.0,
+        "{last}"
+    );
+}
+
+#[test]
+fn the_fewest_waiting_rule_sends_more_to_the_quicker_station() {
+    let build = |rule: u32| {
+        let (doc, mut cell, u) = line(&[
+            ("flow_source", 0.0, json!({"feed": 1.5, "rule": rule})),
+            ("flow_station", 2.0, json!({"cycle": 2.0, "capacity": 5})),
+            ("flow_station", 2.0, json!({"cycle": 10.0, "capacity": 5})),
+            ("flow_sink", 4.0, json!({})),
+        ]);
+        link(&mut cell, &doc, u[0], &[u[1], u[2]]);
+        link(&mut cell, &doc, u[1], &[u[3]]);
+        link(&mut cell, &doc, u[2], &[u[3]]);
+        ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+        run(&mut cell, &doc, 0.0, 600.0);
+        (
+            cell.stations[&u[1]].made as f64,
+            cell.stations[&u[2]].made as f64,
+            cell.flow_summary()["lead_mean"].as_f64().unwrap(),
+        )
+    };
+    let (_, _, lead_turn) = build(0);
+    let (quick, slow, lead_short) = build(1);
+    // By fewest waiting the quick one takes far more, and parts wait less:
+    // in turn, the slow one's queue is kept full.
+    assert!(quick / slow > 3.0, "{quick} vs {slow}");
+    assert!(lead_short < lead_turn, "{lead_short} vs {lead_turn}");
+}

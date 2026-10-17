@@ -325,6 +325,12 @@ pub struct Props {
     pub setup: f64,
     /// A buffer's order: first in first out (0), or last in first out (1).
     pub policy: u32,
+    /// A source's limit on its parts in the flow at once — a kanban: none
+    /// more until one leaves (0: no limit); and how any flow component
+    /// picks among the next with room: in turn (0), the one with the
+    /// fewest waiting (1), or at random (2).
+    pub kanban: u32,
+    pub rule: u32,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -366,6 +372,8 @@ impl Default for Props {
             scrap: 0.0,
             setup: 0.0,
             policy: 0,
+            kanban: 0,
+            rule: 0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -498,6 +506,12 @@ impl Props {
         self.scrap = v["scrap"]
             .as_f64()
             .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
+        self.kanban = v["kanban"]
+            .as_f64()
+            .map_or(self.kanban, |x| x.clamp(0.0, 100000.0) as u32);
+        self.rule = v["rule"]
+            .as_f64()
+            .map_or(self.rule, |x| x.round().clamp(0.0, 2.0) as u32);
         self.policy = v["policy"]
             .as_f64()
             .map_or(self.policy, |x| if x > 0.5 { 1 } else { 0 });
@@ -534,6 +548,8 @@ impl Props {
             "scrap": self.scrap,
             "setup": self.setup,
             "policy": self.policy,
+            "kanban": self.kanban,
+            "rule": self.rule,
             "takes": self.takes,
             "makes": self.makes,
         })
@@ -651,6 +667,9 @@ pub struct Part {
     pub flow: Option<flow::Place>,
     /// Which product it is, 0 for A on (see `flow::PRODUCTS`).
     pub product: u8,
+    /// The source it came in at, and the order it was made for (0: none).
+    pub origin: u64,
+    pub order: u32,
 }
 
 impl Part {
@@ -845,6 +864,8 @@ pub struct Cell {
     /// each (0: its own); the products each link of the flow takes (none:
     /// all); and the calendar and warm-up (see `flow`).
     mix: BTreeMap<u64, Vec<f64>>,
+    /// Each source's orders, and how far each has got (see `flow`).
+    orders: BTreeMap<u64, Vec<flow::Order>>,
     cycles: BTreeMap<u64, Vec<f64>>,
     routes: BTreeMap<(u64, u64), Vec<u8>>,
     flow_cfg: flow::Settings,
@@ -1191,6 +1212,10 @@ impl Cell {
                 let floats = |v: &Value| -> Option<Vec<f64>> {
                     Some(v.as_array()?.iter().filter_map(Value::as_f64).collect())
                 };
+                if let Some(orders) = saved["orders"].as_array() {
+                    self.orders
+                        .insert(object, orders.iter().filter_map(flow::Order::of).collect());
+                }
                 if let Some(mix) = floats(&saved["mix"]) {
                     self.mix.insert(object, mix);
                 }
@@ -1293,6 +1318,7 @@ impl Cell {
                         n.iter().map(u64::to_string).collect::<Vec<_>>()
                     }),
                     "mix": self.mix.get(&c.object),
+                    "orders": self.orders.get(&c.object).map(|o| o.iter().map(flow::Order::to_json).collect::<Vec<_>>()),
                     "cycles": self.cycles.get(&c.object),
                     "routes": self
                         .routes
@@ -1758,6 +1784,8 @@ impl Cell {
             born: self.last_tick.unwrap_or(0.0),
             flow: None,
             product: 0,
+            origin: 0,
+            order: 0,
         });
         self.changed = true;
     }
@@ -2105,6 +2133,17 @@ impl Cell {
                     } else {
                         self.routes.insert((object, to), p);
                     }
+                }
+                self.roles_changed = true;
+                self.changed = true;
+            }
+            "flow_orders" => {
+                let object = uid("object")?;
+                let orders = flow::Order::parse(req["csv"].as_str().unwrap_or(""))?;
+                if orders.is_empty() {
+                    self.orders.remove(&object);
+                } else {
+                    self.orders.insert(object, orders);
                 }
                 self.roles_changed = true;
                 self.changed = true;
@@ -3818,6 +3857,7 @@ pub fn is_op(op: &str) -> bool {
             | "flow_next"
             | "amr_lanes"
             | "flow_products"
+            | "flow_orders"
             | "flow_settings"
     )
 }

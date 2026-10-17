@@ -7,7 +7,7 @@
 // one CNC machine, two, another gripper — run for hours away from the view
 // and compared (the `scenarios` event).
 
-import { csv, csvText, figures, laneTable, oeeTable, reportHtml, stateChart, summary, throughputChart } from './stats.js';
+import { csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, throughputChart } from './stats.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -238,8 +238,10 @@ export class TimelinePanel {
     set('flow-warmup', (f.settings?.warmup ?? 0) / 60);
     const now = f.resting ? ' · 휴식 중' : f.warming ? ' · 워밍업 중' : '';
     const by = (f.products ?? []).length > 1 ? ` · ${f.products.map((p) => `${p.product} ${p.sunk}`).join(' ')}` : '';
+    const o = f.orders;
+    const ord = o ? ` · 주문 ${o.total}건 중 ${o.done} 완료, 납기 준수 ${o.on_time}${o.late_mean != null ? `, 평균 지연 ${(o.late_mean / 60).toFixed(1)}분` : ''}` : '';
     const problem = f.problem ? ` · ⚠ ${f.problem}` : '';
-    document.getElementById('flow-state').textContent = `배출 ${f.sunk}개${by} · 시간당 ${f.per_hour.toFixed(1)}개 · 공정 중 ${f.wip}개${amr}${lead}${now}${problem}`;
+    document.getElementById('flow-state').textContent = `배출 ${f.sunk}개${by} · 시간당 ${f.per_hour.toFixed(1)}개 · 공정 중 ${f.wip}개${amr}${lead}${ord}${now}${problem}`;
   }
 
   // The scenarios compared, as CSV.
@@ -303,6 +305,7 @@ export class TimelinePanel {
         <section><h3>누적 완성 수 <span class="muted">· 점선: 평균 속도</span></h3>${throughputChart(f)}</section>
       </div>
       <section><h3>작업·막힘·대기 <span class="muted">· 작업이 가장 많은 곳이 병목</span></h3>${laneTable(f, escapeHtml)}</section>
+      ${seriesCharts(this.flowState)}
       ${oeeTable(this.flowState, escapeHtml)}`;
   }
 

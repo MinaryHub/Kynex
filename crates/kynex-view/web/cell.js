@@ -137,6 +137,8 @@ const FIELDS = {
   operator: [
     ['speed', '걷는 속도', 'm/s', 1],
     ['capacity', '한 번에 드는 수', '개', 1],
+    ['shift_from', '근무 시작 (흐름 시작이 0시)', '시', 1],
+    ['shift_to', '근무 끝 (시작과 같으면 하루 종일)', '시', 1],
   ],
   sensor: [
     ['axis', '빔 방향', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
@@ -203,6 +205,14 @@ export class CellPanel {
         const have = this.componentOf(object)?.lanes ?? [];
         const t = lane.dataset.lane;
         this.send({ op: 'amr_lanes', object, next: have.includes(t) ? have.filter((x) => x !== t) : [...have, t] });
+      }
+      // A person's stations: one more, or one fewer.
+      const skill = e.target.closest('[data-skill]');
+      if (skill) {
+        const object = this.ctx.selected();
+        const have = this.componentOf(object)?.skills ?? [];
+        const t = skill.dataset.skill;
+        return this.send({ op: 'operator_skills', object, stations: have.includes(t) ? have.filter((x) => x !== t) : [...have, t] });
       }
       // A source's orders: from a CSV file, or none.
       if (e.target.closest('[data-orders-load]')) {
@@ -383,6 +393,15 @@ export class CellPanel {
           (c.amr?.driving ? '<span class="muted">주행 중</span>' : '') +
           (c.amr?.battery != null ? `<span class="muted">배터리 ${Math.round(c.amr.battery * 100)}%${c.amr.charging ? ' · 충전하러 감/충전 중' : ''}</span>` : '')
         : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
+    } else if (c && c.kind === 'operator') {
+      // The stations this person may work at: none picked, any.
+      const stations = this.cell.components.filter((s) => s.kind === 'station');
+      const have = c.skills ?? [];
+      actions = stations.length
+        ? `<span class="muted">맡는 공정</span>${stations
+            .map((s) => `<button class="text-btn${have.includes(s.object) ? ' on' : ''}" data-skill="${escapeHtml(s.object)}" aria-pressed="${have.includes(s.object)}">${have.includes(s.object) ? '✓ ' : ''}${escapeHtml(s.name)}</button>`)
+            .join('')}${have.length ? '' : '<span class="muted">(아무것도 고르지 않으면 모두)</span>'}`
+        : '<span class="muted">작업자 필요 스테이션이 생기면 맡을 곳을 고를 수 있습니다</span>';
     } else if (c && c.kind === 'amr_stop') {
       const others = this.cell.components.filter((s) => s.kind === 'amr_stop' && s.object !== c.object);
       const have = c.lanes ?? [];

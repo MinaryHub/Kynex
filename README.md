@@ -880,6 +880,11 @@ not change the session's scene.
     goes, and put it down (2 s).
   - Each operator gets a lane in the timeline: 보행, 작업 and idle, and
     their utilization. An operator always busy is the line's bottleneck.
+  - **맡는 공정** in an operator's inspector: the stations they may work
+    at. None picked means any. Carrying parts is anyone's.
+  - **근무 시작 / 끝** (hours of the day, the flow's start being 0:00):
+    off shift they take no new work, and the timeline shows 근무 외.
+    The same start and end means all day.
 - **A robot on a track**
 - **A robot on a track**
 - **A robot on a track**

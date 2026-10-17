@@ -51,6 +51,7 @@ const ACTIVITIES = {
   down: ['고장', '#d9534f'],
   rest: ['휴식', '#556070'],
   charge: ['충전', '#d4b83a'],
+  off: ['근무 외', '#3a3f48'],
   work: ['작업', '#2fbfa0'],
   idle: ['쉼', '#2f353f'],
 };

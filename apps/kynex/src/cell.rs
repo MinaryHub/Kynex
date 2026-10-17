@@ -337,6 +337,10 @@ pub struct Props {
     pub battery: f64,
     pub charge: f64,
     pub charger: u32,
+    /// An operator's shift, hours of the day on the flow's clock (from
+    /// its start at hour 0): from, to; the same, all day.
+    pub shift_from: f64,
+    pub shift_to: f64,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -383,6 +387,8 @@ impl Default for Props {
             battery: 0.0,
             charge: 60.0,
             charger: 0,
+            shift_from: 0.0,
+            shift_to: 0.0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -515,6 +521,12 @@ impl Props {
         self.scrap = v["scrap"]
             .as_f64()
             .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
+        self.shift_from = v["shift_from"]
+            .as_f64()
+            .map_or(self.shift_from, |x| x.clamp(0.0, 24.0));
+        self.shift_to = v["shift_to"]
+            .as_f64()
+            .map_or(self.shift_to, |x| x.clamp(0.0, 24.0));
         self.battery = v["battery"]
             .as_f64()
             .map_or(self.battery, |x| x.clamp(0.0, 100000.0));
@@ -568,6 +580,8 @@ impl Props {
             "policy": self.policy,
             "kanban": self.kanban,
             "battery": self.battery,
+            "shift_from": self.shift_from,
+            "shift_to": self.shift_to,
             "charge": self.charge,
             "charger": self.charger,
             "rule": self.rule,
@@ -905,6 +919,8 @@ pub struct Cell {
     /// nearly full; and the stop each is waiting to drive to, held by
     /// another.
     energy: BTreeMap<u64, f64>,
+    /// The stations each operator may work at (none: all).
+    skills: BTreeMap<u64, Vec<u64>>,
     charging: std::collections::BTreeSet<u64>,
     blocked: BTreeMap<u64, u64>,
     jobs: Vec<fleet::Job>,
@@ -1239,6 +1255,13 @@ impl Cell {
                 let floats = |v: &Value| -> Option<Vec<f64>> {
                     Some(v.as_array()?.iter().filter_map(Value::as_f64).collect())
                 };
+                if let Some(skills) = saved["skills"].as_array() {
+                    let skills = skills
+                        .iter()
+                        .filter_map(|x| x.as_str().and_then(|s| s.parse::<u64>().ok()))
+                        .collect();
+                    self.skills.insert(object, skills);
+                }
                 if let Some(orders) = saved["orders"].as_array() {
                     self.orders
                         .insert(object, orders.iter().filter_map(flow::Order::of).collect());
@@ -1345,6 +1368,7 @@ impl Cell {
                         n.iter().map(u64::to_string).collect::<Vec<_>>()
                     }),
                     "mix": self.mix.get(&c.object),
+                    "skills": self.skills.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()),
                     "orders": self.orders.get(&c.object).map(|o| o.iter().map(flow::Order::to_json).collect::<Vec<_>>()),
                     "cycles": self.cycles.get(&c.object),
                     "routes": self
@@ -2171,6 +2195,22 @@ impl Cell {
                     self.orders.remove(&object);
                 } else {
                     self.orders.insert(object, orders);
+                }
+                self.roles_changed = true;
+                self.changed = true;
+            }
+            "operator_skills" => {
+                let object = uid("object")?;
+                let stations: Vec<u64> = req["stations"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_str().and_then(|s| s.parse::<u64>().ok()))
+                    .collect();
+                if stations.is_empty() {
+                    self.skills.remove(&object);
+                } else {
+                    self.skills.insert(object, stations);
                 }
                 self.roles_changed = true;
                 self.changed = true;
@@ -3754,6 +3794,9 @@ impl Cell {
                         })
                     }),
                     "flow": c.kind.flow().then(|| self.flow_json(doc, c)),
+                    "skills": (c.kind == Kind::Operator).then(|| {
+                        self.skills.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default()
+                    }),
                     "lanes": (c.kind == Kind::Stop).then(|| {
                         self.lanes.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default()
                     }),
@@ -3905,6 +3948,7 @@ pub fn is_op(op: &str) -> bool {
             | "amr_lanes"
             | "flow_products"
             | "flow_orders"
+            | "operator_skills"
             | "flow_settings"
     )
 }

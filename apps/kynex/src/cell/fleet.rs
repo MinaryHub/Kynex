@@ -393,16 +393,38 @@ impl Cell {
 
     /// A person free: not walking, not working at a station, not carrying.
     fn free_operators(&self) -> Vec<u64> {
+        self.free_operators_for(None)
+    }
+
+    /// The same, those who may work at station `at` if one is named, and
+    /// on their shift now.
+    fn free_operators_for(&self, at: Option<u64>) -> Vec<u64> {
         self.components
             .iter()
-            .filter(|c| c.kind == Kind::Operator)
+            .filter(|c| c.kind == Kind::Operator && self.on_shift(c))
             .map(|c| c.object)
             .filter(|o| {
-                !self.jobs.iter().any(|j| j.amr == Some(*o))
+                at.is_none_or(|s| self.skills.get(o).is_none_or(|k| k.contains(&s)))
+                    && !self.jobs.iter().any(|j| j.amr == Some(*o))
                     && !self.stations.values().any(|s| s.crew == Some(*o))
                     && self.rovers.get(o).is_none_or(|r| r.legs.is_empty())
             })
             .collect()
+    }
+
+    /// Whether operator `c` is on shift now, the flow's clock read as hours
+    /// of the day from its start.
+    pub(super) fn on_shift(&self, c: &Component) -> bool {
+        let (from, to) = (c.props.shift_from, c.props.shift_to);
+        if from == to {
+            return true;
+        }
+        let hour = (self.flow_clock() / 3600.0).rem_euclid(24.0);
+        if from < to {
+            hour >= from && hour < to
+        } else {
+            hour >= from || hour < to
+        }
     }
 
     /// Person `who` walks to `to`, then faces `toward`.
@@ -429,7 +451,7 @@ impl Cell {
         let c = self.components.iter().find(|c| c.object == object)?.clone();
         let spot = Self::spot(doc, &c)?;
         let who = self
-            .free_operators()
+            .free_operators_for(Some(object))
             .into_iter()
             .filter_map(|o| {
                 let oc = self.components.iter().find(|x| x.object == o)?;
@@ -556,6 +578,8 @@ impl Cell {
                     "walk"
                 } else if working {
                     "work"
+                } else if self.flow_on && !self.on_shift(c) {
+                    "off"
                 } else {
                     "idle"
                 };

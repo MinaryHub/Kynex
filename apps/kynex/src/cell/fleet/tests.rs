@@ -303,3 +303,82 @@ fn two_amrs_head_on_are_got_apart() {
     assert!((p1.x - 4.0).abs() < 1e-6 && p1.y.abs() < 1e-6, "{p1}");
     assert!(p2.x.abs() < 1e-6 && p2.y.abs() < 1e-6, "{p2}");
 }
+
+#[test]
+fn operators_work_only_where_they_may_and_on_their_shift() {
+    let (doc, mut cell, u) = floor(&[
+        (
+            "operator",
+            2.0,
+            -2.0,
+            json!({"shift_from": 0.0, "shift_to": 0.5}),
+        ),
+        ("operator", 6.0, -2.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 20.0})),
+        ("flow_station", 2.0, 0.0, json!({"cycle": 5.0, "crew": 1})),
+        ("flow_station", 6.0, 0.0, json!({"cycle": 5.0, "crew": 1})),
+        ("flow_sink", 8.0, 0.0, Value::Null),
+    ]);
+    let (anna, bo, source, s1, s2, sink) = (u[0], u[1], u[2], u[3], u[4], u[5]);
+    let s = |x: u64| x.to_string();
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": s(source), "next": [s(s1)]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": s(s1), "next": [s(s2)]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": s(s2), "next": [s(sink)]}),
+    );
+    // Anna at station 1 only, Bo at station 2 only.
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "operator_skills", "object": s(anna), "stations": [s(s1)]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "operator_skills", "object": s(bo), "stations": [s(s2)]}),
+    );
+    assert_eq!(cell.to_saved()[0]["skills"], json!([s(s1)]));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut t, mut crews) = (0.0, std::collections::BTreeSet::new());
+    let mut off = false;
+    let mut out_at_half = 0;
+    while t < 3600.0 {
+        t += 0.2;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        for (station, st) in &cell.stations {
+            if let Some(o) = st.crew {
+                crews.insert((*station, o));
+            }
+        }
+        off |= cell
+            .operator_activities()
+            .iter()
+            .any(|(o, _, a)| *o == anna && *a == "off");
+        if (t - 1800.0).abs() < 0.1 {
+            out_at_half = cell.flow_summary()["sunk"].as_u64().unwrap();
+        }
+    }
+    // Each only at their own station.
+    assert!(
+        crews
+            .iter()
+            .all(|(st, o)| (*st == s1 && *o == anna) || (*st == s2 && *o == bo)),
+        "{crews:?}"
+    );
+    // Anna's shift is the first half hour: after it, station 1 waits.
+    assert!(off);
+    assert!(out_at_half > 50, "{out_at_half}");
+    let end = cell.flow_summary()["sunk"].as_u64().unwrap();
+    assert!(end <= out_at_half + 2, "{out_at_half} then {end}");
+}

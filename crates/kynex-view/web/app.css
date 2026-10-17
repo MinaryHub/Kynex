@@ -978,3 +978,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .flow-num { width: 48px; margin: 0 3px; }
 .sc-bar.flow-bar input.flow-num { width: 52px; flex: none; min-width: 0; }
 .sc-bar.flow-bar label { display: inline-flex; align-items: center; white-space: nowrap; }
+
+/* The site's drawing. */
+.floor-panel { width: min(420px, calc(100% - 32px)); }
+.floor-panel .plc-head .muted { font-weight: 400; font-size: 11px; }
+.floor-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; }
+.floor-fields label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.floor-fields input { width: 72px; }

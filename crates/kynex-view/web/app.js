@@ -11,6 +11,7 @@ import { RobotPanel } from '/robot.js';
 import { CellPanel } from '/cell.js';
 import { PlcPanel } from '/plc.js';
 import { ProjectPanel } from '/project.js';
+import { FloorPanel } from '/floor.js';
 import { LibraryPanel } from '/library.js';
 import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
@@ -481,6 +482,7 @@ function connect() {
   source.addEventListener('scenarios', (e) => timelinePanel.setScenarios(JSON.parse(e.data)));
   source.addEventListener('plc', (e) => plcPanel.setState(JSON.parse(e.data)));
   source.addEventListener('project', (e) => projectPanel.setState(JSON.parse(e.data)));
+  source.addEventListener('floor', (e) => floorPanel.setState(JSON.parse(e.data)));
   source.addEventListener('history', (e) => setHistory(JSON.parse(e.data)));
   source.addEventListener('cell', (e) => {
     const cell = JSON.parse(e.data);
@@ -673,6 +675,19 @@ function pick(x, y) {
 
 const plcPanel = new PlcPanel({ toast, escapeHtml, robots: () => robotPanel.robots });
 const projectPanel = new ProjectPanel({ toast, escapeHtml });
+// The site's drawing: looked at from above when first laid.
+const floorPanel = new FloorPanel({
+  scene,
+  toast,
+  redraw: () => {},
+  frame: (box) => {
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const fov = (camera.fov * Math.PI) / 180;
+    const dist = (Math.max(sphere.radius, 0.5) / Math.sin(Math.min(fov, fov * camera.aspect) / 2)) * 1.05;
+    const to = { target: sphere.center.clone(), position: sphere.center.clone().add(VIEWS.top.clone().normalize().multiplyScalar(dist)) };
+    flight = { from: { target: controls.target.clone(), position: camera.position.clone() }, to, t0: performance.now() };
+  },
+});
 const timelinePanel = new TimelinePanel({ escapeHtml, toast, toggle: (on) => setToggle('timeline', on) });
 
 const libraryPanel = new LibraryPanel({
@@ -1288,11 +1303,18 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
   // One panel over the toolbar at a time.
   if (b.dataset.action === 'plc') {
     projectPanel.panel.hidden = true;
+    floorPanel.panel.hidden = true;
     plcPanel.toggle();
   }
   if (b.dataset.action === 'project') {
     plcPanel.panel.hidden = true;
+    floorPanel.panel.hidden = true;
     projectPanel.toggle();
+  }
+  if (b.dataset.action === 'floor') {
+    plcPanel.panel.hidden = true;
+    projectPanel.panel.hidden = true;
+    floorPanel.toggle();
   }
   if (b.dataset.action === 'undo') history('undo');
   if (b.dataset.action === 'redo') history('redo');

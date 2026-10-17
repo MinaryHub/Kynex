@@ -502,6 +502,8 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             "name": query("name").unwrap_or_default(),
             "unit": query("unit").and_then(|u| u.parse::<f64>().ok()),
             "keep": query("keep").as_deref() == Some("1"),
+            // What the file is for: a model, or the site's drawing.
+            "as": query("as").unwrap_or_default(),
         });
         let (tx, rx) = mpsc::channel();
         let asked = robot.send(RobotRequest {

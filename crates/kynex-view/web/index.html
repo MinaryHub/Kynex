@@ -71,6 +71,7 @@
 
     <div class="toolbar" role="toolbar" aria-label="보기">
       <button data-action="project" class="project-btn" title="프로젝트: 새로 만들기, 열기, 다른 이름으로 저장"><svg viewBox="0 0 20 20"><path d="M2.5 5.5v10h15v-8h-7l-2-2z"/></svg><span id="project-name"></span></button>
+      <button data-action="floor" title="부지 도면: 공장 배치도 이미지를 바닥에 실제 크기로 깔고 그 위에 설비를 놓습니다"><svg viewBox="0 0 20 20"><path d="M2.5 5l5-2 5 2 5-2v12l-5 2-5-2-5 2zM7.5 3v12M12.5 5v12"/></svg></button>
       <button data-action="undo" id="undo-btn" disabled title="되돌리기 (Ctrl+Z)"><svg viewBox="0 0 20 20"><path d="M7 4L3 8l4 4M3 8h9a5 5 0 010 10H8"/></svg></button>
       <button data-action="redo" id="redo-btn" disabled title="다시 하기 (Ctrl+Y)"><svg viewBox="0 0 20 20"><path d="M13 4l4 4-4 4M17 8H8a5 5 0 000 10h4"/></svg></button>
       <span class="sep"></span>
@@ -98,6 +99,22 @@
     </div>
 
     <div class="measure-readout num" id="measure" hidden></div>
+
+    <div class="plc-panel floor-panel" id="floor-panel" hidden>
+      <div class="plc-head">부지 도면 <span class="muted">공장 배치도(PNG·JPG)를 바닥에 깔고 그 위에 설비를 놓습니다</span></div>
+      <div class="project-row">
+        <button class="text-btn" id="floor-load">도면 이미지 불러오기</button>
+        <button class="text-btn quiet" id="floor-clear" hidden>지우기</button>
+        <input type="file" id="floor-file" accept="image/png,image/jpeg,image/webp" hidden>
+      </div>
+      <div class="floor-fields" id="floor-fields" hidden>
+        <label title="도면 이미지 가로가 실제로 몇 m인지: 이것으로 크기가 맞춰집니다">실제 가로<input type="number" class="num" id="floor-width" min="1" step="1"><span>m</span></label>
+        <label>가운데 X<input type="number" class="num" id="floor-x" step="0.5"><span>m</span></label>
+        <label>가운데 Y<input type="number" class="num" id="floor-y" step="0.5"><span>m</span></label>
+        <label>회전<input type="number" class="num" id="floor-yaw" step="90"><span>°</span></label>
+        <label>진하기<input type="number" class="num" id="floor-opacity" min="5" max="100" step="5"><span>%</span></label>
+      </div>
+    </div>
 
     <div class="plc-panel project-panel" id="project-panel" hidden>
       <div class="plc-head">프로젝트 <span class="muted" id="project-path"></span></div>

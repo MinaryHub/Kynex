@@ -85,6 +85,8 @@ pub struct Project {
     pub scenarios: Vec<Value>,
     /// Where the PLC is, if one is wired (see `crate::plc`).
     pub plc: Value,
+    /// The site's drawing laid under the scene (see `crate::floor`).
+    pub floor: Value,
 }
 
 impl Posing {
@@ -118,6 +120,7 @@ impl Posing {
                         library: list("library"),
                         scenarios,
                         plc: all["plc"].clone(),
+                        floor: all["floor"].clone(),
                     },
                 )
             }
@@ -296,6 +299,7 @@ impl Posing {
             "library": rest.library,
             "scenarios": rest.scenarios,
             "plc": rest.plc,
+            "floor": rest.floor,
         }))
         .expect("programs serialise");
         let next = file.with_extension("json.new");

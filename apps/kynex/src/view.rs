@@ -272,6 +272,11 @@ struct Stage {
     /// the viewers were last told.
     timeline: Option<Timeline>,
     timeline_told: Option<Instant>,
+    /// The site's drawing under the scene; whether it changed since saved,
+    /// and since the viewers were told.
+    floor: crate::floor::Floor,
+    floor_changed: bool,
+    floor_told: bool,
     /// When the cell was last told, and whether the page has asked for
     /// anything since: told at once if it has.
     cell_told: Option<Instant>,
@@ -389,6 +394,9 @@ impl Stage {
             timeline_told: None,
             cell_told: None,
             asked: false,
+            floor: crate::floor::Floor::of(&saved.floor),
+            floor_changed: false,
+            floor_told: false,
             scenarios: saved.scenarios,
             compared: Vec::new(),
             scenarios_changed: false,
@@ -510,6 +518,17 @@ impl Stage {
             } else if op == "scenario" {
                 touched = true;
                 self.scenario_op(doc, &request.body)
+            } else if op == "floor" {
+                touched = true;
+                let req: Value = serde_json::from_str(&request.body).unwrap_or_default();
+                match self.floor.handle(&req) {
+                    Ok(()) => {
+                        self.floor_changed = true;
+                        self.floor_told = false;
+                        serde_json::json!({ "ok": true }).to_string()
+                    }
+                    Err(e) => serde_json::json!({ "ok": false, "error": e }).to_string(),
+                }
             } else if op == "follow" {
                 touched = true;
                 self.follow_op(doc, &request.body)
@@ -539,6 +558,21 @@ impl Stage {
                     None => serde_json::json!({ "ok": false, "error": "no such object" }),
                 };
                 touched = true;
+                answer.to_string()
+            } else if op == "import"
+                && serde_json::from_str::<Value>(&request.body).unwrap_or_default()["as"] == "floor"
+            {
+                // The site's drawing: an image, laid under the scene.
+                touched = true;
+                let answer = match request.file.as_deref().map(|b| self.floor.set_image(b)) {
+                    Some(Ok(())) => {
+                        self.floor_changed = true;
+                        self.floor_told = false;
+                        serde_json::json!({ "ok": true })
+                    }
+                    Some(Err(e)) => serde_json::json!({ "ok": false, "error": e }),
+                    None => serde_json::json!({ "ok": false, "error": "no file" }),
+                };
                 answer.to_string()
             } else if op == "import" {
                 // A model file: read away from the loop, placed when read.
@@ -1359,8 +1393,14 @@ impl Stage {
         let plc = std::mem::take(&mut self.plc_changed);
         server.state("plc", &self.plc.to_json().to_string());
         server.state("project", &self.project_json().to_string());
+        // The drawing only when it changed: it may be megabytes.
+        if !self.floor_told {
+            server.state("floor", &self.floor.to_json().to_string());
+            self.floor_told = true;
+        }
+        let floor = std::mem::take(&mut self.floor_changed);
         server.state("history", &self.history_json().to_string());
-        if programs || roles || items || scenarios || plc || replaced {
+        if programs || roles || items || scenarios || plc || floor || replaced {
             if let Err(e) = self.save(doc) {
                 println!("프로젝트를 저장하지 못했습니다: {e}");
             }
@@ -1374,6 +1414,7 @@ impl Stage {
             cell: self.cell.to_saved(),
             library: self.library.to_saved(),
             scenarios: self.scenarios.clone(),
+            floor: self.floor.to_json(),
             plc: {
                 let mut plc = self.plc.settings.to_json();
                 plc["signals"] = self.cell.signals_saved();
@@ -1828,6 +1869,7 @@ fn undoable(op: &str) -> bool {
     !matches!(
         op,
         "" | "play"
+            | "floor"
             | "flow"
             | "follow"
             | "stop"

@@ -584,6 +584,16 @@ by `Offs`. Names and comments are kept to ASCII; other letters become
 - The controller times moves in its own way, so a cycle on the robot is
   close to the planned cycle, but not equal to it.
 
+### The site's drawing
+
+**부지 도면** on the toolbar lays a plan of the factory (PNG, JPEG or WebP,
+up to 8 MB) on the floor, to place equipment on: the first step of a
+layout. Give its **실제 가로** (how many metres its width is) and it is
+at true size; move it with **가운데 X / Y**, turn it, and make it fainter
+with **진하기**. The view looks down on it when it is first laid. It is
+kept in the project file (`apps/kynex/src/floor.rs`), so the project
+stays one file.
+
 ### The library: placing equipment
 
 The **라이브러리** tab, beside the scene tree, lists equipment to place as

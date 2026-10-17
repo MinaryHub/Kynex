@@ -39,6 +39,7 @@ mod bench;
 mod cell;
 mod collide;
 mod edges;
+mod floor;
 mod import;
 mod library;
 mod mqtt;

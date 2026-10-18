@@ -22,6 +22,10 @@ use crate::timeline::{Now, Timeline};
 
 const PORT: u16 = 8090;
 
+/// The fastest the simulation's clock may run, times real time: a shift of
+/// a factory in a couple of minutes, the cell still stepped finely.
+const MOST_SPEED: f64 = 300.0;
+
 /// Where programs were kept before the project file held more: read once,
 /// if the project file is not there yet.
 const OLD_PROGRAMS: &str = "kynex-programs.json";
@@ -882,7 +886,7 @@ impl Stage {
         let answer = match op {
             "speed" => match req["speed"].as_f64() {
                 Some(v) if v > 0.0 => {
-                    self.clock.speed = v.clamp(0.1, 100.0);
+                    self.clock.speed = v.clamp(0.1, MOST_SPEED);
                     Ok(())
                 }
                 _ => Err("speed is a positive number".to_string()),

@@ -62,7 +62,7 @@ const SIGNALS_OF = {
   ],
   amr: [['arrived', 'AMR 도착']],
 };
-const SPEEDS = [1, 2, 5, 10, 20];
+const SPEEDS = [1, 2, 5, 10, 20, 50, 100, 200, 300];
 // How a variable is compared, as a condition's row offers it.
 const CMPS = [['==', '='], ['!=', '≠'], ['<', '<'], ['>', '>'], ['<=', '≤'], ['>=', '≥']];
 // A variable's name: what every controller's language takes.

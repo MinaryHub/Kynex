@@ -38,7 +38,7 @@ pub const KEYS: &[&str] = &[
 ];
 
 /// What a floor zone is, by number: its floor and its lines.
-pub const ZONES: &[&str] = &["통로", "작업 구역", "위험 구역", "보관 구역"];
+pub const ZONES: &[&str] = &["통로", "작업 구역", "위험 구역", "보관 구역", "클린룸"];
 
 /// Whether a wall has its band of windows.
 pub const WINDOWS: &[&str] = &["없음", "창 띠"];
@@ -74,6 +74,7 @@ struct Paint {
     floor: MaterialId,
     danger: MaterialId,
     store: MaterialId,
+    clean: MaterialId,
 }
 
 impl Paint {
@@ -113,6 +114,7 @@ impl Paint {
             floor: colour("work floor", [0.46, 0.48, 0.49], 0.0),
             danger: colour("danger floor", [0.40, 0.36, 0.30], 0.0),
             store: colour("store floor", [0.30, 0.38, 0.48], 0.0),
+            clean: colour("clean room floor", [0.80, 0.82, 0.84], 0.1),
         }
     }
 }
@@ -289,6 +291,293 @@ pub(super) fn build(doc: &mut Document, item: &Item) {
     }
 }
 
+// --- people -----------------------------------------------------------------
+
+/// A mesh `size` across (a unit shape stretched), `centre`d, turned.
+#[allow(clippy::too_many_arguments)]
+fn stretched(
+    doc: &mut Document,
+    name: &str,
+    mesh: kreate_mesh::MeshData,
+    size: [f64; 3],
+    centre: [f64; 3],
+    turn: DQuat,
+    colour: MaterialId,
+    parent: Option<ObjectId>,
+) -> ObjectId {
+    let id = shape(doc, name, mesh, centre, turn, colour, parent);
+    doc.object_mut(id).unwrap().transform.scale = DVec3::from_array(size);
+    id
+}
+
+/// A person at work, 1.75 m, facing +X, under `parent`: safety shoes,
+/// work trousers, a shirt under an orange safety vest with its reflective
+/// bands, arms a little bent before the body — where a part carried by
+/// hand is held — and a hard hat.
+pub(super) fn person(doc: &mut Document, parent: Option<ObjectId>) {
+    let mut colour = |name: &str, rgb: [f32; 3]| {
+        doc.add_material(Material {
+            name: name.into(),
+            base_color: SceneRgb::new(rgb[0], rgb[1], rgb[2]),
+            ..Material::default()
+        })
+    };
+    let skin = colour("skin", [0.86, 0.68, 0.55]);
+    let trousers = colour("work trousers", [0.15, 0.19, 0.29]);
+    let shirt = colour("shirt", [0.26, 0.36, 0.55]);
+    let vest = colour("safety vest", [0.98, 0.45, 0.08]);
+    let band = colour("reflective band", [0.82, 0.83, 0.85]);
+    let shoes = colour("safety shoes", [0.08, 0.08, 0.09]);
+    let hat = colour("hard hat", [0.97, 0.82, 0.10]);
+    let eyes = colour("eyes", [0.10, 0.08, 0.07]);
+    let m = parent;
+    let unit_cylinder = || kreate_mesh::primitives::cylinder(1.0, 1.0, 24);
+    let unit_sphere = || kreate_mesh::primitives::uv_sphere(1.0, 20, 12);
+    let up = DQuat::IDENTITY;
+    for side in [-1.0, 1.0] {
+        let y = side * 0.1;
+        let s = if side < 0.0 { "right" } else { "left" };
+        block(
+            doc,
+            &format!("shoe_{s}"),
+            [0.27, 0.105, 0.08],
+            [0.04, y, 0.04],
+            shoes,
+            m,
+        );
+        stretched(
+            doc,
+            &format!("shin_{s}"),
+            unit_cylinder(),
+            [0.058, 0.058, 0.43],
+            [0.0, y, 0.295],
+            up,
+            trousers,
+            m,
+        );
+        stretched(
+            doc,
+            &format!("knee_{s}"),
+            unit_sphere(),
+            [0.065, 0.065, 0.065],
+            [0.0, y, 0.51],
+            up,
+            trousers,
+            m,
+        );
+        stretched(
+            doc,
+            &format!("thigh_{s}"),
+            unit_cylinder(),
+            [0.078, 0.075, 0.44],
+            [0.0, y, 0.72],
+            up,
+            trousers,
+            m,
+        );
+        // The arm: shoulder, upper arm hanging, forearm 35° forward, hand.
+        let ys = side * 0.215;
+        stretched(
+            doc,
+            &format!("shoulder_{s}"),
+            unit_sphere(),
+            [0.062, 0.062, 0.062],
+            [0.0, ys, 1.43],
+            up,
+            shirt,
+            m,
+        );
+        stretched(
+            doc,
+            &format!("upper_arm_{s}"),
+            unit_cylinder(),
+            [0.046, 0.046, 0.3],
+            [0.0, ys, 1.28],
+            up,
+            shirt,
+            m,
+        );
+        stretched(
+            doc,
+            &format!("elbow_{s}"),
+            unit_sphere(),
+            [0.044, 0.044, 0.044],
+            [0.0, ys, 1.13],
+            up,
+            shirt,
+            m,
+        );
+        let bend = 35f64.to_radians();
+        let fore = 0.26;
+        stretched(
+            doc,
+            &format!("forearm_{s}"),
+            unit_cylinder(),
+            [0.04, 0.04, fore],
+            [fore / 2.0 * bend.sin(), ys, 1.13 - fore / 2.0 * bend.cos()],
+            DQuat::from_rotation_y(-bend),
+            shirt,
+            m,
+        );
+        stretched(
+            doc,
+            &format!("hand_{s}"),
+            unit_sphere(),
+            [0.05, 0.035, 0.05],
+            [
+                fore * bend.sin() + 0.02,
+                ys,
+                1.13 - fore * bend.cos() - 0.02,
+            ],
+            up,
+            skin,
+            m,
+        );
+        stretched(
+            doc,
+            &format!("eye_{s}"),
+            unit_sphere(),
+            [0.012, 0.012, 0.012],
+            [0.088, side * 0.034, 1.665],
+            up,
+            eyes,
+            m,
+        );
+    }
+    stretched(
+        doc,
+        "pelvis",
+        unit_cylinder(),
+        [0.12, 0.18, 0.16],
+        [0.0, 0.0, 0.96],
+        up,
+        trousers,
+        m,
+    );
+    stretched(
+        doc,
+        "belt",
+        unit_cylinder(),
+        [0.122, 0.182, 0.035],
+        [0.0, 0.0, 1.035],
+        up,
+        shoes,
+        m,
+    );
+    stretched(
+        doc,
+        "torso",
+        unit_cylinder(),
+        [0.115, 0.185, 0.42],
+        [0.0, 0.0, 1.26],
+        up,
+        shirt,
+        m,
+    );
+    stretched(
+        doc,
+        "chest",
+        unit_sphere(),
+        [0.12, 0.2, 0.09],
+        [0.0, 0.0, 1.44],
+        up,
+        shirt,
+        m,
+    );
+    stretched(
+        doc,
+        "vest",
+        unit_cylinder(),
+        [0.122, 0.192, 0.36],
+        [0.0, 0.0, 1.25],
+        up,
+        vest,
+        m,
+    );
+    for (k, z) in [1.14, 1.3].into_iter().enumerate() {
+        stretched(
+            doc,
+            &format!("vest_band_{k}"),
+            unit_cylinder(),
+            [0.124, 0.194, 0.035],
+            [0.0, 0.0, z],
+            up,
+            band,
+            m,
+        );
+    }
+    stretched(
+        doc,
+        "neck",
+        unit_cylinder(),
+        [0.048, 0.048, 0.09],
+        [0.0, 0.0, 1.52],
+        up,
+        skin,
+        m,
+    );
+    stretched(
+        doc,
+        "head",
+        unit_sphere(),
+        [0.095, 0.085, 0.115],
+        [0.01, 0.0, 1.645],
+        up,
+        skin,
+        m,
+    );
+    stretched(
+        doc,
+        "nose",
+        unit_sphere(),
+        [0.018, 0.014, 0.022],
+        [0.1, 0.0, 1.63],
+        up,
+        skin,
+        m,
+    );
+    stretched(
+        doc,
+        "ear_r",
+        unit_sphere(),
+        [0.015, 0.02, 0.03],
+        [0.0, -0.087, 1.645],
+        up,
+        skin,
+        m,
+    );
+    stretched(
+        doc,
+        "ear_l",
+        unit_sphere(),
+        [0.015, 0.02, 0.03],
+        [0.0, 0.087, 1.645],
+        up,
+        skin,
+        m,
+    );
+    stretched(
+        doc,
+        "hard_hat",
+        unit_sphere(),
+        [0.112, 0.102, 0.085],
+        [0.01, 0.0, 1.715],
+        up,
+        hat,
+        m,
+    );
+    stretched(
+        doc,
+        "hat_brim",
+        unit_cylinder(),
+        [0.13, 0.115, 0.012],
+        [0.035, 0.0, 1.705],
+        up,
+        hat,
+        m,
+    );
+}
+
 // --- the building -------------------------------------------------------
 
 /// A sandwich-panel wall along X on a concrete curb, its panels' seams
@@ -420,16 +709,34 @@ fn zone(doc: &mut Document, p: &Paint, item: &Item, m: Option<ObjectId>) {
         0 => p.epoxy,
         1 => p.floor,
         2 => p.danger,
-        _ => p.store,
+        3 => p.store,
+        _ => p.clean,
     };
-    let lines = if matches!(kind, 1 | 3) {
-        p.white
-    } else {
-        p.yellow
+    // A clean room's raised floor: its lines its panels' edges, grey.
+    let lines = match kind {
+        1 | 3 => p.white,
+        4 => p.seam,
+        _ => p.yellow,
     };
-    // Under the floor: the fill lowest, the lines over it.
-    block(doc, "floor", [l, w, 0.002], [0.0, 0.0, -0.0015], fill, m);
-    let z = -0.0004;
+    // Under the floor, a layer for each kind, so that one laid over another
+    // — an aisle over the clean room's floor — never shares its depth and
+    // flickers with it: the clean room lowest, an aisle highest; the lines
+    // 2 mm over their own fill.
+    let layer = match kind {
+        4 => -0.009,
+        1 | 3 => -0.007,
+        2 => -0.0055,
+        _ => -0.004,
+    };
+    block(
+        doc,
+        "floor",
+        [l, w, 0.002],
+        [0.0, 0.0, layer - 0.001],
+        fill,
+        m,
+    );
+    let z = layer + 0.001;
     let edges = [
         ([l, line], [0.0, -(w - line) / 2.0], true),
         ([l, line], [0.0, (w - line) / 2.0], true),
@@ -1793,7 +2100,8 @@ mod tests {
             if *key == "ceiling_light" {
                 assert!(floor > 1.0, "{key}: hung, lowest at {floor}");
             } else {
-                assert!(floor > -0.005 && floor < 0.2, "{key}: lowest at {floor}");
+                // A floor marking lies a centimetre at most under the floor.
+                assert!(floor > -0.012 && floor < 0.2, "{key}: lowest at {floor}");
             }
         }
         // Their choices and sizes at their ends make them too.

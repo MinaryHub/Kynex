@@ -632,6 +632,15 @@ thumbnails: each drawn from the piece at its usual size
 
 - 로봇: UR10e + 이중 그리퍼, UR5e, UR3e, UR16e (UR3e·UR16e·UR5e는 Universal
   Robots의 `Universal_Robots_ROS2_Description` 기구학·관절 한계 값),
+  유리 이송 로봇 (대형: a turning column, a carriage lifting on it, arms of
+  1.2 and 1.0 m and a fork of four 1.8 m fingers that a 2.2 × 2.5 m mother
+  glass lies on. Placed facing its tool beside a load port in a flow, it
+  works while the station does, a sheet every six seconds: folded — it
+  turns within 2.6 m — it turns to the cassette, reaches in over it (its
+  wrist kept short of the cassette's edge), takes a sheet, draws back,
+  turns to the tool and sets the sheet at its face. The sheet shows on the
+  fork only while it carries one. Stand the tool's front 3.4 m from the
+  robot and nothing it does touches the tool),
   ABB IRB 1600-10/1.45 + 이중 그리퍼, ABB IRB 1600 + 주행 트랙,
   Doosan M1013 + 이중 그리퍼(두산 `dsr_description2`의 관절·범위·속도.
   에뮬레이터에서 영점 플랜지 `[0, 34.5, 1452.5]`와 대기 자세가 같음을 확인),
@@ -669,6 +678,25 @@ thumbnails: each drawn from the piece at its usual size
   trolley and the hook hanging), 천장 조명 (high-bay lamps in a row), 셔터
   도어 (with its guards and bollards), 천장 배관 (pipes on T-supports in the
   colours of what they carry).
+- 자동차 공장 (`library/automotive.rs`): 자동차 차체 (4.6 m, at its
+  stage — welded steel on its skid, painted, or finished on its wheels,
+  glazed, its lights in — in white, red, blue, silver or black), 차체
+  용접 지그 (base, locating pins, clamps all round), 도장 부스 (white
+  walls with a band of windows, plenum, exhaust stacks, grating, rails),
+  도장 건조로 (insulated tunnel, air seals, burners and stacks), 의장
+  라인 (slat conveyor, walkways, tool balancers overhead), 검사 라이트
+  터널 (arches of light bars round a body).
+- 디스플레이 공장 (`library/display.rs`): 클러스터 장비 (증착·식각: the
+  front end and its load ports, a load lock, the transfer chamber and its
+  process chambers round it, pumps, gas box), 트랙 (코터·현상기), 노광기
+  (granite base, lens column, mask library), 습식 장비 (세정·식각·박리:
+  tanks, rollers, exhaust hood), 카세트 스토커 (shelves of cassettes behind
+  a window, its crane), 검사 장비 (AOI·어레이 검사: a gantry over a granite
+  stage), 천장 반송 레일 (OHT: a loop overhead, vehicles on it), 스토커
+  크레인 레일 (two floor rails on sleepers, buffers at the ends, the crane's
+  lane marked). Each tool
+  white with blue trim and its signal tower. 바닥 구역 표시 also comes as
+  a 클린룸 floor.
 - 산업 장비 (`library/interior.rs`): 지게차 (its forks at the height
   asked), 파렛트 랙 (bays and levels, loaded or empty), 파렛트 (박스 적재),
   드럼통 (파렛트), 작업대, 공구 캐비닛, 프레스, 공기 압축기, 제어반 (with
@@ -906,7 +934,10 @@ not change the session's scene.
     they went over the run. The CSV carries the orders' figures.
 - **AMR lanes and traffic** (`apps/kynex/src/cell/fleet.rs`).
   - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
-    go both ways and are drawn in orange. Sent to a stop, an AMR drives to
+    go both ways and are drawn in orange. Through the request
+    (`{"op": "amr_lanes", …, "oneway": true}`) a link goes one way only,
+    from the stop to those named: a loop driven one way round, where two
+    AMRs never meet head on. Sent to a stop, an AMR drives to
     the nearest stop on the lanes, then stop by stop the shortest way.
     With no lanes it drives straight, as before. A stop the lanes do not
     reach is refused.
@@ -914,14 +945,17 @@ not change the session's scene.
     waits before driving to a stop that is held, and goes on once it is
     let go. Two AMRs driving at each other along one lane would wait for
     ever, so lay lanes one way round or give them a passing place.
-  - A flow piece with **보내는 방법: AMR** has each part fetched by the
-    first free AMR. It drives to the stop nearest the sender (within 4 m),
+  - A flow piece with **보내는 방법: AMR** has each part fetched by an
+    AMR, as a fleet manager gives the work out: of the AMRs free and the
+    parts waiting, the nearest pair along the lanes first, then the next.
+    It drives to the stop nearest the sender (within 4 m),
     loads for 5 s, carries the part on its top plate to the stop nearest
     where it goes, and unloads for 5 s. The flow bar shows the transports
     in hand and any problem, such as no stop near a station. Each AMR's
     lane in the timeline shows its driving and its utilization.
   - **Battery**: an AMR's 배터리 (minutes of driving on a full charge)
-    runs down as it drives. Below a fifth and free, it drives to the
+    runs down as it drives. Below a fifth it takes no new part; free, it
+    drives to the
     nearest stop marked **충전소** and charges there, at 완충까지 충전
     시간, until nearly full. It takes no work meanwhile. Its inspector
     shows the charge, and the timeline shows 충전.
@@ -929,20 +963,78 @@ not change the session's scene.
     got apart. One goes round another way if the lanes have one, or
     steps aside to a free stop next to it and lets the other by. Only if
     neither can does the flow bar say so.
+  - **Parking and giving way**, while the flow runs: an AMR with nothing
+    to do drives to the nearest free parking stop — a stop at a lane's
+    end (linked to one stop only), no charger and no flow piece's stop —
+    if the lanes have one. One standing with nothing to do on a stop
+    another must pass moves aside to a free stop next to it. An AMR sent
+    to a stop by hand, out of a flow, stays where it was sent.
+- **Recipes and stockers**: a source's recipe
+  (`{"op": "flow_recipe", "object": <source>, "steps": [<stations>],
+  "repeat": n}`) is the stations its parts go through in order — a tool as
+  often as the recipe names it, all of it `repeat` times — as a display's
+  glass goes back to the same tools for each of its masks. A buffer with
+  **dispatch** (`"dispatch": 1`) is a stocker: it sends each part to the
+  tool of its next step, the tools link back to it, and a part whose recipe
+  is done goes on as the stocker's own links say. It sends whichever part
+  has somewhere to go, not all of them held up behind one whose tool is
+  full. Sheets in a stocker stand in cassettes, twenty to a stack. A
+  stocker with a **crane** (`"rail": 1`) carries them on a rail down the
+  bay, along its length through it: a cassette sent into the stocker, or
+  out to its recipe's next tool, goes across onto the rail, along it and
+  across off it to the load port, the move as long as that way, and is
+  drawn on the crane (a carriage on the rails, masts, the table it rides
+  on); one sent on once its recipe is done leaves the bay without it. Lay
+  the rail with the library's 스토커 크레인 레일 through the stocker's
+  dock. Without a crane, cassettes go overhead. Release no faster than the stockers
+  can take — a source's **kanban** — or a full stocker and tools that cannot
+  hand back what they finished lock each other up.
+- **How fast it runs**: **배속** in the flow bar (and in a robot's
+  program bar, the same clock) runs the factory at 1 to 300 times real
+  time: a shift in a couple of minutes. However fast, the cell is worked
+  out in steps of at most 0.2 s of its clock, so nothing jumps past where
+  it should stop.
+- **Work in hand**: over each station at work, a pie fills as its cycle
+  goes, its per cent in the middle; a station not at work shows none. It
+  holds still while the station is down or resting.
+- **Seen through what hides it**: equipment standing between the view and
+  a product of the flow — a car body in a paint booth or an oven — is drawn
+  see-through while it does, and as it was once it no longer does. A
+  building's walls (공장 벽체, 롤 셔터) are drawn see-through whenever the
+  view is from outside them: the near side cut away as the view goes round,
+  the far side standing.
+- **What the parts look like**: a source's or a station's **부품 모양**
+  (부품, 차체 (BIW), 도장 차체, 완성차, 유리 기판, LCD 패널, LCD 모듈) is
+  what its parts look like once
+  it has made them, so a car can be seen going down its line as it is
+  built: a car body drawn at its stage — the painted ones in five colours
+  in turn — in line at a station, the one worked on at it and the others
+  behind, in lanes in a store, facing the way it goes. A flow piece's
+  **형태: 바닥 표시** is a mark on the floor, a body's size, in place of a
+  table: placed in a jig, a booth or on a line, the body rides through it.
 - **Operators** (library 공정 흐름 → 작업자, or the role 작업자 on any
-  object). An operator walks at 걷는 속도 (1.2 m/s), straight, and goes
+  object). The library's is drawn as a person at work, 1.75 m: safety
+  shoes, work trousers, an orange safety vest with reflective bands,
+  arms bent before the body where a part is carried, and a hard hat. It
+  moves as it goes: walking, its legs swing from the hips, the one behind
+  bent at the knee, and its arms swing against them (not while it
+  carries a part); at work at a station, its hands go to and fro. An
+  operator walks at 걷는 속도 (1.2 m/s), straight, and goes
   round others.
   - A station with **작업자: 작업자 필요** starts a cycle only once an
     operator is at it. When a part is ready, the nearest free operator
     walks to the front of the station, works there for the cycle, and is
     free again where they stand.
-  - **보내는 방법: 작업자** has the nearest free operator fetch the part,
+  - **보내는 방법: 작업자** has the nearest free operator who may carry it
+    fetch the part,
     pick it up (2 s), carry it at waist height to the front of where it
     goes, and put it down (2 s).
   - Each operator gets a lane in the timeline: 보행, 작업 and idle, and
     their utilization. An operator always busy is the line's bottleneck.
   - **맡는 공정** in an operator's inspector: the stations they may work
-    at. None picked means any. Carrying parts is anyone's.
+    at. None picked means any. One kept to stations carries only the
+    parts that come from or go to them; one free to work anywhere
+    carries any.
   - **근무 시작 / 끝** (hours of the day, the flow's start being 0:00):
     off shift they take no new work, and the timeline shows 근무 외.
     The same start and end means all day.

@@ -24,6 +24,114 @@ use serde_json::{json, Value};
 /// `site << 48`; the last site is never a participant.
 pub const PARTS: u64 = 0xFFFF << 48;
 
+/// What a flow part can look like, by number: a part as it always was; a
+/// car body at its stage — welded steel, painted, finished; or a display at
+/// its — the mother glass, a panel cut from it, the module built on that.
+pub const LOOKS: &[&str] = &[
+    "부품",
+    "차체 (BIW)",
+    "도장 차체",
+    "완성차",
+    "유리 기판",
+    "LCD 패널",
+    "LCD 모듈",
+    "유리 카세트",
+];
+
+/// How far apart parts of each look stand in line at a station, and the
+/// lanes they stand in in a store, metres. A part of the first look is set
+/// out on its station's table instead.
+const LOOK_PITCH: [(f64, f64); 8] = [
+    (0.0, 0.0),
+    (5.2, 2.6),
+    (5.2, 2.6),
+    (5.2, 2.6),
+    (3.0, 2.6),
+    (1.0, 0.7),
+    (1.0, 0.7),
+    (3.0, 2.8),
+];
+
+/// How far apart parts of each look are stacked one over another in a store,
+/// metres, and how many to a stack — sheets and panels twenty high, cassettes
+/// five on a stocker's shelves; none for a car body, which stands in lanes.
+const LOOK_STACK: [(f64, usize); 8] = [
+    (0.0, 1),
+    (0.0, 1),
+    (0.0, 1),
+    (0.0, 1),
+    (0.25, 20),
+    (0.08, 20),
+    (0.08, 20),
+    (1.2, 5),
+];
+
+/// How high a sheet is lifted to go between a tool and a stocker, metres:
+/// it goes overhead, as on an overhead hoist's rail, not across the floor.
+const LIFT: f64 = 4.5;
+
+/// A part of a look drawn in pieces, one for each colour of it, under the
+/// part: always all of them (empty if it has fewer colours), so that a part
+/// changing its look leaves none behind.
+const LOOK_PIECES: u64 = 8;
+
+/// The identity of piece `k` of the look part `uid` is drawn in.
+fn look_piece(uid: u64, k: u64) -> u64 {
+    PARTS + (1 << 40) + (uid - PARTS) * LOOK_PIECES + k
+}
+
+/// How many colours a painted car body comes in, one after another.
+const CAR_COLOURS: usize = 5;
+
+/// Which of [`look_meshes`] part `p` is drawn with: a car body's stage and
+/// colour — steel for a welded one, else one of the colours in turn — or
+/// a display's stage; a cassette on a stocker's crane, with the crane.
+fn look_key(p: &Part) -> usize {
+    if p.look == 7 && p.rail.is_some() && matches!(p.flow, Some(flow::Place::Moving { .. })) {
+        return CRANE_LOOK;
+    }
+    match p.look as usize {
+        look @ 1..=3 => {
+            let colour = if look == 1 {
+                0
+            } else {
+                ((p.uid - PARTS) % CAR_COLOURS as u64) as usize
+            };
+            (look - 1) * CAR_COLOURS + colour
+        }
+        look => 3 * CAR_COLOURS + (look - 4).min(3),
+    }
+}
+
+/// The meshes each look is drawn with, at each stage and colour: made once.
+fn look_meshes() -> &'static Vec<crate::library::LookMeshes> {
+    static MADE: std::sync::OnceLock<Vec<crate::library::LookMeshes>> = std::sync::OnceLock::new();
+    MADE.get_or_init(|| {
+        (1..=3)
+            .flat_map(|look| (0..CAR_COLOURS).map(move |c| crate::library::car_look(look - 1, c)))
+            .chain((0..4).map(crate::library::display_look))
+            .chain(std::iter::once(
+                [crate::library::display_look(3), crane_look().clone()].concat(),
+            ))
+            .collect()
+    })
+}
+
+/// How small a glass robot's sheet is drawn while it carries none: out of
+/// sight, not gone, so that it is there to show again.
+pub(crate) const NO_GLASS: f64 = 1e-4;
+
+/// The look of a cassette on a stocker's crane: the cassette's pieces,
+/// then the crane's (see [`crane_look`]).
+const CRANE_LOOK: usize = 3 * CAR_COLOURS + 4;
+
+/// A stocker's crane, its pieces drawn at the rail under the cassette it
+/// carries, not under the cassette itself.
+fn crane_look() -> &'static crate::library::LookMeshes {
+    static MADE: std::sync::OnceLock<crate::library::LookMeshes> = std::sync::OnceLock::new();
+    MADE.get_or_init(|| crate::library::display_look(4))
+}
+
 /// A raw part: a steel bar Ø60 × 80 mm, standing on end.
 pub const RAW: (f64, f64) = (0.03, 0.08);
 /// A finished part: turned to Ø55 × 75 mm.
@@ -324,6 +432,10 @@ pub struct Props {
     /// A station's change-over: seconds before a part of another product
     /// than the last it worked on.
     pub setup: f64,
+    /// What a source's or a station's parts look like once it has made
+    /// them, by number (see [`LOOKS`]): a part, or a car body at a stage
+    /// of the car plant — to see a car go down its line as it is built.
+    pub look: u32,
     /// A buffer's order: first in first out (0), or last in first out (1).
     pub policy: u32,
     /// A source's limit on its parts in the flow at once — a kanban: none
@@ -338,6 +450,15 @@ pub struct Props {
     pub battery: f64,
     pub charge: f64,
     pub charger: u32,
+    /// A buffer that is a stocker (1): it sends each part on to the next
+    /// step of its recipe (see `Cell::recipes`), whichever tool that is,
+    /// and on as its links say once the recipe is done.
+    pub dispatch: u32,
+    /// A stocker whose crane carries its parts (1): it runs on a rail
+    /// along the stocker's length, past the tools' load ports, and a part
+    /// sent from or to the stocker goes across onto the rail, along it, and
+    /// across off it, under it the crane.
+    pub rail: u32,
     /// An operator's shift, hours of the day on the flow's clock (from
     /// its start at hour 0): from, to; the same, all day.
     pub shift_from: f64,
@@ -384,12 +505,15 @@ impl Default for Props {
             mttr: 0.0,
             scrap: 0.0,
             setup: 0.0,
+            look: 0,
             policy: 0,
             kanban: 0,
             rule: 0,
             battery: 0.0,
             charge: 60.0,
             charger: 0,
+            dispatch: 0,
+            rail: 0,
             shift_from: 0.0,
             shift_to: 0.0,
             wage: 0.0,
@@ -543,6 +667,12 @@ impl Props {
         self.charger = v["charger"]
             .as_f64()
             .map_or(self.charger, |x| if x > 0.5 { 1 } else { 0 });
+        self.dispatch = v["dispatch"]
+            .as_f64()
+            .map_or(self.dispatch, |x| if x > 0.5 { 1 } else { 0 });
+        self.rail = v["rail"]
+            .as_f64()
+            .map_or(self.rail, |x| if x > 0.5 { 1 } else { 0 });
         self.kanban = v["kanban"]
             .as_f64()
             .map_or(self.kanban, |x| x.clamp(0.0, 100000.0) as u32);
@@ -555,6 +685,9 @@ impl Props {
         self.setup = v["setup"]
             .as_f64()
             .map_or(self.setup, |x| x.clamp(0.0, 36000.0));
+        self.look = v["look"].as_f64().map_or(self.look, |x| {
+            x.round().clamp(0.0, (LOOKS.len() - 1) as f64) as u32
+        });
     }
 
     fn to_json(self) -> Value {
@@ -584,6 +717,7 @@ impl Props {
             "mttr": self.mttr,
             "scrap": self.scrap,
             "setup": self.setup,
+            "look": self.look,
             "policy": self.policy,
             "kanban": self.kanban,
             "battery": self.battery,
@@ -592,6 +726,8 @@ impl Props {
             "shift_to": self.shift_to,
             "charge": self.charge,
             "charger": self.charger,
+            "dispatch": self.dispatch,
+            "rail": self.rail,
             "rule": self.rule,
             "takes": self.takes,
             "makes": self.makes,
@@ -713,6 +849,14 @@ pub struct Part {
     /// The source it came in at, and the order it was made for (0: none).
     pub origin: u64,
     pub order: u32,
+    /// The step of its source's recipe it goes to next.
+    pub step: u32,
+    /// What it looks like (see [`LOOKS`]): as the last flow piece that
+    /// made it has it.
+    pub look: u32,
+    /// On its way by a stocker's crane: where it goes onto the rail, where
+    /// off it, and the rail's way (see `Props::rail`).
+    pub rail: Option<[DVec3; 3]>,
 }
 
 impl Part {
@@ -896,6 +1040,10 @@ pub struct Cell {
     /// The process flow: where each of its parts goes next, how each
     /// stands, whether it runs (see `flow`).
     flow_next: BTreeMap<u64, Vec<u64>>,
+    /// Each source's recipe: the stations its parts go through, in order —
+    /// a tool more than once if the recipe says (a pattern repeated, as a
+    /// display's masks are) — sent to each in turn by a stocker.
+    recipes: BTreeMap<u64, Vec<u64>>,
     stations: BTreeMap<u64, flow::Station>,
     flow_on: bool,
     flow_stats: flow::Stats,
@@ -1075,6 +1223,8 @@ struct Rover {
     at: DVec3,
     yaw: f64,
     legs: Vec<Leg>,
+    /// How far it has walked, metres: a person's stride is drawn from it.
+    walked: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1106,6 +1256,10 @@ fn pose_of(at: DVec3, yaw: f64) -> DAffine3 {
 fn turn_between(from: f64, to: f64) -> f64 {
     (to - from + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }
+
+/// The longest step the cell is worked out over at once, seconds of the
+/// simulation's clock: however fast it runs, it is stepped no coarser.
+const MOST_STEP: f64 = 0.2;
 
 /// How often a running cell tells the viewers how it is getting on.
 const REPORT: Duration = Duration::from_millis(100);
@@ -1319,6 +1473,13 @@ impl Cell {
                     .collect();
                 self.flow_next.insert(object, next);
             }
+            if let (Some(object), Some(steps)) = (found, saved["recipe"].as_array()) {
+                let steps: Vec<u64> = steps
+                    .iter()
+                    .filter_map(|n| n.as_str().and_then(|s| s.parse().ok()))
+                    .collect();
+                self.recipes.insert(object, steps);
+            }
             if let Some(object) = found {
                 let floats = |v: &Value| -> Option<Vec<f64>> {
                     Some(v.as_array()?.iter().filter_map(Value::as_f64).collect())
@@ -1430,6 +1591,9 @@ impl Cell {
                     "plc": c.plc,
                     "mirror": c.mirror.as_ref().map(crate::mtconnect::Source::to_json),
                     "next": self.flow_next.get(&c.object).map(|n| {
+                        n.iter().map(u64::to_string).collect::<Vec<_>>()
+                    }),
+                    "recipe": self.recipes.get(&c.object).map(|n| {
                         n.iter().map(u64::to_string).collect::<Vec<_>>()
                     }),
                     "lanes": self.lanes.get(&c.object).map(|n| {
@@ -1905,6 +2069,9 @@ impl Cell {
             product: 0,
             origin: 0,
             order: 0,
+            step: 0,
+            look: 0,
+            rail: None,
         });
         self.changed = true;
     }
@@ -2287,6 +2454,20 @@ impl Cell {
                 self.flow_cfg = flow::Settings::of(&req);
                 self.roles_changed = true;
                 self.changed = true;
+            }
+            // A source's recipe: `steps` (stations), all of it `repeat`
+            // times — a display's five masks, its glass back to the same
+            // tools each time.
+            "flow_recipe" => {
+                let object = uid("object")?;
+                let steps: Vec<u64> = req["steps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| n.as_str().and_then(|s| s.parse::<u64>().ok()))
+                    .collect();
+                let repeat = req["repeat"].as_u64().unwrap_or(1).clamp(1, 100) as usize;
+                self.set_recipe(object, steps.repeat(repeat))?;
             }
             "flow_next" => {
                 let next = req["next"]
@@ -2935,9 +3116,24 @@ impl Cell {
     /// have anything to look at again: at a change of state at once, and
     /// while running, every [`REPORT`] of real time `now`.
     pub fn tick(&mut self, doc: &Document, sim: f64, now: Instant) -> bool {
-        let dt = self.last_tick.map_or(0.0, |t| (sim - t).max(0.0));
-        self.last_tick = Some(sim);
-        let (moving, finished) = self.step(doc, dt);
+        // In steps of at most `MOST_STEP`: run fast, the clock goes on
+        // seconds between two looks, and the cell worked out over them at
+        // once would jump — an AMR past a stop, a part past its station.
+        let from = self.last_tick.unwrap_or(sim).min(sim);
+        let steps = ((sim - from) / MOST_STEP).ceil().max(1.0) as usize;
+        let (mut moving, mut finished) = (false, false);
+        for k in 1..=steps {
+            let t = if k == steps {
+                sim
+            } else {
+                from + (sim - from) * k as f64 / steps as f64
+            };
+            let dt = self.last_tick.map_or(0.0, |last| (t - last).max(0.0));
+            self.last_tick = Some(t);
+            let (m, f) = self.step(doc, dt);
+            moving |= m;
+            finished |= f;
+        }
         let due = self
             .last_report
             .is_none_or(|t| now.duration_since(t) >= REPORT);
@@ -3120,6 +3316,7 @@ impl Cell {
             at,
             yaw,
             legs: Vec::new(),
+            walked: 0.0,
         })
     }
 
@@ -3244,10 +3441,12 @@ impl Cell {
                         let can = c.props.speed.max(0.01) * left;
                         if need <= can {
                             r.at = to;
+                            r.walked += need;
                             left -= need / c.props.speed.max(0.01);
                             r.legs.remove(0);
                         } else {
                             r.at += (to - r.at) / need * can;
+                            r.walked += can;
                             left = 0.0;
                         }
                     }
@@ -3345,6 +3544,7 @@ impl Cell {
                 at: to,
                 yaw: seen.theta,
                 legs: Vec::new(),
+                walked: 0.0,
             },
         );
         self.changed = true;
@@ -3587,6 +3787,9 @@ impl Cell {
             o.transform.translation = translation;
             o.transform.rotation = rotation;
             o.transform.scale = scale;
+            if c.kind == Kind::Operator {
+                self.pose_person(doc, id, c.object, r);
+            }
             uids.extend(
                 doc.objects()
                     .filter(|(o, _)| *o == id || is_below(doc, *o, id))
@@ -3594,6 +3797,235 @@ impl Cell {
             );
         }
         uids
+    }
+
+    /// The robots that tend a station while it works — a glass transfer
+    /// robot taking each sheet from its cassette into the tool and back —
+    /// moving as they would, in `doc`, the scene as shown: the base turning
+    /// between the cassette and the tool, the arm reaching and drawing back,
+    /// a sheet every few seconds. Only a robot standing within `ARM_REACH`
+    /// of a station at work. Returns the objects moved.
+    fn move_arms(&self, doc: &mut Document) -> Vec<u64> {
+        const ARM_REACH: f64 = 6.0;
+        // One sheet in and one out every six seconds of the clock.
+        const SHEET: f64 = 6.0;
+        let working: Vec<DVec3> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Station)
+            .filter(|c| {
+                self.stations
+                    .get(&c.object)
+                    .is_some_and(|s| s.working.is_some())
+            })
+            .filter_map(|c| {
+                self.docks_seen
+                    .as_ref()
+                    .and_then(|d| d.docks.get(&c.object))
+                    .map(|d| d.0)
+            })
+            .collect();
+        if working.is_empty() {
+            return Vec::new();
+        }
+        let roots: Vec<(u64, DAffine3)> = doc
+            .objects()
+            .filter(|(id, o)| {
+                matches!(o.robot, Some(kreate_scene::robot::RobotPart::Link { .. }))
+                    && doc.robot_root(*id) == Some(*id)
+            })
+            .filter_map(|(id, _)| Some((doc.object_uid(id)?.raw(), doc.world_transform(id))))
+            .collect();
+        let now = self.last_tick.unwrap_or(0.0);
+        let mut moved = Vec::new();
+        for (k, (root, place)) in roots.into_iter().enumerate() {
+            let at = place.translation;
+            let Some(port) = working
+                .iter()
+                .filter(|w| w.truncate().distance(at.truncate()) < ARM_REACH)
+                .min_by(|a, b| {
+                    a.truncate()
+                        .distance(at.truncate())
+                        .total_cmp(&b.truncate().distance(at.truncate()))
+                })
+            else {
+                continue;
+            };
+            let Some(kin) = kynex_kin::Kinematics::of(doc, root) else {
+                continue;
+            };
+            // A glass robot (a lifting column, its second joint sliding):
+            // it turns to the cassette on the load port and reaches in
+            // with its fork as far as the port is, draws back, turns to
+            // the tool — the way it was placed facing — and reaches in.
+            if kin.vars.len() >= 5
+                && matches!(kin.vars[1].kind, kreate_scene::robot::JointKind::Prismatic)
+            {
+                use std::f64::consts::{PI, TAU};
+                // Its arms, 1.2 and 1.0 m: folded by `f`, the wrist
+                // 2.2 cos(f/2) out; the fork's middle 1.2 m on from it, its
+                // tips 2.1 m, the sheet's edge 2.3 m. Folded all the way it
+                // turns within 2.6 m, clear of the tools.
+                let fold_for = |wrist: f64| 2.0 * (wrist / 2.2).clamp(-1.0, 1.0).acos();
+                const FOLDED: f64 = 2.9;
+                let local = place.inverse().transform_point3(*port);
+                let cassette = local.y.atan2(local.x);
+                // The tool straight ahead, reached by the shorter way round:
+                // its front 3.4 m away, the sheet set at its face.
+                let tool = cassette + (-cassette + PI).rem_euclid(TAU) - PI;
+                let u = (now / SHEET + k as f64 * 0.37).fract();
+                let v = (u * 2.0).fract();
+                let (from, to, fold) = if u < 0.5 {
+                    // The wrist and its joint (0.2 m round) kept short of the
+                    // cassette's edge, 1.35 m from its middle: only the hand
+                    // and the fork go over it.
+                    (tool, cassette, fold_for(local.truncate().length() - 1.6))
+                } else {
+                    (cassette, tool, fold_for(3.2 - 2.3))
+                };
+                let ease = |x: f64| (1.0 - (PI * x.clamp(0.0, 1.0)).cos()) / 2.0;
+                let turn = from + (to - from) * ease(v / 0.25);
+                let reach = if v < 0.25 {
+                    0.0
+                } else {
+                    (PI * (v - 0.25) / 0.75).sin()
+                };
+                // A sheet taken from the cassette at the far end of the
+                // reach, and given into the tool at the far end of the next.
+                let carrying = (u < 0.5) == (v >= 0.625);
+                let f = FOLDED + (fold - FOLDED) * reach;
+                let mut q = kin.current.clone();
+                q[0] = (turn + PI).rem_euclid(TAU) - PI;
+                // The hand and fork just clear of a cassette's top on a port
+                // 0.7 m up (1.8 m).
+                q[1] = 0.12 + 0.03 * (TAU * v).sin();
+                q[2] = -f / 2.0;
+                q[3] = f;
+                q[4] = -f / 2.0;
+                for (v, var) in q.iter_mut().zip(&kin.vars).skip(1) {
+                    *v = v.clamp(var.lower, var.upper);
+                }
+                let sheet = doc
+                    .objects()
+                    .find(|(id, o)| {
+                        o.name == "glass"
+                            && doc
+                                .robot_root(*id)
+                                .is_some_and(|r| doc.object_uid(r).is_some_and(|u| u.raw() == root))
+                    })
+                    .map(|(id, _)| id);
+                if let Some(id) = sheet {
+                    let scale = DVec3::splat(if carrying { 1.0 } else { NO_GLASS });
+                    let o = doc.object_mut(id).unwrap();
+                    if o.transform.scale != scale {
+                        o.transform.scale = scale;
+                        if let Some(uid) = doc.object_uid(id) {
+                            moved.push(uid.raw());
+                        }
+                    }
+                }
+                moved.extend(kin.apply(doc, &q).into_iter().map(|u| u.raw()));
+                continue;
+            }
+            let phase = std::f64::consts::TAU * now / SHEET + k as f64;
+            let mut q = kin.current.clone();
+            for (j, amp) in [0.9, 0.25, -0.35, 0.0, 0.3].into_iter().enumerate() {
+                if let Some(v) = q.get_mut(j) {
+                    *v += amp * phase.sin() * if j == 0 { 1.0 } else { (2.0 * phase).cos() };
+                }
+            }
+            moved.extend(kin.apply(doc, &q).into_iter().map(|u| u.raw()));
+        }
+        moved
+    }
+
+    /// Person `who`'s limbs as they move, in `doc`, the scene as shown
+    /// (made anew each time, so from the pose the person was built in):
+    /// walking, the legs swing from the hips, the leg behind bent at the
+    /// knee, and the arms swing against them — not while carrying a part,
+    /// held before them; at work at a station, the hands go to and fro.
+    /// The limbs are found by name, as the library makes a person
+    /// (`library::interior::person`); one made otherwise is left as it is.
+    fn pose_person(&self, doc: &mut Document, root: ObjectId, who: u64, r: &Rover) {
+        // One stride (two steps) every 1.4 m: a walk at 1.2 m/s.
+        const STRIDE: f64 = 1.4;
+        let walking = r.legs.iter().any(|l| matches!(l, Leg::Walk(_)));
+        let carrying = self
+            .parts
+            .iter()
+            .any(|p| matches!(p.flow, Some(flow::Place::Riding { amr, .. }) if amr == who));
+        let working = self
+            .stations
+            .values()
+            .any(|s| s.crew == Some(who) && s.working.is_some());
+        if !walking && !working {
+            return;
+        }
+        let phase = r.walked / STRIDE * std::f64::consts::TAU;
+        let swing = if walking { 0.45 * phase.sin() } else { 0.0 };
+        let now = self.last_tick.unwrap_or(0.0);
+        // About an axis along Y through `pivot`, in the person's own frame.
+        let turn = |doc: &mut Document, name: &'static str, pivot: DVec3, angle: f64| {
+            if angle.abs() < 1e-6 {
+                return;
+            }
+            let Some(id) = part_named(doc, root, name) else {
+                return;
+            };
+            let about = DAffine3::from_translation(pivot)
+                * DAffine3::from_rotation_y(angle)
+                * DAffine3::from_translation(-pivot);
+            let t = &mut doc.object_mut(id).unwrap().transform;
+            let (scale, rotation, translation) =
+                (about * t.to_affine()).to_scale_rotation_translation();
+            t.translation = translation;
+            t.rotation = rotation;
+            t.scale = scale;
+        };
+        type Limbs = [&'static str; 4];
+        let sides: [(f64, f64, Limbs, Limbs); 2] = [
+            (
+                -1.0,
+                1.0,
+                ["thigh_right", "knee_right", "shin_right", "shoe_right"],
+                [
+                    "upper_arm_right",
+                    "elbow_right",
+                    "forearm_right",
+                    "hand_right",
+                ],
+            ),
+            (
+                1.0,
+                -1.0,
+                ["thigh_left", "knee_left", "shin_left", "shoe_left"],
+                ["upper_arm_left", "elbow_left", "forearm_left", "hand_left"],
+            ),
+        ];
+        for (y, sign, leg, arm) in sides {
+            // A positive turn about Y takes a hanging limb backwards.
+            let back = sign * swing;
+            // The knee bends only as the leg goes back, more as it goes.
+            let knee = 0.9 * (back / 0.45).max(0.0) * 0.6;
+            for name in &leg[2..] {
+                turn(doc, name, DVec3::new(0.0, 0.1 * y, 0.51), knee);
+            }
+            for name in leg {
+                turn(doc, name, DVec3::new(0.0, 0.1 * y, 0.94), back);
+            }
+            if walking && !carrying {
+                for name in arm {
+                    turn(doc, name, DVec3::new(0.0, 0.215 * y, 1.43), -0.7 * back);
+                }
+            }
+            if working && !walking {
+                // Hands at work, in turn, about the elbow.
+                let to_and_fro = 0.25 * (now * 7.0 + if y < 0.0 { 0.0 } else { 2.0 }).sin();
+                for name in &arm[2..] {
+                    turn(doc, name, DVec3::new(0.0, 0.215 * y, 1.13), to_and_fro);
+                }
+            }
+        }
     }
 
     /// What the viewers need to look at again when the scene shown has
@@ -3729,6 +4161,7 @@ impl Cell {
             .open_doors(doc)
             .into_iter()
             .chain(self.place_rovers(doc))
+            .chain(self.move_arms(doc))
         {
             changes
                 .changed
@@ -3793,7 +4226,84 @@ impl Cell {
             doc.set_mesh_slot(mesh, 0, Some(material));
             meshes.insert((finished, product), mesh);
         }
+        // Parts of a look — car bodies, displays — each look's meshes, then
+        // each part's pieces under it.
+        let mut car_meshes: BTreeMap<usize, Vec<(kreate_scene::MeshId, kreate_scene::MaterialId)>> =
+            BTreeMap::new();
+        for part in self.parts.iter().filter(|p| p.look > 0) {
+            let key = look_key(part);
+            if car_meshes.contains_key(&key) {
+                continue;
+            }
+            let made = look_meshes()[key]
+                .iter()
+                .enumerate()
+                .map(|(g, (rgb, mesh))| {
+                    let uid = Uid::from_raw(PARTS + 1000 + (key as u64) * LOOK_PIECES + g as u64);
+                    let material = doc.restore_material(
+                        Material {
+                            name: "car body".into(),
+                            base_color: SceneRgb::new(rgb[0], rgb[1], rgb[2]),
+                            ..Material::default()
+                        },
+                        uid,
+                    );
+                    let mesh = doc.restore_mesh(mesh.clone(), uid);
+                    doc.set_mesh_slot(mesh, 0, Some(material));
+                    (mesh, material)
+                })
+                .collect();
+            car_meshes.insert(key, made);
+        }
         for part in &self.parts {
+            if part.look > 0 {
+                // On the floor under its centre, as a body stands.
+                let (_, rotation, translation) = part.world.to_scale_rotation_translation();
+                let mut root = Object::new(LOOKS[part.look as usize], ObjectData::Empty);
+                root.transform.translation = translation - DVec3::Z * part.size().1 / 2.0;
+                root.transform.rotation = rotation;
+                let root = doc.restore_object(root, Uid::from_raw(part.uid));
+                changes
+                    .changed
+                    .insert((DatablockKind::Object, Uid::from_raw(part.uid)));
+                let key = look_key(part);
+                let pieces = &car_meshes[&key];
+                // The crane's pieces, where it is on its rail: under the
+                // cassette as it goes along, beside it as it is put across.
+                let crane = match part.rail {
+                    Some([a, b, along]) if key == CRANE_LOOK => {
+                        let floor = translation - DVec3::Z * part.size().1 / 2.0;
+                        let (lo, hi) = (
+                            a.dot(along).min(b.dot(along)),
+                            a.dot(along).max(b.dot(along)),
+                        );
+                        let s = floor.dot(along).clamp(lo, hi);
+                        let on = a + along * (s - a.dot(along));
+                        let on = DVec3::new(on.x, on.y, 0.0);
+                        Some((
+                            pieces.len() - crane_look().len(),
+                            rotation.inverse() * (on - floor),
+                        ))
+                    }
+                    _ => None,
+                };
+                for k in 0..LOOK_PIECES {
+                    let data = pieces
+                        .get(k as usize)
+                        .map_or(ObjectData::Empty, |(mesh, _)| ObjectData::Mesh(*mesh));
+                    let mut piece = Object::new("piece", data);
+                    piece.parent = Some(root);
+                    if let Some((first, offset)) = crane {
+                        if k as usize >= first {
+                            piece.transform.translation = offset;
+                        }
+                    }
+                    let uid = Uid::from_raw(look_piece(part.uid, k));
+                    doc.restore_object(piece, uid);
+                    changes.changed.insert((DatablockKind::Object, uid));
+                }
+                continue;
+            }
             let mut object = Object::new(
                 if part.finished { "완성품" } else { "소재" },
                 ObjectData::Mesh(meshes[&(part.finished, part.product)]),
@@ -3812,9 +4322,18 @@ impl Cell {
     /// The parts taken away since the viewers were last told, as changes.
     pub fn take_removed(&mut self) -> Changes {
         let mut changes = Changes::default();
-        changes
-            .removed
-            .extend(self.removed.drain(..).map(Uid::from_raw));
+        for uid in std::mem::take(&mut self.removed) {
+            changes.removed.insert(Uid::from_raw(uid));
+            // The pieces of the car body it may have been drawn as, with it,
+            // whether or not it was: what this cell drew is not all it knows
+            // (a scenario taken back, an edit undone, starts it afresh), and
+            // a piece the viewers do not have is let go of as nothing.
+            if (PARTS..PARTS + (1 << 40)).contains(&uid) {
+                changes
+                    .removed
+                    .extend((0..LOOK_PIECES).map(|k| Uid::from_raw(look_piece(uid, k))));
+            }
+        }
         changes
     }
 
@@ -4032,6 +4551,7 @@ pub fn is_op(op: &str) -> bool {
             | "mirror"
             | "flow"
             | "flow_next"
+            | "flow_recipe"
             | "amr_lanes"
             | "flow_products"
             | "flow_orders"
@@ -4532,7 +5052,15 @@ mod tests {
         cell.apply(&mut shown);
         ask(&mut cell, &doc, json!({"op": "clear_parts"}));
         let changes = cell.apply(&mut doc.clone());
-        assert_eq!(changes.removed.len(), 20);
+        assert_eq!(parts_in(&changes.removed), 20);
+    }
+
+    /// How many of `removed` are parts, not the pieces of a car body.
+    fn parts_in(removed: &std::collections::BTreeSet<Uid>) -> usize {
+        removed
+            .iter()
+            .filter(|u| u.raw() >= PARTS && u.raw() < PARTS + (1 << 40))
+            .count()
     }
 
     /// One piece of library equipment alone, its roles given.
@@ -4662,7 +5190,7 @@ mod tests {
         library.apply(&mut gone);
         cell.carry(&after, &gone);
         assert!(cell.parts().is_empty());
-        assert_eq!(cell.take_removed().removed.len(), count);
+        assert_eq!(parts_in(&cell.take_removed().removed), count);
     }
 
     #[test]

@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<!-- A glass transfer robot of the size a display fab's tools are fed by: a
+     turning column on its base, a carriage lifting on it, two horizontal
+     arms (1.2 and 1.0 m) and a wrist carrying a fork of four fingers, 1.8 m
+     long, that a sheet of mother glass (2.2 x 2.5 m) lies on; folded, it
+     turns within 2.6 m. The sheet it carries is a link of its own, `glass`,
+     shown only while it carries one. Drawn in plain shapes. -->
+<robot name="glass_robot">
+  <material name="robot_white"><color rgba="0.92 0.93 0.94 1"/></material>
+  <material name="robot_blue"><color rgba="0.16 0.36 0.66 1"/></material>
+  <material name="robot_dark"><color rgba="0.20 0.22 0.25 1"/></material>
+  <material name="fork"><color rgba="0.75 0.77 0.80 1"/></material>
+  <material name="glass_sheet"><color rgba="0.62 0.78 0.84 1"/></material>
+  <link name="base_link">
+    <visual><origin xyz="0 0 0.15"/><geometry><box size="1.1 1.1 0.3"/></geometry><material name="robot_dark"/></visual>
+  </link>
+  <joint name="joint_1" type="revolute">
+    <parent link="base_link"/><child link="column"/>
+    <origin xyz="0 0 0.3"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="2000" velocity="1.5"/>
+  </joint>
+  <link name="column">
+    <visual><origin xyz="0 0 0.25"/><geometry><cylinder radius="0.45" length="0.5"/></geometry><material name="robot_white"/></visual>
+    <visual><origin xyz="0 0 0.5"/><geometry><cylinder radius="0.47" length="0.04"/></geometry><material name="robot_blue"/></visual>
+  </link>
+  <joint name="joint_2" type="prismatic">
+    <parent link="column"/><child link="carriage"/>
+    <origin xyz="0 0 0.53"/><axis xyz="0 0 1"/>
+    <limit lower="0" upper="0.6" effort="5000" velocity="0.5"/>
+  </joint>
+  <link name="carriage">
+    <visual><origin xyz="0 0 0.2"/><geometry><box size="0.8 0.8 0.4"/></geometry><material name="robot_blue"/></visual>
+  </link>
+  <joint name="joint_3" type="revolute">
+    <parent link="carriage"/><child link="arm_1"/>
+    <origin xyz="0 0 0.53"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="1500" velocity="2.0"/>
+  </joint>
+  <link name="arm_1">
+    <visual><origin xyz="0.6 0 0"/><geometry><box size="1.5 0.42 0.22"/></geometry><material name="robot_white"/></visual>
+    <visual><origin xyz="1.2 0 0"/><geometry><cylinder radius="0.24" length="0.24"/></geometry><material name="robot_blue"/></visual>
+  </link>
+  <joint name="joint_4" type="revolute">
+    <parent link="arm_1"/><child link="arm_2"/>
+    <origin xyz="1.2 0 0.23"/><axis xyz="0 0 1"/>
+    <limit lower="-2.95" upper="2.95" effort="1000" velocity="2.5"/>
+  </joint>
+  <link name="arm_2">
+    <visual><origin xyz="0.5 0 0"/><geometry><box size="1.3 0.36 0.2"/></geometry><material name="robot_white"/></visual>
+    <visual><origin xyz="1.0 0 0"/><geometry><cylinder radius="0.2" length="0.22"/></geometry><material name="robot_blue"/></visual>
+  </link>
+  <joint name="joint_5" type="revolute">
+    <parent link="arm_2"/><child link="hand"/>
+    <origin xyz="1.0 0 0.2"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="500" velocity="3.0"/>
+  </joint>
+  <link name="hand">
+    <visual><origin xyz="0.15 0 0"/><geometry><box size="0.3 2.0 0.12"/></geometry><material name="robot_dark"/></visual>
+    <visual><origin xyz="1.2 -0.9 0"/><geometry><box size="1.8 0.08 0.04"/></geometry><material name="fork"/></visual>
+    <visual><origin xyz="1.2 -0.3 0"/><geometry><box size="1.8 0.08 0.04"/></geometry><material name="fork"/></visual>
+    <visual><origin xyz="1.2 0.3 0"/><geometry><box size="1.8 0.08 0.04"/></geometry><material name="fork"/></visual>
+    <visual><origin xyz="1.2 0.9 0"/><geometry><box size="1.8 0.08 0.04"/></geometry><material name="fork"/></visual>
+  </link>
+  <joint name="hand-glass" type="fixed">
+    <parent link="hand"/><child link="glass"/><origin xyz="1.2 0 0.03"/>
+  </joint>
+  <link name="glass">
+    <visual><geometry><box size="2.2 2.5 0.012"/></geometry><material name="glass_sheet"/></visual>
+  </link>
+  <joint name="hand-tool0" type="fixed">
+    <parent link="hand"/><child link="tool0"/><origin xyz="1.2 0 0.05"/>
+  </joint>
+  <link name="tool0"/>
+</robot>

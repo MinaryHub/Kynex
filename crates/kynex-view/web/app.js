@@ -58,7 +58,13 @@ camera.position.set(2.4, -3.2, 2.2);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
-controls.dampingFactor = 0.12;
+// Brisk: the view stops soon after the pointer does, rather than gliding on.
+controls.dampingFactor = 0.25;
+// Toward what is under the pointer, not the middle of the view: on a big
+// floor, one wheel goes where one is looking.
+controls.zoomToCursor = true;
+controls.zoomSpeed = 1.6;
+controls.panSpeed = 1.3;
 controls.screenSpacePanning = true;
 controls.target.set(0, 0, 0.4);
 
@@ -372,6 +378,10 @@ function onScene(data) {
   records.clear();
   jointKinds.clear();
   for (const r of data.robots) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
+  // See-through copies drew the scene before this one: let go. (A scene
+  // arrives after the page has run through, so `xray` is there by then.)
+  xrayOff();
+  xray.items = null;
   batch.reset(data.meshes, data.objects.length);
   // The batch has its own copy of every vertex now.
   for (const levels of data.meshes.values()) for (const g of levels) g.dispose();
@@ -474,7 +484,11 @@ function connect() {
   source.addEventListener('update', () => benchUpdates++);
   source.addEventListener('update', (e) => takeUpdate(JSON.parse(e.data)));
   source.addEventListener('status', (e) => onStatus(JSON.parse(e.data)));
-  source.addEventListener('pose', (e) => robotPanel.setPose(JSON.parse(e.data)));
+  source.addEventListener('pose', (e) => {
+    const pose = JSON.parse(e.data);
+    robotPanel.setPose(pose);
+    timelinePanel.setClock(pose.clock);
+  });
   source.addEventListener('programs', (e) => robotPanel.setPrograms(JSON.parse(e.data)));
   source.addEventListener('contacts', (e) => setContacts(JSON.parse(e.data)));
   source.addEventListener('library', (e) => libraryPanel.setLibrary(JSON.parse(e.data)));
@@ -1512,8 +1526,180 @@ function quietMarkers() {
   }
 }
 
+// ---- see-through equipment ---------------------------------------------------
+// A product of the flow hidden by equipment — a car body in a paint booth or
+// an oven — shows through it: equipment between the camera and a product is
+// drawn see-through, while it is. Looked at by each piece of equipment's
+// box, a few times a second, not by every part's triangles: the batch has
+// thousands, the floor a few hundred pieces of equipment.
+
+const PARTS = 0xffffn << 48n;
+const PIECES = 1n << 40n;
+// A car body's root stands on the floor: its middle is this far up.
+const BODY_NAMES = new Set(['차체 (BIW)', '도장 차체', '완성차']);
+const xray = { group: new THREE.Group(), on: new Map(), items: null, walls: new Map(), key: '', at: 0, built: 0, seen: new Map() };
+// The building and what hangs in it are never drawn see-through for a
+// product they hide: columns and lamps in the way as the view moves would
+// flicker in and out. Walls are, by another rule (see `WALLS`).
+const XRAY_NEVER = new Set(['factory_wall', 'factory_column', 'ceiling_light', 'pipe_rack', 'floor_zone',
+  'overhead_crane', 'oht_rail', 'roll_door', 'guard_rail', 'fence', 'assembly_line']);
+// Walls, drawn see-through whenever the view is from outside them: the
+// near side of the building cut away, steady as the view moves.
+const WALLS = new Set(['factory_wall', 'roll_door']);
+// How long equipment stays see-through after it last hid a product: not
+// flickering back as a product or the view passes the edge of its box.
+const XRAY_HOLD = 600;
+scene.add(xray.group);
+const xrayMaterials = new Map();
+
+function xrayMaterial(color) {
+  const key = color ? color.getHexString() : 'none';
+  let m = xrayMaterials.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({
+      color: color ?? DEFAULT_COLOR,
+      roughness: 0.58,
+      metalness: 0.08,
+      side: THREE.DoubleSide,
+      flatShading: true,
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+    });
+    xrayMaterials.set(key, m);
+  }
+  return m;
+}
+
+// Each piece of placed equipment's objects and box, by its root: worked out
+// again when the scene or the equipment changes, or every few seconds.
+function xrayItems(now) {
+  const placed = libraryPanel.library?.items ?? [];
+  const walls = new Set(placed.filter((i) => WALLS.has(i.template)).map((i) => i.root));
+  const roots = new Set(placed.filter((i) => !XRAY_NEVER.has(i.template) || walls.has(i.root)).map((i) => i.root));
+  const key = `${records.size}|${[...roots].join(',')}`;
+  if (xray.items && key === xray.key && now - xray.built < 5000) return xray.items;
+  xrayOff();
+  const items = new Map();
+  const top = new Map();
+  const rootOf = (uid) => {
+    if (top.has(uid)) return top.get(uid);
+    const rec = records.get(uid);
+    const r = roots.has(uid) ? uid : rec?.parent != null ? rootOf(rec.parent) : null;
+    top.set(uid, r);
+    return r;
+  };
+  const part = new THREE.Box3();
+  for (const uid of records.keys()) {
+    const root = rootOf(uid);
+    if (root == null) continue;
+    let it = items.get(root);
+    if (!it) items.set(root, (it = { uids: [], box: new THREE.Box3() }));
+    it.uids.push(uid);
+    if (batch.boxOf(uid, part)) it.box.union(part);
+  }
+  // Each wall's middle and the way out of the building across it: along
+  // its thin side, away from the middle of all the walls.
+  xray.walls = new Map();
+  const middle = new THREE.Box3();
+  for (const root of walls) if (items.has(root)) middle.union(items.get(root).box);
+  if (!middle.isEmpty()) {
+    const c = middle.getCenter(new THREE.Vector3());
+    for (const root of walls) {
+      const box = items.get(root)?.box;
+      if (!box || box.isEmpty()) continue;
+      const at = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const axis = size.x < size.y ? 'x' : 'y';
+      xray.walls.set(root, { at, axis, out: Math.sign(at[axis] - c[axis]) || 1 });
+    }
+  }
+  xray.items = items;
+  xray.key = key;
+  xray.built = now;
+  return items;
+}
+
+function xrayOn(root, it) {
+  const hid = it.uids.filter((u) => !batch.hidden.has(u));
+  const meshes = [];
+  for (const uid of it.uids) {
+    const copy = batch.xrayCopy(uid);
+    if (!copy) continue;
+    const mesh = new THREE.Mesh(copy.geometry, xrayMaterial(copy.color));
+    mesh.matrixAutoUpdate = false;
+    mesh.matrix.copy(copy.matrix);
+    mesh.renderOrder = 5;
+    xray.group.add(mesh);
+    meshes.push(mesh);
+  }
+  batch.hide(hid, true);
+  xray.on.set(root, { meshes, hid });
+}
+
+function xrayOff(root) {
+  for (const r of root === undefined ? [...xray.on.keys()] : [root]) {
+    const on = xray.on.get(r);
+    if (!on) continue;
+    for (const m of on.meshes) m.removeFromParent();
+    batch.hide(on.hid, false);
+    xray.on.delete(r);
+    shadowsDirty = true;
+  }
+}
+
+function updateXray(now) {
+  if (now - xray.at < 200 || !batch.mesh) return;
+  xray.at = now;
+  // The flow's products: its parts, not their pieces.
+  const products = [];
+  const p = new THREE.Vector3();
+  for (const [uid, rec] of records) {
+    let n;
+    try {
+      n = BigInt(uid);
+    } catch {
+      continue;
+    }
+    if (n < PARTS || n >= PARTS + PIECES) continue;
+    p.setFromMatrixPosition(_xm.fromArray(rec.matrix));
+    if (BODY_NAMES.has(rec.name)) p.z += 0.7;
+    products.push(p.clone());
+  }
+  const want = new Set();
+  const items = xrayItems(now);
+  const eye = camera.position;
+  for (const [root, w] of xray.walls) {
+    if ((eye[w.axis] - w.at[w.axis]) * w.out > 0) want.add(root);
+  }
+  if (products.length) {
+    const ray = new THREE.Ray();
+    const hit = new THREE.Vector3();
+    for (const q of products) {
+      const far = eye.distanceTo(q);
+      ray.set(eye, q.clone().sub(eye).normalize());
+      for (const [root, it] of items) {
+        if (xray.walls.has(root) || it.box.isEmpty() || it.box.containsPoint(eye)) continue;
+        if (ray.intersectBox(it.box, hit) && eye.distanceTo(hit) < far - 0.05) want.add(root);
+      }
+    }
+  }
+  for (const root of want) xray.seen.set(root, now);
+  for (const root of [...xray.on.keys()]) {
+    if (!want.has(root) && now - (xray.seen.get(root) ?? 0) > XRAY_HOLD) xrayOff(root);
+  }
+  for (const root of want) {
+    if (!xray.on.has(root)) {
+      xrayOn(root, xray.items.get(root));
+      shadowsDirty = true;
+    }
+  }
+}
+const _xm = new THREE.Matrix4();
+
 renderer.setAnimationLoop(() => {
   quietMarkers();
+  updateXray(performance.now());
   if (flight) {
     const t = Math.min((performance.now() - flight.t0) / 420, 1);
     const k = ease(t);
@@ -1522,6 +1708,16 @@ renderer.setAnimationLoop(() => {
     if (t >= 1) flight = null;
   }
   controls.update();
+  // The near plane as far out as the view allows: a near plane 1 cm away
+  // seen from 100 m leaves the depth buffer telling apart nothing closer
+  // than several centimetres, and the floor's marks, the outlines drawn from
+  // depth, shimmer as the view moves. A four-hundredth of the distance to
+  // what is looked at keeps a millimetre there.
+  const near = THREE.MathUtils.clamp(camera.position.distanceTo(controls.target) / 400, 0.01, 1.0);
+  if (Math.abs(near - camera.near) > camera.near * 0.1) {
+    camera.near = near;
+    camera.updateProjectionMatrix();
+  }
   let t = performance.now();
   const lap = (name) => {
     const now = performance.now();

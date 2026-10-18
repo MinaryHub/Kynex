@@ -178,6 +178,11 @@ export class CellPanel {
     this.cell = { components: [], parts: [] };
     this.markers = new THREE.Group();
     ctx.scene.add(this.markers);
+    // Each flow piece's name over it: drawn again only when a name or a
+    // place changes, not with every report of the cell.
+    this.names = new THREE.Group();
+    this.namesDrawn = '';
+    ctx.scene.add(this.names);
     this.box = document.getElementById('insp-cell');
     this.kind = document.getElementById('cell-kind');
     this.roles();
@@ -776,7 +781,7 @@ export class CellPanel {
   drawLoads(at) {
     const stations = this.cell.components.filter((c) => c.kind === 'station' && c.flow?.oee && at.has(c.object));
     const load = (c) => (c.flow.oee.busy ?? 0) + (c.flow.oee.down ?? 0);
-    if (!stations.some((c) => load(c) > 0)) return;
+    if (!stations.some((c) => load(c) > 0)) return new Set();
     const top = stations.reduce((b, c) => (load(c) > load(b) ? c : b), stations[0]);
     for (const c of stations) {
       const u = Math.min(1, load(c));
@@ -790,22 +795,142 @@ export class CellPanel {
       disc.position.set(x, y, z + 0.03);
       disc.renderOrder = 7;
       this.markers.add(disc);
-      const text = c === top && stations.length > 1 ? `병목 ${Math.round(u * 100)}%` : `${Math.round(u * 100)}%`;
-      this.markers.add(this.label(text, x, y, z + 0.5, c === top && stations.length > 1));
+      // Its name with its load, in one: two labels would cover each other.
+      const text = c === top && stations.length > 1 ? `${c.name} · 병목 ${Math.round(u * 100)}%` : `${c.name} · ${Math.round(u * 100)}%`;
+      const size = this.signSize(at);
+      this.markers.add(this.label(text, x, y, z + 0.3 + size, c === top && stations.length > 1 ? 'bottleneck' : 'load', size));
+    }
+    return new Set(stations.map((c) => c.object));
+  }
+
+  // Each process's name over it — source, station, buffer, sink — as a
+  // sign its own size in the scene: small from afar, so that a big floor's
+  // do not pile up, and read as one comes near. A station whose load is
+  // shown has its name with it (`loaded`), not again.
+  drawNames(at, loaded) {
+    const named = this.cell.components.filter(
+      (c) => ['source', 'station', 'buffer', 'sink'].includes(c.kind) && at.has(c.object) && !loaded.has(c.object),
+    );
+    const size = this.signSize(at);
+    const key = `${size.toFixed(2)}|` + named.map((c) => `${c.object}:${c.name}:${at.get(c.object).map((v) => v.toFixed(2))}`).join('|');
+    if (key === this.namesDrawn) return;
+    this.namesDrawn = key;
+    for (const child of [...this.names.children]) child.removeFromParent();
+    for (const c of named) {
+      const [x, y, z] = at.get(c.object);
+      this.names.add(this.label(c.name, x, y, z + 0.3 + size, 'name', size));
     }
   }
 
-  // A word over the scene, always facing the camera.
-  label(text, x, y, z, strong) {
+  // How far each station's work in hand has got: a pie over it, filling
+  // as the cycle goes, while it works; none while it does not.
+  drawProgress(at) {
+    const size = this.signSize(at);
+    for (const c of this.cell.components) {
+      const done = c.kind === 'station' ? c.flow?.progress : null;
+      if (done == null || !at.has(c.object)) continue;
+      const [x, y, z] = at.get(c.object);
+      const pie = new THREE.Sprite(this.pieMaterial(Math.round(done * 100)));
+      pie.userData.kept = true;
+      pie.scale.set(size * 1.5, size * 1.5, 1);
+      // Over the station's label, which stands `size` high at z + 0.3 + size.
+      pie.position.set(x, y, z + 0.3 + size * 2.4);
+      pie.renderOrder = 9;
+      this.markers.add(pie);
+    }
+  }
+
+  // The pie for `pct` per cent done, drawn once and kept: a cycle's
+  // progress is told ten times a second.
+  pieMaterial(pct) {
+    this.pies ??= new Map();
+    let m = this.pies.get(pct);
+    if (m) return m;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath();
+    ctx.arc(64, 64, 60, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(20, 24, 30, 0.85)';
+    ctx.fill();
+    // From twelve o'clock, round the way a clock goes.
+    ctx.beginPath();
+    ctx.moveTo(64, 64);
+    ctx.arc(64, 64, 54, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * pct) / 100);
+    ctx.closePath();
+    ctx.fillStyle = '#3ddc84';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(64, 64, 30, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(20, 24, 30, 0.95)';
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '600 26px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${pct}%`, 64, 66);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    m = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+    this.pies.set(pct, m);
+    return m;
+  }
+
+  // How tall a sign over a flow piece is, in the scene: 1/80 of the flow's
+  // spread, 0.35–1 m — a cell's under half a metre, a plant's a metre —
+  // so that from afar a big floor's do not pile up over it, and they are
+  // read as one comes near.
+  signSize(at) {
+    const all = [...at.values()];
+    const spread = all.length
+      ? Math.hypot(
+          Math.max(...all.map((p) => p[0])) - Math.min(...all.map((p) => p[0])),
+          Math.max(...all.map((p) => p[1])) - Math.min(...all.map((p) => p[1])),
+        )
+      : 0;
+    return Math.min(1.0, Math.max(0.35, spread / 80));
+  }
+
+  // A word over the scene, always facing the camera, `size` metres high in
+  // it: a `load` dark, the `bottleneck` red, a `name` blue-grey. The same
+  // word drawn again reuses its picture: a running flow's loads are told
+  // ten times a second, and a picture made each time makes the view stutter.
+  label(text, x, y, z, style, size) {
+    const key = `${text}|${style}`;
+    this.labels ??= new Map();
+    let kept = this.labels.get(key);
+    if (!kept) {
+      if (this.labels.size > 400) {
+        for (const k of this.labels.values()) {
+          k.material.map.dispose();
+          k.material.dispose();
+        }
+        this.labels.clear();
+      }
+      kept = this.paintLabel(text, style);
+      this.labels.set(key, kept);
+    }
+    const sprite = new THREE.Sprite(kept.material);
+    // Kept for the next time: not to be let go with the markers.
+    sprite.userData.kept = true;
+    // Smaller as it is farther, as a sign in the scene is.
+    sprite.scale.set((size * kept.w) / 64, size, 1);
+    sprite.position.set(x, y, z);
+    sprite.renderOrder = 9;
+    return sprite;
+  }
+
+  // A label's picture, made once for each word.
+  paintLabel(text, style) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    const font = `600 ${strong ? 44 : 36}px system-ui, sans-serif`;
+    const font = `600 ${style === 'name' ? 34 : 40}px system-ui, sans-serif`;
     ctx.font = font;
     const w = Math.ceil(ctx.measureText(text).width) + 28;
     canvas.width = w;
     canvas.height = 64;
     ctx.font = font;
-    ctx.fillStyle = strong ? 'rgba(200, 40, 40, 0.92)' : 'rgba(20, 24, 30, 0.82)';
+    ctx.fillStyle = { bottleneck: 'rgba(200, 40, 40, 0.92)', name: 'rgba(38, 66, 104, 0.88)' }[style] ?? 'rgba(20, 24, 30, 0.82)';
     ctx.beginPath();
     ctx.roundRect(0, 4, w, 56, 12);
     ctx.fill();
@@ -814,18 +939,14 @@ export class CellPanel {
     ctx.fillText(text, 14, 33);
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
-    // A size on the screen, whatever the distance.
-    sprite.material.sizeAttenuation = false;
-    sprite.scale.set((0.032 * w) / 64, 0.032, 1);
-    sprite.position.set(x, y, z);
-    sprite.renderOrder = 9;
-    return sprite;
+    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+    return { material, w };
   }
 
   drawMarkers() {
     for (const child of [...this.markers.children]) {
       child.removeFromParent();
+      if (child.userData.kept) continue;
       // An arrow is a group: its shaft and its head each their own.
       child.traverse((o) => {
         o.geometry?.dispose();
@@ -878,7 +999,8 @@ export class CellPanel {
       }
     }
     for (const a of arrows) this.markers.add(a);
-    this.drawLoads(at);
+    this.drawNames(at, this.drawLoads(at));
+    this.drawProgress(at);
     // The AMRs' lanes: a line between each two stops linked.
     const stops = new Map(this.cell.components.filter((c) => c.stop_at).map((c) => [c.object, c.stop_at]));
     const lanes = [];

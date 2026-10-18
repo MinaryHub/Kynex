@@ -36,6 +36,7 @@ export class Batch {
     this.owner = []; // instance id -> object uid
     this.base = new Map(); // object uid -> THREE.Color, before any highlight
     this.hidden = new Set(); // object uids hidden on this page alone
+    this.sources = new Map(); // mesh uid -> its finest BufferGeometry, to draw a part again on its own
     this.maxVerts = 0;
     this.maxIndices = 0;
     this.holes = 0; // vertices left behind by replaced geometry
@@ -80,6 +81,7 @@ export class Batch {
     this.inst.clear();
     this.owner = [];
     this.base.clear();
+    this.sources.clear();
     this.holes = 0;
   }
 
@@ -99,6 +101,7 @@ export class Batch {
       triangles.push(g.index.count / 3);
     }
     const s = usable[0].boundingSphere;
+    this.sources.set(uid, usable[0]);
     this.geoms.set(uid, { ids, triangles, center: s.center.clone(), radius: s.radius, verts: usable.reduce((n, g) => n + g.attributes.position.count, 0) });
   }
 
@@ -193,6 +196,17 @@ export class Batch {
   tint(uid, color) {
     const it = this.inst.get(uid);
     if (it) this.mesh.setColorAt(it.id, color ?? this.base.get(uid));
+  }
+
+  // Part `uid` as drawn — its geometry, where it is, its colour — to draw it
+  // on its own, as a see-through copy does; null if it is not drawn.
+  xrayCopy(uid) {
+    const it = this.inst.get(uid);
+    const geometry = it && this.sources.get(it.mesh);
+    if (!geometry) return null;
+    const matrix = new THREE.Matrix4();
+    this.mesh.getMatrixAt(it.id, matrix);
+    return { geometry, matrix, color: this.base.get(uid) };
   }
 
   uidAt(instanceId) {

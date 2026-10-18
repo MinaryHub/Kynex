@@ -728,3 +728,260 @@ fn a_big_flow_keeps_up() {
     );
     assert!(sunk > 1000);
 }
+
+/// A car goes down its line as it is built: welded steel from the body
+/// shop, painted from the paint shop, finished from assembly — drawn as a
+/// body each time, in its pieces, and gone with them when shipped.
+#[test]
+fn a_car_body_looks_as_far_as_it_has_come() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 600.0, "look": 1})),
+        ("flow_station", 6.0, json!({"cycle": 2.0, "look": 2})),
+        ("flow_station", 12.0, json!({"cycle": 2.0, "look": 3})),
+        ("flow_sink", 18.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    link(&mut cell, &doc, u[2], &[u[3]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let look = |cell: &Cell| cell.parts().first().map(|p| p.look);
+    let (t, _) = run(&mut cell, &doc, 0.0, 0.5);
+    assert_eq!(look(&cell), Some(1), "welded steel at the source");
+    // Drawn as a body: an empty under its identity, its pieces under it.
+    let mut shown = doc.clone();
+    cell.apply(&mut shown);
+    let uid = cell.parts()[0].uid;
+    let root = id_of(&shown, uid).unwrap();
+    assert!(matches!(
+        shown.object(root).unwrap().data,
+        ObjectData::Empty
+    ));
+    let pieces = (0..LOOK_PIECES)
+        .filter(|k| id_of(&shown, look_piece(uid, *k)).is_some())
+        .count();
+    assert_eq!(pieces as u64, LOOK_PIECES);
+    // Painted after the first station, finished after the second.
+    let (t, _) = run(&mut cell, &doc, t, 10.0);
+    assert_eq!(look(&cell), Some(2), "painted");
+    let (t, _) = run(&mut cell, &doc, t, 8.0);
+    assert_eq!(look(&cell), Some(3), "finished");
+    let (t, _) = run(&mut cell, &doc, t, 20.0);
+    assert!(cell.parts().is_empty(), "shipped");
+    let gone = cell.apply(&mut doc.clone());
+    for k in 0..LOOK_PIECES {
+        assert!(
+            gone.removed.contains(&Uid::from_raw(look_piece(uid, k))),
+            "piece {k} goes"
+        );
+    }
+    let _ = t;
+}
+
+/// A station at work says how far its work has got; idle, nothing.
+#[test]
+fn a_station_says_how_far_its_work_has_got() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 600.0})),
+        ("flow_station", 2.0, json!({"cycle": 10.0})),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    let progress = |cell: &Cell| {
+        let c = cell
+            .components()
+            .iter()
+            .find(|c| c.object == u[1])
+            .unwrap()
+            .clone();
+        cell.flow_json(&doc, &c)["progress"].as_f64()
+    };
+    assert_eq!(progress(&cell), None, "idle: nothing");
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    // The part over at once (2 m at 1 m/s), then 10 s of work.
+    let (t, _) = run(&mut cell, &doc, 0.0, 4.0);
+    let half = progress(&cell).expect("at work");
+    assert!(half > 0.1 && half < 0.3, "{half}");
+    let (t, _) = run(&mut cell, &doc, t, 5.0);
+    let more = progress(&cell).unwrap();
+    assert!((more - half - 0.5).abs() < 0.05, "{half} then {more}");
+    run(&mut cell, &doc, t, 6.0);
+    assert_eq!(progress(&cell), None, "done");
+}
+
+/// The flow reset: every car body goes, and every piece it was drawn in.
+#[test]
+fn a_reset_takes_the_car_bodies_away_with_their_pieces() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 5.0, "look": 3})),
+        ("flow_station", 6.0, json!({"cycle": 30.0})),
+        ("flow_sink", 12.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let (t, _) = run(&mut cell, &doc, 0.0, 12.0);
+    cell.apply(&mut doc.clone());
+    let cars: Vec<u64> = cell.parts().iter().map(|p| p.uid).collect();
+    assert!(cars.len() >= 2, "{cars:?}");
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "reset"}));
+    run(&mut cell, &doc, t, 0.5);
+    let gone = if cell.needs_scene() {
+        cell.apply(&mut doc.clone())
+    } else {
+        cell.untouched(&doc)
+    };
+    for uid in cars {
+        for k in 0..LOOK_PIECES {
+            assert!(
+                gone.removed.contains(&Uid::from_raw(look_piece(uid, k))),
+                "{uid} piece {k}"
+            );
+        }
+    }
+}
+
+/// A scenario taken back while car bodies are on the line: the cell starts
+/// afresh, and each body goes with every piece it was drawn in — none left
+/// standing on the line.
+#[test]
+fn a_scenario_taken_back_takes_the_car_bodies_away_with_their_pieces() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 5.0, "look": 2})),
+        ("flow_station", 6.0, json!({"cycle": 30.0})),
+        ("flow_sink", 12.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 12.0);
+    cell.apply(&mut doc.clone());
+    let cars: Vec<u64> = cell.parts().iter().map(|p| p.uid).collect();
+    assert!(!cars.is_empty());
+    let saved = cell.to_saved();
+    cell.restore(saved);
+    let gone = cell.take_removed();
+    for uid in cars {
+        for k in 0..LOOK_PIECES {
+            assert!(
+                gone.removed.contains(&Uid::from_raw(look_piece(uid, k))),
+                "{uid} piece {k}"
+            );
+        }
+    }
+}
+
+/// A display's glass goes back to the same tools for each of its masks,
+/// every move by way of the stocker: the stocker sends each sheet to the
+/// tool of its next step, each tool sends it back, and once its recipe is
+/// done the stocker sends it on.
+#[test]
+fn a_stocker_sends_each_sheet_round_its_recipe() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 20.0})),
+        ("flow_buffer", 4.0, json!({"capacity": 50})),
+        ("flow_station", 8.0, json!({"cycle": 2.0, "capacity": 2})),
+        ("flow_station", 12.0, json!({"cycle": 3.0, "capacity": 2})),
+        ("flow_sink", 16.0, json!({})),
+    ]);
+    let (source, stocker, coat, etch, sink) = (u[0], u[1], u[2], u[3], u[4]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": stocker.to_string(), "kind": "buffer", "props": {"dispatch": 1}}),
+    );
+    link(&mut cell, &doc, source, &[stocker]);
+    link(&mut cell, &doc, coat, &[stocker]);
+    link(&mut cell, &doc, etch, &[stocker]);
+    link(&mut cell, &doc, stocker, &[sink]);
+    let steps = [coat.to_string(), etch.to_string()];
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_recipe", "object": source.to_string(), "steps": steps, "repeat": 3}),
+    );
+    // Only a source has a recipe, and only stations are its steps.
+    let refused: Value = serde_json::from_str(&cell.handle(
+        &doc,
+        &json!({"op": "flow_recipe", "object": source.to_string(), "steps": [sink.to_string()]}).to_string(),
+    ))
+    .unwrap();
+    assert_eq!(refused["ok"], false);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 400.0);
+    let sunk = cell.flow_summary()["sunk"].as_u64().unwrap();
+    assert!(sunk >= 10, "{sunk}");
+    // Three passes each: each tool worked three times for every sheet out,
+    // and no more than three times for every sheet in.
+    let made = |s: u64| cell.stations[&s].made;
+    let fed = made(source);
+    for tool in [coat, etch] {
+        assert!(
+            made(tool) >= 3 * sunk && made(tool) <= 3 * fed,
+            "{} for {sunk} out of {fed}",
+            made(tool)
+        );
+    }
+    // Saved and taken back, the recipe stays.
+    let again = Cell::from_saved(cell.to_saved());
+    let mut again = again;
+    again.adopt(&doc);
+    assert_eq!(again.recipes.get(&source).map(Vec::len), Some(6));
+}
+
+/// A stocker with a crane carries its cassettes on its rail: into it and
+/// out to its recipe's tools by the crane — the way longer, so the move
+/// slower, and the cassette drawn on the crane — but not out of the bay
+/// once the recipe is done.
+#[test]
+fn a_stocker_s_crane_carries_on_its_rail() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 20.0, "look": 7})),
+        ("flow_buffer", 4.0, json!({"capacity": 50})),
+        ("flow_station", 8.0, json!({"cycle": 2.0, "capacity": 2})),
+        ("flow_sink", 16.0, json!({})),
+    ]);
+    let (source, stocker, tool, sink) = (u[0], u[1], u[2], u[3]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": stocker.to_string(), "kind": "buffer", "props": {"dispatch": 1, "rail": 1}}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": source.to_string(), "kind": "source", "props": {"feed": 20.0, "look": 7}}),
+    );
+    link(&mut cell, &doc, source, &[stocker]);
+    link(&mut cell, &doc, tool, &[stocker]);
+    link(&mut cell, &doc, stocker, &[sink]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_recipe", "object": source.to_string(), "steps": [tool.to_string()], "repeat": 2}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut on_crane, mut drawn) = (0, false);
+    let mut t = 0.0;
+    while t < 200.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        for p in &cell.parts {
+            if let Some(Place::Moving { to, .. }) = p.flow {
+                if p.rail.is_some() {
+                    on_crane += 1;
+                    assert_ne!(to, sink, "out of the bay not by the crane");
+                    drawn |= look_key(p) == CRANE_LOOK;
+                }
+            }
+        }
+    }
+    assert!(on_crane > 0 && drawn, "{on_crane}");
+    assert!(cell.flow_summary()["sunk"].as_u64().unwrap() > 0);
+    // Arrived, a cassette is off the crane.
+    assert!(cell
+        .parts
+        .iter()
+        .all(|p| p.rail.is_none() || matches!(p.flow, Some(Place::Moving { .. }))));
+}

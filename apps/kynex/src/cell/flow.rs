@@ -14,6 +14,8 @@
 //! The flow runs on the simulation's clock while it is started; stopped,
 //! it holds as it is; reset, its parts are gone.
 
+use kreate_math::DQuat;
+
 use super::*;
 
 /// Where a part of a process flow is.
@@ -43,6 +45,10 @@ pub struct Station {
     pub queue: Vec<u64>,
     /// Being worked on, and when it is done.
     pub working: Option<(f64, Vec<u64>)>,
+    /// How long the work in hand takes, all told: how far it has got is
+    /// what is left of it against this (its end put off while it rests or
+    /// is down, as what is left is not).
+    pub length: f64,
     /// Done, waiting to go on (a buffer's and a source's parts too).
     pub out: Vec<u64>,
     /// A source's seconds since it last put a part in.
@@ -193,9 +199,9 @@ impl Order {
 /// flow components `objects`.
 #[derive(Debug)]
 pub struct Docks {
-    version: u64,
+    pub(super) version: u64,
     objects: Vec<u64>,
-    docks: BTreeMap<u64, (DVec3, DVec3, DVec3)>,
+    pub(super) docks: BTreeMap<u64, (DVec3, DVec3, DVec3)>,
     shelves: BTreeMap<u64, Vec<DVec3>>,
 }
 
@@ -420,6 +426,45 @@ impl Cell {
         self.roles_changed = true;
         self.changed = true;
         Ok(())
+    }
+
+    /// Source `object`'s recipe: the stations its parts go through, in
+    /// order, sent to each by a stocker (a buffer that dispatches). None
+    /// clears it.
+    pub fn set_recipe(&mut self, object: u64, steps: Vec<u64>) -> Result<(), String> {
+        if !self
+            .components
+            .iter()
+            .any(|c| c.object == object && c.kind == Kind::Source)
+        {
+            return Err("레시피는 소재 공급에 정합니다".into());
+        }
+        if steps.iter().any(|n| {
+            !self
+                .components
+                .iter()
+                .any(|c| c.object == *n && c.kind == Kind::Station)
+        }) {
+            return Err("레시피의 단계는 공정 스테이션이어야 합니다".into());
+        }
+        if steps.is_empty() {
+            self.recipes.remove(&object);
+        } else {
+            self.recipes.insert(object, steps);
+        }
+        self.roles_changed = true;
+        self.changed = true;
+        Ok(())
+    }
+
+    /// Where part `uid` goes from stocker `c` by its recipe: the station of
+    /// its next step, if `c` dispatches and the recipe is not done.
+    fn recipe_step(&self, c: &Component, uid: u64) -> Option<u64> {
+        if c.kind != Kind::Buffer || c.props.dispatch == 0 {
+            return None;
+        }
+        let p = &self.parts[self.part_index(uid)?];
+        self.recipes.get(&p.origin)?.get(p.step as usize).copied()
     }
 
     /// Where on component `c` parts are set out: the middle of the top of
@@ -665,6 +710,7 @@ impl Cell {
                     p.flow = Some(Place::At(c.object));
                     p.product = product;
                     p.origin = c.object;
+                    p.look = c.props.look;
                     p.order = k as u32 + 1;
                     let s = self.stations.entry(c.object).or_default();
                     s.made += 1;
@@ -698,6 +744,7 @@ impl Cell {
                 p.flow = Some(Place::At(c.object));
                 p.product = product;
                 p.origin = c.object;
+                p.look = c.props.look;
                 self.stations.entry(c.object).or_default().out.push(uid);
                 happened = true;
             }
@@ -714,6 +761,9 @@ impl Cell {
             .collect();
         for (uid, to) in arrived {
             happened = true;
+            if let Some(i) = self.part_index(uid) {
+                self.parts[i].rail = None;
+            }
             let Some(&t) = by_object.get(&to) else {
                 // Its target gone: the part goes too.
                 if let Some(i) = self.part_index(uid) {
@@ -833,6 +883,10 @@ impl Cell {
                         };
                         if k == 0 && !scrapped {
                             self.parts[i].finished = true;
+                            // As this station makes it look, if it says.
+                            if c.props.look > 0 {
+                                self.parts[i].look = c.props.look;
+                            }
                             made.push(*uid);
                         } else {
                             self.parts.remove(i);
@@ -857,6 +911,7 @@ impl Cell {
                         let p = self.parts.last_mut().unwrap();
                         p.born = born;
                         p.flow = Some(Place::At(c.object));
+                        p.look = c.props.look;
                         made.push(p.uid);
                     }
                     s.out.extend(made);
@@ -895,6 +950,7 @@ impl Cell {
                 }
                 s.last = Some(product);
                 s.working = Some((now + cycle, parts));
+                s.length = cycle;
                 happened = true;
             }
             self.stations.insert(c.object, s);
@@ -940,53 +996,82 @@ impl Cell {
                 .flatten()
                 .filter_map(|n| by_object.get(n).copied())
                 .collect();
-            if next.is_empty() {
+            let stocker = c.kind == Kind::Buffer && c.props.dispatch == 1;
+            if next.is_empty() && !stocker {
                 continue;
             }
             loop {
                 let s = self.stations.entry(c.object).or_default();
-                // A buffer last in first out gives its newest.
-                let pick_at = if c.kind == Kind::Buffer && c.props.policy == 1 {
-                    s.out.len().saturating_sub(1)
+                // A buffer last in first out gives its newest; a stocker
+                // whichever of its parts has somewhere to go, the oldest
+                // first — not all held up behind one whose tool is full.
+                let order: Vec<usize> = if stocker {
+                    (0..s.out.len()).collect()
+                } else if c.kind == Kind::Buffer && c.props.policy == 1 {
+                    s.out.len().checked_sub(1).into_iter().collect()
                 } else {
-                    0
+                    (0..s.out.len().min(1)).collect()
                 };
-                let Some(&uid) = s.out.get(pick_at) else {
+                let out = s.out.clone();
+                let turn = s.turn;
+                let mut chosen = None;
+                for pick_at in order {
+                    let uid = out[pick_at];
+                    // By its recipe, from a stocker: the one tool of its next
+                    // step. Else where the links go.
+                    let by_recipe = self.recipe_step(c, uid);
+                    let next: Vec<&Component> = match by_recipe {
+                        Some(t) => by_object.get(&t).copied().into_iter().collect(),
+                        None => next.clone(),
+                    };
+                    if next.is_empty() {
+                        continue;
+                    }
+                    let product = self.part_index(uid).map_or(0, |i| self.parts[i].product);
+                    // A link that takes certain products takes no others.
+                    let takes = |t: &Component| {
+                        by_recipe.is_some()
+                            || self
+                                .routes
+                                .get(&(c.object, t.object))
+                                .is_none_or(|p| p.contains(&product))
+                    };
+                    let open: Vec<usize> = (0..next.len())
+                        .map(|k| (turn + k) % next.len())
+                        .filter(|k| takes(next[*k]) && self.room(next[*k], &coming) > 0)
+                        .collect();
+                    let pick = match c.props.rule {
+                        // The one with the fewest waiting and coming.
+                        1 => open
+                            .iter()
+                            .copied()
+                            .max_by_key(|k| self.room(next[*k], &coming)),
+                        // Any of them, as it falls.
+                        2 if !open.is_empty() => {
+                            let r = self.uniform();
+                            Some(open[((r * open.len() as f64) as usize).min(open.len() - 1)])
+                        }
+                        _ => open.first().copied(),
+                    };
+                    if let Some(k) = pick {
+                        chosen = Some((pick_at, uid, next[k], k, by_recipe.is_some()));
+                        break;
+                    }
+                }
+                let Some((pick_at, uid, target, k, by_recipe)) = chosen else {
                     break;
                 };
-                let turn = s.turn;
-                let product = self.part_index(uid).map_or(0, |i| self.parts[i].product);
-                // A link that takes certain products takes no others.
-                let takes = |t: &Component| {
-                    self.routes
-                        .get(&(c.object, t.object))
-                        .is_none_or(|p| p.contains(&product))
-                };
-                let open: Vec<usize> = (0..next.len())
-                    .map(|k| (turn + k) % next.len())
-                    .filter(|k| takes(next[*k]) && self.room(next[*k], &coming) > 0)
-                    .collect();
-                let pick = match c.props.rule {
-                    // The one with the fewest waiting and coming.
-                    1 => open
-                        .iter()
-                        .copied()
-                        .max_by_key(|k| self.room(next[*k], &coming)),
-                    // Any of them, as it falls.
-                    2 if !open.is_empty() => {
-                        let r = self.uniform();
-                        Some(open[((r * open.len() as f64) as usize).min(open.len() - 1)])
-                    }
-                    _ => open.first().copied(),
-                };
-                let Some(k) = pick else { break };
-                let target = next[k];
                 let s = self.stations.entry(c.object).or_default();
                 s.out.remove(pick_at);
-                s.turn = k + 1;
+                if !by_recipe {
+                    s.turn = k + 1;
+                }
                 let Some(i) = self.part_index(uid) else {
                     continue;
                 };
+                if by_recipe {
+                    self.parts[i].step += 1;
+                }
                 happened = true;
                 *coming.entry(target.object).or_insert(0) += 1;
                 // By AMR, or by hand: it waits here for one.
@@ -1014,7 +1099,31 @@ impl Cell {
                 } else {
                     c.props.speed
                 };
-                let seconds = from.distance(to) / speed.max(0.01);
+                // Into a stocker with a crane, or out of it to its recipe's
+                // next tool: across onto its rail, along it and across off
+                // it. Sent on once the recipe is done, out of the bay: not
+                // by the crane.
+                let on_rail = |s: &Component| s.kind == Kind::Buffer && s.props.rail > 0;
+                let crane = if on_rail(target) {
+                    docks.get(&target.object)
+                } else if on_rail(c) && by_recipe {
+                    docks.get(&c.object)
+                } else {
+                    None
+                };
+                let rail = crane.map(|&(on, along, _)| {
+                    let onto = |p: DVec3| {
+                        let q = on + along * (p - on).dot(along);
+                        DVec3::new(q.x, q.y, p.z)
+                    };
+                    [onto(from), onto(to), along]
+                });
+                let length = match rail {
+                    Some([a, b, _]) => from.distance(a) + a.distance(b) + b.distance(to),
+                    None => from.distance(to),
+                };
+                let seconds = length / speed.max(0.01);
+                self.parts[i].rail = rail;
                 self.parts[i].flow = Some(Place::Moving {
                     from,
                     to: target.object,
@@ -1051,6 +1160,23 @@ impl Cell {
     /// component — worked on, then done, then waiting — or on its way.
     fn place_flow_parts(&mut self, docks: &BTreeMap<u64, (DVec3, DVec3, DVec3)>, now: f64) {
         let mut spots: BTreeMap<u64, DVec3> = BTreeMap::new();
+        // Parts of a look — car bodies, glass, panels — too big to set out
+        // in rows on a table: in line at a station, the one worked on at it
+        // and the others behind; in lanes in a store; as far apart as the
+        // biggest of them needs. Each faces the way its station does.
+        let cars: BTreeMap<u64, (f64, f64, (f64, usize))> = self
+            .parts
+            .iter()
+            .filter(|p| p.look > 0)
+            .map(|p| {
+                let look = (p.look as usize).min(LOOK_PITCH.len() - 1);
+                (
+                    p.uid,
+                    (LOOK_PITCH[look].0, LOOK_PITCH[look].1, LOOK_STACK[look]),
+                )
+            })
+            .collect();
+        let mut facing: BTreeMap<u64, f64> = BTreeMap::new();
         // Those waiting at each for a carrier.
         let mut waiting_at: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for p in &self.parts {
@@ -1071,7 +1197,37 @@ impl Cell {
             // And those waiting here for an AMR.
             let order = order.chain(waiting_at.get(object).into_iter().flatten());
             let shelves = self.shelf_tops.get(object);
-            for (k, uid) in order.enumerate() {
+            let store = self
+                .components
+                .iter()
+                .any(|c| c.object == *object && c.kind == Kind::Buffer);
+            let order: Vec<u64> = order.copied().collect();
+            let (pitch, lanes, (stack, high)) = order.iter().filter_map(|u| cars.get(u)).fold(
+                (0.0_f64, 0.0_f64, (0.0_f64, 1_usize)),
+                |a, b| {
+                    let stack = if b.2 .0 > a.2 .0 { b.2 } else { a.2 };
+                    (a.0.max(b.0), a.1.max(b.1), stack)
+                },
+            );
+            if pitch > 0.0 {
+                let yaw = along.y.atan2(along.x);
+                for (k, uid) in order.iter().enumerate() {
+                    let at = if store && stack > 0.0 {
+                        // Stacked, so many high, the stacks in a row.
+                        let (col, level) = ((k / high) as f64, (k % high) as f64);
+                        top + along * col * pitch + DVec3::Z * level * stack
+                    } else if store {
+                        let (col, lane) = ((k % 4) as f64 - 1.5, (k / 4) as f64);
+                        top + along * col * pitch + across * lane * lanes
+                    } else {
+                        top - along * k as f64 * pitch
+                    };
+                    spots.insert(*uid, at);
+                    facing.insert(*uid, yaw);
+                }
+                continue;
+            }
+            for (k, uid) in order.iter().enumerate() {
                 // On a rack: ten to a shelf, the lowest first; else rows of
                 // five across the top, from its middle.
                 let (level, k) = match shelves {
@@ -1088,7 +1244,10 @@ impl Cell {
             match &p.flow {
                 Some(Place::At(_) | Place::Waiting { .. }) => {
                     if let Some(spot) = spots.get(&p.uid) {
-                        p.world = DAffine3::from_translation(*spot + DVec3::Z * half);
+                        let turn =
+                            DQuat::from_rotation_z(facing.get(&p.uid).copied().unwrap_or(0.0));
+                        p.world =
+                            DAffine3::from_rotation_translation(turn, *spot + DVec3::Z * half);
                     }
                 }
                 Some(Place::Moving {
@@ -1103,7 +1262,41 @@ impl Cell {
                     } else {
                         1.0
                     };
-                    p.world = DAffine3::from_translation(from.lerp(target, t));
+                    // By a stocker's crane: along its path at an even pace,
+                    // facing the rail's way.
+                    if let Some([a, b, along]) = p.rail {
+                        let (a, b) = (DVec3::new(a.x, a.y, from.z), DVec3::new(b.x, b.y, target.z));
+                        let legs = [(*from, a), (a, b), (b, target)];
+                        let total: f64 = legs.iter().map(|(u, v)| u.distance(*v)).sum();
+                        let mut left = t * total;
+                        let mut at = target;
+                        for (u, v) in legs {
+                            let l = u.distance(v);
+                            if left <= l {
+                                at = if l > 1e-9 { u.lerp(v, left / l) } else { u };
+                                break;
+                            }
+                            left -= l;
+                        }
+                        let turn = DQuat::from_rotation_z(along.y.atan2(along.x));
+                        p.world = DAffine3::from_rotation_translation(turn, at);
+                        continue;
+                    }
+                    // A car faces the way it goes.
+                    let way = target - *from;
+                    let turn = if p.look > 0 && way.truncate().length() > 1e-6 {
+                        DQuat::from_rotation_z(way.y.atan2(way.x))
+                    } else {
+                        DQuat::IDENTITY
+                    };
+                    // A sheet goes overhead, lifted and set down again.
+                    let lift = if (p.look == 4 || p.look >= 7) && way.truncate().length() > 2.0 {
+                        DVec3::Z * LIFT * (std::f64::consts::PI * t).sin()
+                    } else {
+                        DVec3::ZERO
+                    };
+                    p.world =
+                        DAffine3::from_rotation_translation(turn, from.lerp(target, t) + lift);
                 }
                 // Where its AMR is: placed by `carry_on`; on a belt, by it.
                 Some(Place::Riding { .. } | Place::Belt(_)) | None => {}
@@ -1148,6 +1341,14 @@ impl Cell {
             "out": s.out.len(),
             "working": s.working.is_some(),
             "left": s.working.as_ref().map(|(end, _)| (end - now).max(0.0)),
+            // How far the work in hand has got, 0 to 1.
+            "progress": s.working.as_ref().map(|(end, _)| {
+                if s.length > 0.0 {
+                    (1.0 - (end - now) / s.length).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                }
+            }),
             "made": s.made,
             "down": s.down_until.is_some(),
             "mix": self.mix.get(&c.object),

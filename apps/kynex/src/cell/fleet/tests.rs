@@ -363,20 +363,20 @@ fn an_idle_amr_in_the_way_moves_aside_in_a_running_flow() {
         );
     }
     ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
-    run(&mut cell, &doc, t, 90.0);
+    // Whichever carries them, one of the two stands aside on the spur at
+    // some time: off B, the one way through.
+    let (mut t, mut aside) = (t, false);
+    for _ in 0..90 {
+        t = run(&mut cell, &doc, t, 1.0);
+        aside |= [one, two].iter().any(|r| {
+            let p = at(&cell, *r);
+            (p.x - 4.0).abs() < 1e-6 && (p.y + 4.0).abs() < 1e-6
+        });
+    }
     let s = cell.flow_summary();
     assert!(s["sunk"].as_u64().unwrap() >= 2, "parts got through: {s}");
     assert!(s["problem"].is_null(), "{s}");
-    // Whichever carried them, one of the two stood aside on the spur.
-    let aside = [one, two]
-        .iter()
-        .any(|r| (at(&cell, *r) - DVec3::new(4.0, -4.0, at(&cell, *r).z)).length() < 1e-6);
-    assert!(
-        aside,
-        "one went aside: {} {}",
-        at(&cell, one),
-        at(&cell, two)
-    );
+    assert!(aside, "one went aside");
 }
 
 /// With nothing to carry, an AMR in a running flow parks on a spur — a
@@ -473,6 +473,97 @@ fn amrs_on_a_one_way_loop_never_meet_head_on() {
     // One loads at A and unloads at B at a time, 5 s each, the others
     // queued behind: a part every 20 s or so, and none stuck.
     assert!(s["sunk"].as_u64().unwrap() >= 25, "{}", s["sunk"]);
+}
+
+/// One who works at certain stations carries only what comes from or goes
+/// to them: the part is left for one who may work anywhere, though the
+/// station's own person stands nearer.
+#[test]
+fn a_person_kept_to_a_station_carries_only_its_parts() {
+    let (doc, mut cell, u) = floor(&[
+        ("operator", 0.5, -1.5, Value::Null),
+        ("operator", 9.0, -1.5, Value::Null),
+        (
+            "flow_source",
+            0.0,
+            0.0,
+            json!({"feed": 600.0, "carrier": 2}),
+        ),
+        ("flow_station", 5.0, 0.0, json!({"cycle": 5.0})),
+        ("flow_station", 20.0, 0.0, json!({"cycle": 5.0})),
+        ("flow_sink", 22.0, 0.0, Value::Null),
+    ]);
+    let (kept, free, source, station, other, sink) = (u[0], u[1], u[2], u[3], u[4], u[5]);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "operator_skills", "object": kept.to_string(), "stations": [other.to_string()]}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 1.0);
+    let carrying: Vec<u64> = cell.jobs.iter().filter_map(|j| j.amr).collect();
+    assert_eq!(
+        carrying,
+        vec![free],
+        "the one free to, not the one beside it"
+    );
+}
+
+/// A person walking swings their legs and arms, the two legs opposite;
+/// standing with nothing to do, they stand as they were made.
+#[test]
+fn a_person_walks_with_their_legs() {
+    let (doc, mut cell, u) = floor(&[
+        ("operator", 0.0, -3.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 30.0})),
+        ("flow_station", 2.0, 0.0, json!({"cycle": 5.0, "crew": 1})),
+        ("flow_sink", 4.0, 0.0, Value::Null),
+    ]);
+    let (person, source, station, sink) = (u[0], u[1], u[2], u[3]);
+    for (from, to) in [(source, station), (station, sink)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": from.to_string(), "next": [to.to_string()]}),
+        );
+    }
+    let foot = |cell: &mut Cell, name: &'static str| {
+        let mut shown = doc.clone();
+        cell.apply(&mut shown);
+        let root = id_of(&shown, person).unwrap();
+        let shoe = part_named(&shown, root, name).unwrap();
+        // Where the shoe is from the person's middle, along their way.
+        let body = shown.world_transform(root).inverse();
+        (body * shown.world_transform(shoe)).translation
+    };
+    let (rest_l, rest_r) = (foot(&mut cell, "shoe_left"), foot(&mut cell, "shoe_right"));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    // The part out at 2 s; on the way to the station, mid-stride.
+    let mut t = 0.0;
+    let mut apart: f64 = 0.0;
+    while t < 4.5 {
+        t = run(&mut cell, &doc, t, 0.1);
+        let (l, r) = (foot(&mut cell, "shoe_left"), foot(&mut cell, "shoe_right"));
+        assert!(
+            (l.x - rest_l.x) * (r.x - rest_r.x) <= 1e-9,
+            "the legs go opposite ways"
+        );
+        apart = apart.max((l.x - r.x).abs());
+    }
+    assert!(apart > 0.3, "a stride: {apart}");
+    assert_eq!(cell.operator_activities()[0].2, "walk");
+    // Done and free: as made.
+    run(&mut cell, &doc, t, 20.0);
+    assert_eq!(cell.operator_activities()[0].2, "idle");
+    let l = foot(&mut cell, "shoe_left");
+    assert!((l - rest_l).length() < 1e-9, "{l} {rest_l}");
 }
 
 #[test]

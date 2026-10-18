@@ -216,7 +216,14 @@ impl Cell {
     /// The stop a flow component is served at: the nearest, within reach.
     fn stop_near(&self, doc: &Document, object: u64) -> Option<u64> {
         let c = self.components.iter().find(|c| c.object == object)?;
-        let at = Self::dock(doc, c)?.0.truncate();
+        // The docks worked out for the scene as it is, if they were.
+        let seen = self
+            .docks_seen
+            .as_ref()
+            .filter(|s| s.version == doc.version())
+            .and_then(|s| s.docks.get(&object))
+            .map(|d| d.0);
+        let at = seen.or_else(|| Self::dock(doc, c).map(|d| d.0))?.truncate();
         self.stop_places(doc)
             .into_iter()
             .map(|(n, (p, _))| (n, p.truncate().distance(at)))
@@ -225,22 +232,134 @@ impl Cell {
             .map(|(n, _)| n)
     }
 
-    /// An AMR free for a job: one not driving, not on a job, not following
-    /// a real one, and not low on charge — else, never free, it would be
-    /// given job after job and never go to charge.
-    fn free_amr(&self) -> Option<u64> {
-        self.components
+    /// Whether any AMR is free for a job (see `free_amr`).
+    fn any_free_amr(&self) -> bool {
+        self.components.iter().any(|c| self.free(c))
+    }
+
+    /// Whether AMR `c` is free for a job (see `free_amr`).
+    fn free(&self, c: &Component) -> bool {
+        c.kind == Kind::Amr
+            && c.mirror.is_none()
+            && (c.props.battery <= 0.0 || self.energy.get(&c.object).is_none_or(|e| *e >= LOW))
+            && !self.jobs.iter().any(|j| j.amr == Some(c.object))
+            && !self.charging.contains(&c.object)
+            && (self.flow_on || self.rovers.get(&c.object).is_none_or(|r| r.legs.is_empty()))
+    }
+
+    /// How far it is from `from` to each stop along the lanes: to the stop
+    /// of the network nearest, then the shortest way; straight to a stop
+    /// off the network, or to every stop if there are no lanes.
+    fn lane_distances(
+        &self,
+        places: &BTreeMap<u64, (DVec3, f64)>,
+        from: DVec3,
+    ) -> BTreeMap<u64, f64> {
+        let from = from.truncate();
+        let straight = |n: &u64| {
+            places
+                .get(n)
+                .map_or(f64::INFINITY, |p| p.0.truncate().distance(from))
+        };
+        let mut dist: BTreeMap<u64, f64> = places.keys().map(|n| (*n, straight(n))).collect();
+        let start = places
+            .keys()
+            .filter(|n| self.lanes.contains_key(*n))
+            .min_by(|a, b| straight(a).total_cmp(&straight(b)))
+            .copied();
+        let Some(start) = start else {
+            return dist;
+        };
+        // Dijkstra over the network, the graph being small.
+        let mut lane: BTreeMap<u64, f64> = BTreeMap::from([(start, straight(&start))]);
+        let mut open = vec![start];
+        while let Some(k) = open
             .iter()
-            .filter(|c| c.kind == Kind::Amr && c.mirror.is_none())
-            .filter(|c| {
-                c.props.battery <= 0.0 || self.energy.get(&c.object).is_none_or(|e| *e >= LOW)
+            .enumerate()
+            .min_by(|a, b| lane[a.1].total_cmp(&lane[b.1]))
+            .map(|(k, _)| k)
+        {
+            let n = open.swap_remove(k);
+            for m in self.lanes.get(&n).into_iter().flatten() {
+                let (Some(a), Some(b)) = (places.get(&n), places.get(m)) else {
+                    continue;
+                };
+                let d = lane[&n] + a.0.truncate().distance(b.0.truncate());
+                if lane.get(m).is_none_or(|old| d < *old) {
+                    lane.insert(*m, d);
+                    if !open.contains(m) {
+                        open.push(*m);
+                    }
+                }
+            }
+        }
+        // On the network, only along it: a stop it does not reach, never.
+        for (n, d) in dist.iter_mut() {
+            if self.lanes.contains_key(n) || self.lanes.values().any(|l| l.contains(n)) {
+                *d = lane.get(n).copied().unwrap_or(f64::INFINITY);
+            }
+        }
+        dist
+    }
+
+    /// Gives the parts waiting for an AMR to the AMRs free, as a fleet
+    /// manager does: the nearest pair first — the AMR that gets soonest,
+    /// along the lanes, to where a part waits — then the next nearest, and
+    /// so on. Not job by job in turn, which sends an AMR just free past a
+    /// part beside it to one across the floor. Returns whether any went.
+    fn dispatch(&mut self, doc: &Document) -> bool {
+        let places = self.stop_places(doc);
+        let mut free: Vec<(u64, BTreeMap<u64, f64>)> = self
+            .components
+            .iter()
+            .filter(|c| self.free(c))
+            .filter_map(|c| {
+                Some((
+                    c.object,
+                    self.lane_distances(&places, self.rover(doc, c)?.at),
+                ))
             })
-            .map(|c| c.object)
-            .find(|a| {
-                !self.jobs.iter().any(|j| j.amr == Some(*a))
-                    && !self.charging.contains(a)
-                    && self.rovers.get(a).is_none_or(|r| r.legs.is_empty())
+            .collect();
+        let mut waiting: Vec<(usize, u64)> = self
+            .jobs
+            .iter()
+            .enumerate()
+            .filter(|(_, j)| {
+                j.by == 1 && j.part != 0 && j.amr.is_none() && j.phase == Phase::Waiting
             })
+            .filter_map(|(k, j)| Some((k, self.stop_near(doc, j.from)?)))
+            .collect();
+        let mut changed = false;
+        while !free.is_empty() && !waiting.is_empty() {
+            let best = free
+                .iter()
+                .enumerate()
+                .flat_map(|(f, (_, d))| {
+                    waiting.iter().enumerate().map(move |(w, (_, stop))| {
+                        (f, w, d.get(stop).copied().unwrap_or(f64::INFINITY))
+                    })
+                })
+                .filter(|(.., d)| d.is_finite())
+                .min_by(|a, b| a.2.total_cmp(&b.2));
+            let Some((f, w, _)) = best else {
+                break;
+            };
+            let (amr, _) = free.swap_remove(f);
+            let (k, stop) = waiting.swap_remove(w);
+            match self.send(doc, amr, stop) {
+                Ok(()) => {
+                    self.jobs[k].amr = Some(amr);
+                    self.jobs[k].phase = Phase::Fetching;
+                    self.batch(k, amr);
+                    changed = true;
+                    // Those it took with it are not waiting any more.
+                    let jobs = &self.jobs;
+                    waiting.retain(|(j, _)| jobs[*j].amr.is_none());
+                }
+                Err(e) => self.flow_problem = Some(e),
+            }
+        }
+        changed
     }
 
     /// The stops an AMR with nothing to do parks at: those at the end of a
@@ -531,6 +650,21 @@ impl Cell {
         self.free_operators_for(None)
     }
 
+    /// Those free to carry a part from `from` to `to`: one who works at
+    /// certain stations only carries what comes from or goes to them — a
+    /// checker at goods in does not walk across the floor to the packing
+    /// benches; one who may work anywhere carries anything.
+    fn free_carriers(&self, from: u64, to: u64) -> Vec<u64> {
+        self.free_operators()
+            .into_iter()
+            .filter(|o| {
+                self.skills
+                    .get(o)
+                    .is_none_or(|k| k.contains(&from) || k.contains(&to))
+            })
+            .collect()
+    }
+
     /// The same, those who may work at station `at` if one is named, and
     /// on their shift now.
     fn free_operators_for(&self, at: Option<u64>) -> Vec<u64> {
@@ -752,6 +886,9 @@ impl Cell {
                 )
             })
             .collect();
+        if self.any_free_amr() {
+            happened |= self.dispatch(doc);
+        }
         for k in 0..self.jobs.len() {
             let job = self.jobs[k].clone();
             let idle = |cell: &Cell, a: u64| cell.rovers.get(&a).is_none_or(|r| r.legs.is_empty());
@@ -761,7 +898,8 @@ impl Cell {
                 continue;
             }
             let next = match job.phase {
-                // By hand: the free person nearest the sender.
+                // By hand: the free person nearest the sender, of those who
+                // may carry it.
                 Phase::Waiting if hand => {
                     let near = self
                         .components
@@ -772,7 +910,7 @@ impl Cell {
                         continue;
                     };
                     let who = self
-                        .free_operators()
+                        .free_carriers(job.from, job.to)
                         .into_iter()
                         .filter_map(|o| {
                             let oc = self.components.iter().find(|x| x.object == o)?;
@@ -798,28 +936,15 @@ impl Cell {
                     self.batch(k, who);
                     Phase::Fetching
                 }
-                Phase::Waiting => match self.free_amr() {
-                    Some(amr) => {
-                        let Some(stop) = self.stop_near(doc, job.from) else {
-                            self.flow_problem = Some(
-                                "AMR로 보내는 공정 가까이(4 m)에 AMR 정지 위치가 없습니다".into(),
-                            );
-                            continue;
-                        };
-                        match self.send(doc, amr, stop) {
-                            Ok(()) => {
-                                self.jobs[k].amr = Some(amr);
-                                self.batch(k, amr);
-                                Phase::Fetching
-                            }
-                            Err(e) => {
-                                self.flow_problem = Some(e);
-                                continue;
-                            }
-                        }
+                // By AMR: given out together, before this pass (`dispatch`);
+                // here only said if there is no stop to fetch it from.
+                Phase::Waiting => {
+                    if self.stop_near(doc, job.from).is_none() {
+                        self.flow_problem =
+                            Some("AMR로 보내는 공정 가까이(4 m)에 AMR 정지 위치가 없습니다".into());
                     }
-                    None => continue,
-                },
+                    continue;
+                }
                 Phase::Fetching if idle(self, job.amr.unwrap()) => {
                     Phase::Loading(now + if hand { HAND } else { LOAD })
                 }

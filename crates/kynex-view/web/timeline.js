@@ -152,6 +152,16 @@ export class TimelinePanel {
       this.flowOp(this.flowState?.on ? 'stop' : 'start'),
     );
     document.getElementById('flow-reset').addEventListener('click', () => this.flowOp('reset'));
+    // How fast the factory runs: the simulation's clock, shared with the
+    // robots' programs.
+    document.getElementById('flow-speed').addEventListener('change', async (e) => {
+      try {
+        const answer = await post({ op: 'speed', speed: Number(e.target.value) });
+        if (!answer.ok) this.ctx.toast(answer.error || '배속을 바꾸지 못했습니다');
+      } catch (err) {
+        this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      }
+    });
     // The flow's settings, all of them each time: the calendar and the
     // cost's figures.
     for (const id of ['flow-work', 'flow-rest', 'flow-warmup', 'cost-hours', 'cost-years', 'cost-margin']) {
@@ -197,6 +207,16 @@ export class TimelinePanel {
     } catch (err) {
       this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
     }
+  }
+
+  // The simulation's clock as KYNEX has it: the speed shown, unless it is
+  // being chosen.
+  setClock(clock) {
+    const speed = document.getElementById('flow-speed');
+    if (!clock || document.activeElement === speed) return;
+    const v = String(clock.speed);
+    if (![...speed.options].some((o) => o.value === v)) speed.add(new Option(`${v}배속`, v));
+    speed.value = v;
   }
 
   // The `scenarios` event.

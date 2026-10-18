@@ -108,6 +108,11 @@ const fn c(
     }
 }
 
+/// What a flow piece stands as: a table its parts are set out on, or a
+/// mark on the floor — where something as big as a car body stands, or
+/// one rides into a booth, a jig or onto a line placed over it.
+const BASES: &[&str] = &["작업대", "바닥 표시"];
+
 /// The tools a robot can carry on its flange, by number (see [`tool_urdf`]).
 pub const TOOLS: &[&str] = &[
     "없음",
@@ -158,6 +163,12 @@ pub const TEMPLATES: &[Template] = &[
         name: "UR16e",
         group: "로봇",
         params: &[tool(0)],
+    },
+    Template {
+        key: "glass_robot",
+        name: "유리 이송 로봇 (대형)",
+        group: "로봇",
+        params: &[],
     },
     Template {
         key: "irb1600_tending",
@@ -273,7 +284,11 @@ pub const TEMPLATES: &[Template] = &[
         key: "flow_source",
         name: "소재 공급",
         group: "공정 흐름",
-        params: &[q("feed", "공급 간격", 30.0, 1.0, 3600.0, "s")],
+        params: &[
+            q("feed", "공급 간격", 30.0, 1.0, 3600.0, "s"),
+            c("look", "부품 모양", 0.0, crate::cell::LOOKS),
+            c("base", "형태", 0.0, BASES),
+        ],
     },
     Template {
         key: "flow_station",
@@ -285,13 +300,18 @@ pub const TEMPLATES: &[Template] = &[
             q("cycle", "처리 시간", 45.0, 1.0, 36000.0, "s"),
             q("takes", "투입 수", 1.0, 1.0, 20.0, "개"),
             q("makes", "배출 수", 1.0, 1.0, 20.0, "개"),
+            c("look", "부품 모양", 0.0, crate::cell::LOOKS),
+            c("base", "형태", 0.0, BASES),
         ],
     },
     Template {
         key: "flow_buffer",
         name: "버퍼",
         group: "공정 흐름",
-        params: &[q("capacity", "용량", 10.0, 1.0, 1000.0, "개")],
+        params: &[
+            q("capacity", "용량", 10.0, 1.0, 1000.0, "개"),
+            c("base", "형태", 0.0, BASES),
+        ],
     },
     Template {
         key: "flow_rack",
@@ -307,7 +327,7 @@ pub const TEMPLATES: &[Template] = &[
         key: "flow_sink",
         name: "배출",
         group: "공정 흐름",
-        params: &[],
+        params: &[c("base", "형태", 0.0, BASES)],
     },
     Template {
         key: "operator",
@@ -554,6 +574,105 @@ pub const TEMPLATES: &[Template] = &[
         name: "용접기",
         group: "산업 장비",
         params: &[],
+    },
+    // A display fab's equipment (`display`).
+    Template {
+        key: "cluster_tool",
+        name: "클러스터 장비 (증착·식각)",
+        group: "디스플레이 공장",
+        params: &[
+            q("chambers", "챔버 수", 5.0, 2.0, 6.0, "개"),
+            c("process", "공정", 0.0, display::PROCESSES),
+        ],
+    },
+    Template {
+        key: "track_tool",
+        name: "트랙 (코터·현상기)",
+        group: "디스플레이 공장",
+        params: &[p("length", "길이", 14.0, 6.0, 30.0)],
+    },
+    Template {
+        key: "exposure_tool",
+        name: "노광기",
+        group: "디스플레이 공장",
+        params: &[],
+    },
+    Template {
+        key: "wet_station",
+        name: "습식 장비 (세정·식각·박리)",
+        group: "디스플레이 공장",
+        params: &[p("length", "길이", 12.0, 4.0, 30.0)],
+    },
+    Template {
+        key: "stocker",
+        name: "카세트 스토커",
+        group: "디스플레이 공장",
+        params: &[
+            p("length", "길이", 10.0, 4.0, 40.0),
+            p("height", "높이", 6.0, 3.0, 12.0),
+        ],
+    },
+    Template {
+        key: "inspection_tool",
+        name: "검사 장비 (AOI·어레이 검사)",
+        group: "디스플레이 공장",
+        params: &[],
+    },
+    Template {
+        key: "crane_rail",
+        name: "스토커 크레인 레일",
+        group: "디스플레이 공장",
+        params: &[p("length", "길이", 40.0, 6.0, 200.0)],
+    },
+    Template {
+        key: "oht_rail",
+        name: "천장 반송 레일 (OHT)",
+        group: "디스플레이 공장",
+        params: &[
+            p("length", "길이", 30.0, 6.0, 150.0),
+            p("width", "폭", 8.0, 2.0, 40.0),
+            p("height", "높이", 5.0, 3.0, 10.0),
+        ],
+    },
+    // A car plant's own equipment (`automotive`).
+    Template {
+        key: "car_body",
+        name: "자동차 차체",
+        group: "자동차 공장",
+        params: &[
+            c("stage", "단계", 2.0, automotive::STAGES),
+            c("colour", "색상", 0.0, automotive::COLOURS),
+        ],
+    },
+    Template {
+        key: "welding_jig",
+        name: "차체 용접 지그",
+        group: "자동차 공장",
+        params: &[],
+    },
+    Template {
+        key: "paint_booth",
+        name: "도장 부스",
+        group: "자동차 공장",
+        params: &[p("length", "길이", 16.0, 8.0, 40.0)],
+    },
+    Template {
+        key: "curing_oven",
+        name: "도장 건조로",
+        group: "자동차 공장",
+        params: &[p("length", "길이", 18.0, 6.0, 60.0)],
+    },
+    Template {
+        key: "assembly_line",
+        name: "의장 라인 (슬랫 컨베이어)",
+        group: "자동차 공장",
+        params: &[p("length", "길이", 24.0, 6.0, 100.0)],
+    },
+    Template {
+        key: "light_tunnel",
+        name: "검사 라이트 터널",
+        group: "자동차 공장",
+        params: &[p("length", "길이", 6.0, 3.0, 12.0)],
     },
 ];
 
@@ -1973,6 +2092,7 @@ fn build(item: &Item) -> Result<Built, String> {
         | "ur5e"
         | "ur3e"
         | "ur16e"
+        | "glass_robot"
         | "irb1600_tending"
         | "irb1600_track"
         | "m1013_tending"
@@ -1982,6 +2102,11 @@ fn build(item: &Item) -> Result<Built, String> {
                 "ur5e" => (include_str!("../library/ur5e.urdf"), UR_REST),
                 "ur3e" => (include_str!("../library/ur3e.urdf"), UR_REST),
                 "ur16e" => (include_str!("../library/ur16e.urdf"), UR_REST),
+                // The fab's glass robot: the arms folded back over its column.
+                "glass_robot" => (
+                    include_str!("../library/glass_robot.urdf"),
+                    &[("joint_3", -1.45), ("joint_4", 2.9), ("joint_5", -1.45)],
+                ),
                 "irb1600_tending" => (
                     include_str!("../library/irb1600_tending.urdf"),
                     &[("joint_5", std::f64::consts::FRAC_PI_2)],
@@ -2032,6 +2157,10 @@ fn build(item: &Item) -> Result<Built, String> {
                         doc.object_mut(id).unwrap().transform = j.place(q);
                     }
                 }
+            }
+            // A glass robot's sheet, shown only while it carries one.
+            if let Some(id) = named(&doc, "glass") {
+                doc.object_mut(id).unwrap().transform.scale = DVec3::splat(crate::cell::NO_GLASS);
             }
         }
         "cnc_lathe" | "cnc_vmc" => {
@@ -2108,20 +2237,9 @@ fn build(item: &Item) -> Result<Built, String> {
             roles.push((positioner, Kind::Positioner));
         }
         "operator" => {
-            let c = Colours::new(&mut doc);
-            // A person, 1.75 m: body and head, facing +X.
+            // A person at work, 1.75 m, facing +X (`interior::person`).
             let person = doc.add_object(Object::new("operator", ObjectData::Empty));
-            let m = Some(person);
-            post(&mut doc, "body", 0.2, 1.45, [0.0, 0.0, 0.725], c.accent, m);
-            post(&mut doc, "head", 0.12, 0.22, [0.0, 0.0, 1.6], c.body, m);
-            block(
-                &mut doc,
-                "front",
-                [0.12, 0.16, 0.08],
-                [0.18, 0.0, 1.3],
-                c.dark,
-                m,
-            );
+            interior::person(&mut doc, Some(person));
             roles.push((person, Kind::Operator));
             props.push((person, json!({ "speed": item.param("speed") })));
         }
@@ -2158,12 +2276,16 @@ fn build(item: &Item) -> Result<Built, String> {
         "flow_source" | "flow_station" | "flow_buffer" | "flow_sink" => {
             let c = Colours::new(&mut doc);
             // A table of its own size and colour; its top where parts stand.
-            let (name, size, colour, kind) = match item.template.as_str() {
+            // Or a mark on the floor, a car body's size, 2 cm thick.
+            let (name, mut size, colour, kind) = match item.template.as_str() {
                 "flow_source" => ("source", [0.6, 0.6, 0.8], c.accent, Kind::Source),
                 "flow_station" => ("station", [1.0, 0.8, 0.9], c.machine, Kind::Station),
                 "flow_buffer" => ("buffer", [1.2, 0.5, 0.6], c.pallet, Kind::Buffer),
                 _ => ("sink", [0.6, 0.6, 0.7], c.dark, Kind::Sink),
             };
+            if item.param("base").round() as usize == 1 {
+                size = [5.0, 2.4, 0.02];
+            }
             let table = block(
                 &mut doc,
                 name,
@@ -2174,11 +2296,12 @@ fn build(item: &Item) -> Result<Built, String> {
             );
             roles.push((table, kind));
             let settings = match kind {
-                Kind::Source => json!({ "feed": item.param("feed") }),
+                Kind::Source => json!({ "feed": item.param("feed"), "look": item.param("look") }),
                 Kind::Station => json!({
                     "cycle": item.param("cycle"),
                     "takes": item.param("takes"),
                     "makes": item.param("makes"),
+                    "look": item.param("look"),
                 }),
                 Kind::Buffer => json!({ "capacity": item.param("capacity") }),
                 _ => json!({}),
@@ -2360,6 +2483,8 @@ fn build(item: &Item) -> Result<Built, String> {
             fence(&mut doc, &c, l, w, h);
         }
         key if interior::KEYS.contains(&key) => interior::build(&mut doc, item),
+        key if automotive::KEYS.contains(&key) => automotive::build(&mut doc, item),
+        key if display::KEYS.contains(&key) => display::build(&mut doc, item),
         other => return Err(format!("no template {other:?}")),
     }
     let order = doc.hierarchy().into_iter().map(|(id, _)| id).collect();
@@ -2960,6 +3085,51 @@ pub fn is_op(op: &str) -> bool {
 #[cfg(test)]
 mod tests;
 
+mod automotive;
+mod display;
+pub(crate) use automotive::car_look;
+pub(crate) use display::display_look;
+
+/// A flow part's look drawn as meshes: one for each colour of it, with the
+/// colour, in the part's own frame (its middle on the floor, facing +X).
+pub(crate) type LookMeshes = Vec<([f32; 3], kreate_mesh::MeshData)>;
+
+/// Everything shaped in `doc`, gathered colour by colour into one mesh each,
+/// as a look is drawn.
+fn look_of(doc: &Document) -> LookMeshes {
+    // Each colour's corners and faces, gathered from every shape of it.
+    type Gathered = ([f32; 3], Vec<kreate_math::Vec3>, Vec<Vec<u32>>);
+    let mut groups: Vec<Gathered> = Vec::new();
+    for (id, o) in doc.objects() {
+        let Some(mesh) = o.mesh().and_then(|m| doc.mesh(m)) else {
+            continue;
+        };
+        let rgb = doc.material_at(id, 0).map_or([0.5; 3], |m| {
+            let c = m.base_color;
+            [c.r, c.g, c.b]
+        });
+        let k = match groups.iter().position(|g| g.0 == rgb) {
+            Some(k) => k,
+            None => {
+                groups.push((rgb, Vec::new(), Vec::new()));
+                groups.len() - 1
+            }
+        };
+        let world = doc.world_transform(id);
+        let g = &mut groups[k];
+        let base = g.1.len() as u32;
+        g.1.extend(
+            mesh.positions()
+                .iter()
+                .map(|p| world.transform_point3(p.as_dvec3()).as_vec3()),
+        );
+        g.2.extend(mesh.faces().map(|f| f.iter().map(|v| v + base).collect()));
+    }
+    groups
+        .into_iter()
+        .map(|(rgb, positions, faces)| (rgb, kreate_mesh::MeshData::from_faces(positions, &faces)))
+        .collect()
+}
 mod interior;
 mod model;
 pub use model::RobotModel;

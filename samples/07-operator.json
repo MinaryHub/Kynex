@@ -1,0 +1,295 @@
+{
+  "cell": [
+    {
+      "io": {},
+      "kind": "operator",
+      "lanes": null,
+      "mirror": null,
+      "name": "작업자 1",
+      "next": null,
+      "object": "18446181123772907520",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "capacity": 1,
+        "carrier": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 90.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "makes": 1,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 1.2,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0
+      }
+    },
+    {
+      "io": {},
+      "kind": "source",
+      "lanes": null,
+      "mirror": null,
+      "name": "소재 공급 1",
+      "next": [
+        "18446181123806461952"
+      ],
+      "object": "18446181123789684736",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "capacity": 1,
+        "carrier": 2,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 90.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 15.0,
+        "makes": 1,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 1.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0
+      }
+    },
+    {
+      "io": {},
+      "kind": "station",
+      "lanes": null,
+      "mirror": null,
+      "name": "공정 스테이션 1",
+      "next": [
+        "18446181123823239168"
+      ],
+      "object": "18446181123806461952",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "capacity": 1,
+        "carrier": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 1,
+        "cycle": 10.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "makes": 1,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 1.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0
+      }
+    },
+    {
+      "io": {},
+      "kind": "station",
+      "lanes": null,
+      "mirror": null,
+      "name": "공정 스테이션 2",
+      "next": [
+        "18446181123840016384"
+      ],
+      "object": "18446181123823239168",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "capacity": 1,
+        "carrier": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 1,
+        "cycle": 8.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "makes": 1,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 1.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0
+      }
+    },
+    {
+      "io": {},
+      "kind": "sink",
+      "lanes": null,
+      "mirror": null,
+      "name": "배출 1",
+      "next": null,
+      "object": "18446181123840016384",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "capacity": 1,
+        "carrier": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 90.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "makes": 1,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0
+      }
+    }
+  ],
+  "library": [
+    {
+      "at": [
+        2.0,
+        -2.0,
+        0.0
+      ],
+      "id": 1,
+      "locked": false,
+      "name": "작업자 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "operator",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 2,
+      "locked": false,
+      "name": "소재 공급 1",
+      "params": {
+        "feed": 15.0
+      },
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "flow_source",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        3.0,
+        0.0,
+        0.0
+      ],
+      "id": 3,
+      "locked": false,
+      "name": "공정 스테이션 1",
+      "params": {
+        "cycle": 10.0
+      },
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "flow_station",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        6.0,
+        0.0,
+        0.0
+      ],
+      "id": 4,
+      "locked": false,
+      "name": "공정 스테이션 2",
+      "params": {
+        "cycle": 8.0
+      },
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "flow_station",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        9.0,
+        0.0,
+        0.0
+      ],
+      "id": 5,
+      "locked": false,
+      "name": "배출 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "flow_sink",
+      "yaw": 0.0
+    }
+  ],
+  "plc": {
+    "host": "127.0.0.1",
+    "on": false,
+    "path": "",
+    "port": 502,
+    "protocol": "modbus",
+    "rack": 0,
+    "security": "none",
+    "signals": [],
+    "slot": 1,
+    "trust": "",
+    "unit": 1,
+    "user": ""
+  },
+  "programs": [],
+  "scenarios": [],
+  "version": 2
+}

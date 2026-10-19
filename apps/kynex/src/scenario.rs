@@ -92,12 +92,15 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
     let start = Instant::now();
     let mut t = 0.0;
     let mut alarm = None;
+    let mut carry = crate::carry::Carry::default();
     while t <= seconds {
         let now = start + Duration::from_secs_f64(t);
         for r in &mut runners {
             r.tick(t, now, &mut posing, &mut cell, &doc);
         }
         cell.tick(&doc, t, now);
+        // Robots carrying the flow's parts, as in the viewer.
+        carry.step(&doc, t, &mut cell, &posing, &mut runners, &|_| false);
         delivered += cell.supply(&doc);
         // Warmed up: the figures from here.
         if cell.take_warmed() {

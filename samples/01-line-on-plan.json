@@ -1,0 +1,991 @@
+{
+  "cell": [
+    {
+      "cycles": null,
+      "io": {},
+      "kind": "source",
+      "lanes": null,
+      "mirror": null,
+      "mix": null,
+      "name": "소재 공급 1",
+      "next": [
+        "18446181123789684736"
+      ],
+      "object": "18446181123772907520",
+      "orders": null,
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "battery": 0.0,
+        "capacity": 1,
+        "carrier": 0,
+        "charge": 60.0,
+        "charger": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 90.0,
+        "dist": 0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 6.0,
+        "kanban": 0,
+        "makes": 1,
+        "mtbf": 0.0,
+        "mttr": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "policy": 0,
+        "rows": 4,
+        "rule": 0,
+        "scrap": 0.0,
+        "setup": 0.0,
+        "shift_from": 0.0,
+        "shift_to": 0.0,
+        "speed": 1.0,
+        "spread": 0.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0,
+        "wage": 0.0
+      },
+      "routes": {},
+      "skills": null
+    },
+    {
+      "cycles": null,
+      "io": {},
+      "kind": "station",
+      "lanes": null,
+      "mirror": null,
+      "mix": null,
+      "name": "공정 스테이션 1",
+      "next": [
+        "18446181123806461952"
+      ],
+      "object": "18446181123789684736",
+      "orders": null,
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "battery": 0.0,
+        "capacity": 1,
+        "carrier": 0,
+        "charge": 60.0,
+        "charger": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 5.0,
+        "dist": 0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "kanban": 0,
+        "makes": 1,
+        "mtbf": 0.0,
+        "mttr": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "policy": 0,
+        "rows": 4,
+        "rule": 0,
+        "scrap": 0.0,
+        "setup": 0.0,
+        "shift_from": 0.0,
+        "shift_to": 0.0,
+        "speed": 1.0,
+        "spread": 0.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0,
+        "wage": 0.0
+      },
+      "routes": {},
+      "skills": null
+    },
+    {
+      "cycles": null,
+      "io": {},
+      "kind": "buffer",
+      "lanes": null,
+      "mirror": null,
+      "mix": null,
+      "name": "버퍼 1",
+      "next": [
+        "18446181123823239168"
+      ],
+      "object": "18446181123806461952",
+      "orders": null,
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "battery": 0.0,
+        "capacity": 5,
+        "carrier": 0,
+        "charge": 60.0,
+        "charger": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 90.0,
+        "dist": 0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "kanban": 0,
+        "makes": 1,
+        "mtbf": 0.0,
+        "mttr": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "policy": 0,
+        "rows": 4,
+        "rule": 0,
+        "scrap": 0.0,
+        "setup": 0.0,
+        "shift_from": 0.0,
+        "shift_to": 0.0,
+        "speed": 1.0,
+        "spread": 0.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0,
+        "wage": 0.0
+      },
+      "routes": {},
+      "skills": null
+    },
+    {
+      "cycles": null,
+      "io": {},
+      "kind": "station",
+      "lanes": null,
+      "mirror": null,
+      "mix": null,
+      "name": "공정 스테이션 2",
+      "next": [
+        "18446181123840016384"
+      ],
+      "object": "18446181123823239168",
+      "orders": null,
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "battery": 0.0,
+        "capacity": 1,
+        "carrier": 0,
+        "charge": 60.0,
+        "charger": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 4.0,
+        "dist": 0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "kanban": 0,
+        "makes": 1,
+        "mtbf": 0.0,
+        "mttr": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "policy": 0,
+        "rows": 4,
+        "rule": 0,
+        "scrap": 0.0,
+        "setup": 0.0,
+        "shift_from": 0.0,
+        "shift_to": 0.0,
+        "speed": 1.0,
+        "spread": 0.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0,
+        "wage": 0.0
+      },
+      "routes": {},
+      "skills": null
+    },
+    {
+      "cycles": null,
+      "io": {},
+      "kind": "sink",
+      "lanes": null,
+      "mirror": null,
+      "mix": null,
+      "name": "배출 1",
+      "next": null,
+      "object": "18446181123840016384",
+      "orders": null,
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "battery": 0.0,
+        "capacity": 1,
+        "carrier": 0,
+        "charge": 60.0,
+        "charger": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "crew": 0,
+        "cycle": 90.0,
+        "dist": 0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "kanban": 0,
+        "makes": 1,
+        "mtbf": 0.0,
+        "mttr": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "policy": 0,
+        "rows": 4,
+        "rule": 0,
+        "scrap": 0.0,
+        "setup": 0.0,
+        "shift_from": 0.0,
+        "shift_to": 0.0,
+        "speed": 0.2,
+        "spread": 0.0,
+        "swing": 0.0,
+        "takes": 1,
+        "travel": 0.0,
+        "wage": 0.0
+      },
+      "routes": {},
+      "skills": null
+    },
+    {
+      "flow_settings": {
+        "hours": 0.0,
+        "margin": 200.0,
+        "rest": 0.0,
+        "warmup": 0.0,
+        "work": 0.0,
+        "years": 0.0
+      }
+    }
+  ],
+  "floor": {
+    "image": "data:image/png;base64,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",
+    "opacity": 0.8,
+    "width": 40.0,
+    "x": 8.0,
+    "y": 0.0,
+    "yaw": 0.0
+  },
+  "library": [
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 1,
+      "locked": false,
+      "name": "소재 공급 1",
+      "params": {
+        "feed": 6.0
+      },
+      "pitch": 0.0,
+      "price": 0.0,
+      "roll": 0.0,
+      "template": "flow_source",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        2.0,
+        0.0,
+        0.0
+      ],
+      "id": 2,
+      "locked": false,
+      "name": "공정 스테이션 1",
+      "params": {
+        "cycle": 5.0
+      },
+      "pitch": 0.0,
+      "price": 3000.0,
+      "roll": 0.0,
+      "template": "flow_station",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        4.0,
+        0.0,
+        0.0
+      ],
+      "id": 3,
+      "locked": false,
+      "name": "버퍼 1",
+      "params": {
+        "capacity": 5.0
+      },
+      "pitch": 0.0,
+      "price": 0.0,
+      "roll": 0.0,
+      "template": "flow_buffer",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        6.0,
+        0.0,
+        0.0
+      ],
+      "id": 4,
+      "locked": false,
+      "name": "공정 스테이션 2",
+      "params": {
+        "cycle": 4.0
+      },
+      "pitch": 0.0,
+      "price": 2000.0,
+      "roll": 0.0,
+      "template": "flow_station",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        8.0,
+        0.0,
+        0.0
+      ],
+      "id": 5,
+      "locked": false,
+      "name": "배출 1",
+      "params": {},
+      "pitch": 0.0,
+      "price": 0.0,
+      "roll": 0.0,
+      "template": "flow_sink",
+      "yaw": 0.0
+    }
+  ],
+  "plc": {
+    "host": "127.0.0.1",
+    "on": false,
+    "path": "",
+    "port": 502,
+    "protocol": "modbus",
+    "rack": 0,
+    "security": "none",
+    "signals": [],
+    "slot": 1,
+    "trust": "",
+    "unit": 1,
+    "user": ""
+  },
+  "programs": [],
+  "scenarios": [
+    {
+      "cell": [
+        {
+          "io": {},
+          "kind": "source",
+          "lanes": null,
+          "mirror": null,
+          "name": "소재 공급 1",
+          "next": [
+            "18446181123789684736"
+          ],
+          "object": "18446181123772907520",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 90.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 6.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "station",
+          "lanes": null,
+          "mirror": null,
+          "name": "공정 스테이션 1",
+          "next": [
+            "18446181123806461952"
+          ],
+          "object": "18446181123789684736",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 12.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "buffer",
+          "lanes": null,
+          "mirror": null,
+          "name": "버퍼 1",
+          "next": [
+            "18446181123823239168"
+          ],
+          "object": "18446181123806461952",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 5,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 90.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "station",
+          "lanes": null,
+          "mirror": null,
+          "name": "공정 스테이션 2",
+          "next": [
+            "18446181123840016384"
+          ],
+          "object": "18446181123823239168",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 4.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "sink",
+          "lanes": null,
+          "mirror": null,
+          "name": "배출 1",
+          "next": null,
+          "object": "18446181123840016384",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 90.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 0.2,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        }
+      ],
+      "library": [
+        {
+          "at": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "id": 1,
+          "locked": false,
+          "name": "소재 공급 1",
+          "params": {
+            "feed": 6.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_source",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "id": 2,
+          "locked": false,
+          "name": "공정 스테이션 1",
+          "params": {
+            "cycle": 20.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_station",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            4.0,
+            0.0,
+            0.0
+          ],
+          "id": 3,
+          "locked": false,
+          "name": "버퍼 1",
+          "params": {
+            "capacity": 5.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_buffer",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            6.0,
+            0.0,
+            0.0
+          ],
+          "id": 4,
+          "locked": false,
+          "name": "공정 스테이션 2",
+          "params": {
+            "cycle": 4.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_station",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            8.0,
+            0.0,
+            0.0
+          ],
+          "id": 5,
+          "locked": false,
+          "name": "배출 1",
+          "params": {},
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_sink",
+          "yaw": 0.0
+        }
+      ],
+      "name": "스테이션1 12초",
+      "programs": []
+    },
+    {
+      "cell": [
+        {
+          "io": {},
+          "kind": "source",
+          "lanes": null,
+          "mirror": null,
+          "name": "소재 공급 1",
+          "next": [
+            "18446181123789684736"
+          ],
+          "object": "18446181123772907520",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 90.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 6.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "station",
+          "lanes": null,
+          "mirror": null,
+          "name": "공정 스테이션 1",
+          "next": [
+            "18446181123806461952"
+          ],
+          "object": "18446181123789684736",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 5.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "buffer",
+          "lanes": null,
+          "mirror": null,
+          "name": "버퍼 1",
+          "next": [
+            "18446181123823239168"
+          ],
+          "object": "18446181123806461952",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 5,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 90.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "station",
+          "lanes": null,
+          "mirror": null,
+          "name": "공정 스테이션 2",
+          "next": [
+            "18446181123840016384"
+          ],
+          "object": "18446181123823239168",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 4.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 1.0,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        },
+        {
+          "io": {},
+          "kind": "sink",
+          "lanes": null,
+          "mirror": null,
+          "name": "배출 1",
+          "next": null,
+          "object": "18446181123840016384",
+          "plc": {},
+          "props": {
+            "actuate": 0.5,
+            "angle": 1.5707963267948966,
+            "axis": 0,
+            "capacity": 1,
+            "carrier": 0,
+            "chuck": 1.0,
+            "cols": 5,
+            "crew": 0,
+            "cycle": 90.0,
+            "door": 3.0,
+            "drain": 0.0,
+            "feed": 0.0,
+            "makes": 1,
+            "pitch": 0.1,
+            "plug": 0,
+            "point": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rows": 4,
+            "speed": 0.2,
+            "swing": 0.0,
+            "takes": 1,
+            "travel": 0.0
+          }
+        }
+      ],
+      "library": [
+        {
+          "at": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "id": 1,
+          "locked": false,
+          "name": "소재 공급 1",
+          "params": {
+            "feed": 6.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_source",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "id": 2,
+          "locked": false,
+          "name": "공정 스테이션 1",
+          "params": {
+            "cycle": 5.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_station",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            4.0,
+            0.0,
+            0.0
+          ],
+          "id": 3,
+          "locked": false,
+          "name": "버퍼 1",
+          "params": {
+            "capacity": 5.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_buffer",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            6.0,
+            0.0,
+            0.0
+          ],
+          "id": 4,
+          "locked": false,
+          "name": "공정 스테이션 2",
+          "params": {
+            "cycle": 4.0
+          },
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_station",
+          "yaw": 0.0
+        },
+        {
+          "at": [
+            8.0,
+            0.0,
+            0.0
+          ],
+          "id": 5,
+          "locked": false,
+          "name": "배출 1",
+          "params": {},
+          "pitch": 0.0,
+          "roll": 0.0,
+          "template": "flow_sink",
+          "yaw": 0.0
+        }
+      ],
+      "name": "스테이션1 5초",
+      "programs": []
+    }
+  ],
+  "version": 2
+}

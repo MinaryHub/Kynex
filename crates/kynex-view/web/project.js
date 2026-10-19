@@ -34,6 +34,22 @@ export class ProjectPanel {
     this.name.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') document.getElementById('project-new').click();
     });
+    // A sample: a copy of it opened.
+    this.samples = document.getElementById('project-samples');
+    this.samples.addEventListener('click', async (e) => {
+      const li = e.target.closest('li[data-key]');
+      if (!li) return;
+      const title = li.dataset.title;
+      if (!confirm(`샘플 "${title}"의 사본을 프로젝트로 만들어 엽니다. 지금 프로젝트는 저장되고, 실행 중인 프로그램과 PLC 연결은 멈춥니다.`)) return;
+      try {
+        const answer = await post({ op: 'project', action: 'sample', key: li.dataset.key });
+        if (!answer.ok) return this.ctx.toast(answer.error || '열 수 없습니다');
+        this.ctx.toast(`샘플 "${title}"을(를) 열었습니다`);
+        this.refresh();
+      } catch (err) {
+        this.ctx.toast(`프로젝트: ${err.message}`);
+      }
+    });
     this.list.addEventListener('click', (e) => {
       const li = e.target.closest('li[data-name]');
       if (!li || li.classList.contains('current')) return;
@@ -87,5 +103,12 @@ export class ProjectPanel {
           .map((p) => `<li data-name="${esc(p.name)}" class="${p.current ? 'current' : ''}" title="${p.current ? '지금 열린 프로젝트' : '눌러서 열기'}"><span>${esc(p.name)}</span><span class="muted num">${p.current ? '열림 · ' : ''}${when(p.modified)}</span></li>`)
           .join('')
       : '<li class="muted">아직 저장된 프로젝트가 없습니다</li>';
+    const level = { 1: '초급', 2: '중급', 3: '전문가' };
+    this.samples.innerHTML = (answer.samples ?? [])
+      .map(
+        (s) =>
+          `<li data-key="${esc(s.key)}" data-title="${esc(s.title)}" title="${esc(s.about)}"><span><span class="sample-level l${s.level}">${level[s.level] ?? ''}</span>${esc(s.title.replace(/^샘플 /, ''))}<small class="muted">${esc(s.about)}</small></span></li>`,
+      )
+      .join('');
   }
 }

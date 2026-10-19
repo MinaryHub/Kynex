@@ -995,3 +995,13 @@ body[data-level="2"] [data-min="3"] { display: none !important; }
 .level-switch button:hover { color: var(--text); }
 .level-switch button.on { background: var(--accent); color: #fff; }
 .level-hint { display: block; margin-top: 4px; font-size: 11px; }
+
+/* The samples, under the projects. */
+.project-samples-head { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-2); font-weight: 600; font-size: 12px; }
+.project-samples-head .muted { font-weight: 400; font-size: 11px; margin-left: 6px; }
+.project-samples li > span:first-child { white-space: normal; }
+.project-samples small { display: block; font-size: 11px; line-height: 1.35; margin-top: 2px; }
+.sample-level { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; font-size: 10px; line-height: 16px; vertical-align: 1px; background: var(--panel-2); }
+.sample-level.l1 { color: #3ddc84; }
+.sample-level.l2 { color: #f2b53c; }
+.sample-level.l3 { color: #ff7a59; }

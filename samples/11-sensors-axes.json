@@ -1,0 +1,291 @@
+{
+  "cell": [
+    {
+      "io": {},
+      "kind": "conveyor",
+      "mirror": null,
+      "name": "belt",
+      "object": "18446181123772907521",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "travel": 0.0
+      }
+    },
+    {
+      "io": {},
+      "kind": "actuator",
+      "mirror": null,
+      "name": "pin",
+      "object": "18446181123789684738",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 2,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 0.3,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "travel": 0.04
+      }
+    },
+    {
+      "io": {},
+      "kind": "sensor",
+      "mirror": null,
+      "name": "photo_sensor",
+      "object": "18446181123806461953",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "travel": 0.6
+      }
+    },
+    {
+      "io": {},
+      "kind": "actuator",
+      "mirror": null,
+      "name": "lift_table",
+      "object": "18446181123823239170",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 2,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 2.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "travel": 0.3
+      }
+    },
+    {
+      "io": {},
+      "kind": "actuator",
+      "mirror": null,
+      "name": "carriage",
+      "object": "18446181123840016386",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 2.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "travel": 0.8
+      }
+    },
+    {
+      "io": {},
+      "kind": "actuator",
+      "mirror": null,
+      "name": "disc",
+      "object": "18446181123856793602",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 3.141592653589793,
+        "axis": 2,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 1.5,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 1.0,
+        "travel": 0.1
+      }
+    }
+  ],
+  "library": [
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 1,
+      "locked": false,
+      "name": "벨트 컨베이어 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "conveyor",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 2,
+      "locked": false,
+      "name": "스토퍼 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "stopper",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 3,
+      "locked": false,
+      "name": "포토센서 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "photo_sensor",
+      "yaw": 1.5707963267948966
+    },
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 4,
+      "locked": false,
+      "name": "리프터 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "lifter",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 5,
+      "locked": false,
+      "name": "직선축 (셔틀) 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "linear_axis",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 6,
+      "locked": false,
+      "name": "회전축 (인덱스 테이블) 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "rotary_axis",
+      "yaw": 0.0
+    }
+  ],
+  "plc": {
+    "host": "127.0.0.1",
+    "on": false,
+    "path": "",
+    "port": 502,
+    "protocol": "modbus",
+    "security": "none",
+    "signals": [],
+    "trust": "",
+    "unit": 1,
+    "user": ""
+  },
+  "programs": [],
+  "scenarios": [],
+  "version": 2
+}

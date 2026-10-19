@@ -36,6 +36,7 @@ use kynex_view::json as vjson;
 use serde_json::{json, Value};
 
 mod bench;
+mod carry;
 mod cell;
 mod collide;
 mod edges;
@@ -50,6 +51,7 @@ mod pose;
 mod program;
 mod rtde;
 mod run;
+mod samples;
 mod scenario;
 pub mod studio;
 mod timeline;

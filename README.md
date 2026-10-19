@@ -585,6 +585,16 @@ by `Offs`. Names and comments are kept to ASCII; other letters become
 - The controller times moves in its own way, so a cycle on the robot is
   close to the planned cycle, but not equal to it.
 
+### Samples
+
+The project panel (the folder on the toolbar) always lists **샘플**:
+eleven projects, each showing one thing KYNEX does, marked 초급, 중급 or
+전문가 — a line on a site plan, a CNC machine as a station, conveyors
+and racks, variation and repeated runs, products, orders, an operator,
+AMRs, a robot carrying parts, a robot program, sensors and axes. Clicking
+one opens a copy of it in the projects folder; the sample stays as it is.
+They are in `samples/`, built into KYNEX, and a test runs each.
+
 ### Levels: beginner to expert
 
 **초급 / 중급 / 전문가** in the header sets how much the page shows; it is

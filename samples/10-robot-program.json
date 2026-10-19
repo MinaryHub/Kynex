@@ -1,0 +1,223 @@
+{
+  "cell": [
+    {
+      "io": {},
+      "kind": "cnc",
+      "mirror": null,
+      "name": "CNC 머시닝센터 (수직형) 1",
+      "object": "18446181123789684736",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "travel": 0.0
+      }
+    },
+    {
+      "io": {},
+      "kind": "gripper",
+      "mirror": null,
+      "name": "grip_a",
+      "object": "18446181123772907565",
+      "plc": {},
+      "props": {
+        "actuate": 0.5,
+        "angle": 1.5707963267948966,
+        "axis": 0,
+        "chuck": 1.0,
+        "cols": 5,
+        "cycle": 90.0,
+        "door": 3.0,
+        "drain": 0.0,
+        "feed": 0.0,
+        "pitch": 0.1,
+        "plug": 0,
+        "point": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rows": 4,
+        "speed": 0.2,
+        "swing": 0.0,
+        "travel": 0.0
+      }
+    }
+  ],
+  "library": [
+    {
+      "at": [
+        0.0,
+        -0.8,
+        0.0
+      ],
+      "id": 1,
+      "locked": false,
+      "name": "UR5e 1",
+      "params": {
+        "tool": 1.0
+      },
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "ur5e",
+      "yaw": 0.0
+    },
+    {
+      "at": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "id": 2,
+      "locked": false,
+      "name": "CNC 머시닝센터 (수직형) 1",
+      "params": {},
+      "pitch": 0.0,
+      "roll": 0.0,
+      "template": "cnc_vmc",
+      "yaw": 0.0
+    }
+  ],
+  "plc": {
+    "host": "127.0.0.1",
+    "on": false,
+    "path": "",
+    "port": 502,
+    "protocol": "modbus",
+    "security": "none",
+    "signals": [],
+    "trust": "",
+    "unit": 1,
+    "user": ""
+  },
+  "programs": [
+    {
+      "close": false,
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "robot": "18446181123772907521",
+      "robot_name": "UR5e 1",
+      "routine": "메인",
+      "steps": [
+        {
+          "blend": 0.0,
+          "frame": null,
+          "frame_at": null,
+          "frame_name": null,
+          "joints": [
+            {
+              "name": "shoulder_pan_joint",
+              "position": 0.0,
+              "uid": "18446181123772907524"
+            },
+            {
+              "name": "shoulder_lift_joint",
+              "position": -1.75,
+              "uid": "18446181123772907528"
+            },
+            {
+              "name": "elbow_joint",
+              "position": 1.75,
+              "uid": "18446181123772907534"
+            },
+            {
+              "name": "wrist_1_joint",
+              "position": -1.571,
+              "uid": "18446181123772907540"
+            },
+            {
+              "name": "wrist_2_joint",
+              "position": -1.5709999999999997,
+              "uid": "18446181123772907544"
+            },
+            {
+              "name": "wrist_3_joint",
+              "position": 0.0,
+              "uid": "18446181123772907548"
+            }
+          ],
+          "kind": "joint",
+          "name": "P1",
+          "pallet": null,
+          "pallet_name": null,
+          "speed": 0.5,
+          "type": "move",
+          "via": null,
+          "work": false
+        },
+        {
+          "add": false,
+          "name": "n",
+          "type": "var_set",
+          "value": 0
+        },
+        {
+          "cond": {
+            "cmp": "<",
+            "kind": "var",
+            "name": "n",
+            "value": 3
+          },
+          "type": "while"
+        },
+        {
+          "seconds": 1.0,
+          "type": "delay"
+        },
+        {
+          "add": true,
+          "name": "n",
+          "type": "var_set",
+          "value": 1
+        },
+        {
+          "type": "end"
+        },
+        {
+          "cond": {
+            "cmp": "==",
+            "kind": "var",
+            "name": "n",
+            "value": 3
+          },
+          "type": "if"
+        },
+        {
+          "seconds": 1.0,
+          "type": "delay"
+        },
+        {
+          "type": "else"
+        },
+        {
+          "type": "end"
+        }
+      ],
+      "taught": 1,
+      "tool": "18446181123772907553",
+      "tool_name": "tool0"
+    }
+  ],
+  "scenarios": [],
+  "version": 2
+}

@@ -36,12 +36,15 @@ pub const LOOKS: &[&str] = &[
     "LCD 패널",
     "LCD 모듈",
     "유리 카세트",
+    "FOUP",
+    "웨이퍼",
+    "반도체 패키지",
 ];
 
 /// How far apart parts of each look stand in line at a station, and the
 /// lanes they stand in in a store, metres. A part of the first look is set
 /// out on its station's table instead.
-const LOOK_PITCH: [(f64, f64); 8] = [
+const LOOK_PITCH: [(f64, f64); 11] = [
     (0.0, 0.0),
     (5.2, 2.6),
     (5.2, 2.6),
@@ -50,12 +53,16 @@ const LOOK_PITCH: [(f64, f64); 8] = [
     (1.0, 0.7),
     (1.0, 0.7),
     (3.0, 2.8),
+    (0.6, 0.6),
+    (0.4, 0.4),
+    (0.4, 0.25),
 ];
 
 /// How far apart parts of each look are stacked one over another in a store,
 /// metres, and how many to a stack — sheets and panels twenty high, cassettes
-/// five on a stocker's shelves; none for a car body, which stands in lanes.
-const LOOK_STACK: [(f64, usize); 8] = [
+/// five on a stocker's shelves, FOUPs four, wafers twenty-five, trays ten;
+/// none for a car body, which stands in lanes.
+const LOOK_STACK: [(f64, usize); 11] = [
     (0.0, 1),
     (0.0, 1),
     (0.0, 1),
@@ -64,6 +71,9 @@ const LOOK_STACK: [(f64, usize); 8] = [
     (0.08, 20),
     (0.08, 20),
     (1.2, 5),
+    (0.45, 4),
+    (0.01, 25),
+    (0.02, 10),
 ];
 
 /// How high a sheet is lifted to go between a tool and a stocker, metres:
@@ -85,10 +95,16 @@ const CAR_COLOURS: usize = 5;
 
 /// Which of [`look_meshes`] part `p` is drawn with: a car body's stage and
 /// colour — steel for a welded one, else one of the colours in turn — or
-/// a display's stage; a cassette on a stocker's crane, with the crane.
+/// a display's stage; a cassette on a stocker's crane, with the crane; a
+/// semiconductor fab's FOUP, wafer or tray of chips; a FOUP on an overhead
+/// hoist, with the hoist's vehicle.
 fn look_key(p: &Part) -> usize {
-    if p.look == 7 && p.rail.is_some() && matches!(p.flow, Some(flow::Place::Moving { .. })) {
-        return CRANE_LOOK;
+    let carried = p.rail.is_some() && matches!(p.flow, Some(flow::Place::Moving { .. }));
+    match p.look {
+        7 if carried => return CRANE_LOOK,
+        8 if carried => return HOIST_LOOK,
+        look @ 8..=10 => return CRANE_LOOK + 1 + (look as usize - 8),
+        _ => {}
     }
     match p.look as usize {
         look @ 1..=3 => {
@@ -113,6 +129,10 @@ fn look_meshes() -> &'static Vec<crate::library::LookMeshes> {
             .chain(std::iter::once(
                 [crate::library::display_look(3), crane_look().clone()].concat(),
             ))
+            .chain((0..3).map(crate::library::semi_look))
+            .chain(std::iter::once(
+                [crate::library::semi_look(0), hoist_look().clone()].concat(),
+            ))
             .collect()
     })
 }
@@ -124,6 +144,23 @@ pub(crate) const NO_GLASS: f64 = 1e-4;
 /// The look of a cassette on a stocker's crane: the cassette's pieces,
 /// then the crane's (see [`crane_look`]).
 const CRANE_LOOK: usize = 3 * CAR_COLOURS + 4;
+
+/// The look of a FOUP on an overhead hoist: the FOUP's pieces, then the
+/// hoist vehicle's (see [`hoist_look`]), after a FOUP, a wafer and a tray.
+const HOIST_LOOK: usize = CRANE_LOOK + 4;
+
+/// How high a FOUP rides under its hoist, its middle, metres; the
+/// vehicle's gripper on its top, 0.34 m higher, its rail over that (an
+/// overhead rail 5.35 m up).
+pub(crate) const HOIST_RIDE: f64 = 4.3;
+const FOUP_HIGH: f64 = 0.34;
+
+/// An overhead hoist's vehicle: drawn on its rail over the FOUP it lifts,
+/// its gripper on the FOUP's top as it goes along.
+fn hoist_look() -> &'static crate::library::LookMeshes {
+    static MADE: std::sync::OnceLock<crate::library::LookMeshes> = std::sync::OnceLock::new();
+    MADE.get_or_init(|| crate::library::semi_look(3))
+}
 
 /// A stocker's crane, its pieces drawn at the rail under the cassette it
 /// carries, not under the cassette itself.
@@ -457,7 +494,9 @@ pub struct Props {
     /// A stocker whose crane carries its parts (1): it runs on a rail
     /// along the stocker's length, past the tools' load ports, and a part
     /// sent from or to the stocker goes across onto the rail, along it, and
-    /// across off it, under it the crane.
+    /// across off it, under it the crane. Or (2) whose parts overhead
+    /// hoists carry: lifted to the hoist's rail overhead, along it, and let
+    /// down onto the load port, under the hoist's vehicle.
     pub rail: u32,
     /// An operator's shift, hours of the day on the flow's clock (from
     /// its start at hour 0): from, to; the same, all day.
@@ -672,7 +711,7 @@ impl Props {
             .map_or(self.dispatch, |x| if x > 0.5 { 1 } else { 0 });
         self.rail = v["rail"]
             .as_f64()
-            .map_or(self.rail, |x| if x > 0.5 { 1 } else { 0 });
+            .map_or(self.rail, |x| x.round().clamp(0.0, 2.0) as u32);
         self.kanban = v["kanban"]
             .as_f64()
             .map_or(self.kanban, |x| x.clamp(0.0, 100000.0) as u32);
@@ -4271,6 +4310,17 @@ impl Cell {
                 // The crane's pieces, where it is on its rail: under the
                 // cassette as it goes along, beside it as it is put across.
                 let crane = match part.rail {
+                    // A hoist on its rail, over the FOUP it lifts: as high
+                    // as the FOUP's top as it rides.
+                    Some([a, ..]) if key == HOIST_LOOK => {
+                        let floor = translation - DVec3::Z * part.size().1 / 2.0;
+                        let on =
+                            DVec3::new(floor.x, floor.y, a.z - part.size().1 / 2.0 + FOUP_HIGH);
+                        Some((
+                            pieces.len() - hoist_look().len(),
+                            rotation.inverse() * (on - floor),
+                        ))
+                    }
                     Some([a, b, along]) if key == CRANE_LOOK => {
                         let floor = translation - DVec3::Z * part.size().1 / 2.0;
                         let (lo, hi) = (

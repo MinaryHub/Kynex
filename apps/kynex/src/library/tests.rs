@@ -664,12 +664,18 @@ fn the_other_urs_are_as_universal_robots_describes_them() {
 #[test]
 fn the_glass_robot_folds_to_turn_and_carries_its_sheet_hidden() {
     let mut library = Library::default();
-    ask(&mut library, json!({"op": "place", "template": "glass_robot"}));
+    ask(
+        &mut library,
+        json!({"op": "place", "template": "glass_robot"}),
+    );
     let (doc, _) = shown(&mut library);
     let robot = &kynex_model::robots(&doc)[0];
     let kin = Kinematics::of(&doc, robot.root).unwrap();
     assert_eq!(kin.vars.len(), 5);
-    assert!(matches!(kin.vars[1].kind, kreate_scene::robot::JointKind::Prismatic));
+    assert!(matches!(
+        kin.vars[1].kind,
+        kreate_scene::robot::JointKind::Prismatic
+    ));
     let uid = |n: &str| doc.object_uid(named(&doc, n)).unwrap().raw();
     let out = |q: &[f64], n: &str| {
         let p = kin.world_of(q, uid(n)).unwrap().translation;
@@ -678,7 +684,11 @@ fn the_glass_robot_folds_to_turn_and_carries_its_sheet_hidden() {
     // Stretched out: 1.2 + 1.0 to the wrist, 1.2 more to the fork's middle.
     assert!((out(&[0.0; 5], "tool0") - 3.4).abs() < 1e-6);
     // Folded as it waits, the fork's middle within reach of its column.
-    assert!(out(&kin.current, "tool0") < 1.6, "{}", out(&kin.current, "tool0"));
+    assert!(
+        out(&kin.current, "tool0") < 1.6,
+        "{}",
+        out(&kin.current, "tool0")
+    );
     let sheet = doc.object(named(&doc, "glass")).unwrap();
     assert!(sheet.transform.scale.max_element() < 1e-3);
 }

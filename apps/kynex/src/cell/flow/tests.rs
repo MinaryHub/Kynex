@@ -985,3 +985,54 @@ fn a_stocker_s_crane_carries_on_its_rail() {
         .iter()
         .all(|p| p.rail.is_none() || matches!(p.flow, Some(Place::Moving { .. }))));
 }
+
+/// A stocker served by overhead hoists: a FOUP into it or out to its
+/// recipe's tools goes up to the hoist's rail, along it and down, drawn
+/// under the hoist's vehicle — the move as long as that way.
+#[test]
+fn an_overhead_hoist_lifts_a_foup_to_its_rail() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 20.0, "look": 8})),
+        ("flow_buffer", 4.0, json!({"capacity": 50})),
+        ("flow_station", 8.0, json!({"cycle": 2.0, "capacity": 2})),
+        ("flow_sink", 16.0, json!({})),
+    ]);
+    let (source, stocker, tool, sink) = (u[0], u[1], u[2], u[3]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": stocker.to_string(), "kind": "buffer", "props": {"dispatch": 1, "rail": 2}}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": source.to_string(), "kind": "source", "props": {"feed": 20.0, "look": 8}}),
+    );
+    link(&mut cell, &doc, source, &[stocker]);
+    link(&mut cell, &doc, tool, &[stocker]);
+    link(&mut cell, &doc, stocker, &[sink]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_recipe", "object": source.to_string(), "steps": [tool.to_string()], "repeat": 2}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut highest, mut drawn) = (0.0_f64, false);
+    let mut t = 0.0;
+    while t < 200.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        for p in &cell.parts {
+            if let (Some(Place::Moving { .. }), Some([a, b, way])) = (&p.flow, p.rail) {
+                assert_eq!(way, DVec3::Z, "its way marked overhead");
+                assert!((a.z - HOIST_RIDE).abs() < 1e-9 && (b.z - HOIST_RIDE).abs() < 1e-9);
+                highest = highest.max(p.world.translation.z);
+                drawn |= look_key(p) == HOIST_LOOK;
+            }
+        }
+    }
+    assert!(drawn, "drawn under the hoist");
+    assert!(highest > HOIST_RIDE - 0.5, "up to the rail: {highest}");
+    assert!(cell.flow_summary()["sunk"].as_u64().unwrap() > 0);
+}

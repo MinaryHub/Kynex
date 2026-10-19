@@ -697,6 +697,19 @@ thumbnails: each drawn from the piece at its usual size
   lane marked). Each tool
   white with blue trim and its signal tower. 바닥 구역 표시 also comes as
   a 클린룸 floor.
+- 반도체 공장 (`library/semiconductor.rs`): 종형 확산로 (its loading area,
+  the tall furnace, the quartz tube seen through its window, gas cabinet
+  and exhaust), 이온 주입기 (the ion source in its cage, the analysing
+  magnet and its coils, the beamline, the end station), CMP 연마기 (three
+  platens and their pads, heads and slurry arms under a cover, the
+  cleaner), 웨이퍼 프로버 (EDS: the prober, its test head, the tester), 다이싱
+  쏘, 본더 (다이 본딩 or 와이어 본딩: the gantry, its head or wire spool, the
+  magazines), 몰딩 프레스 (platens on four tie bars, the loader), 테스트
+  핸들러 (tray stackers, the docked test head, the tester). The front-end
+  tools have two load ports at their front (−X), a FOUP's height up; the
+  deposition, etch, photo and wet tools and the stocker are the display
+  fab's. A flow piece's **형태: 로드 포트** is a load port's stand, 0.9 m,
+  where a hoist sets a FOUP down.
 - 산업 장비 (`library/interior.rs`): 지게차 (its forks at the height
   asked), 파렛트 랙 (bays and levels, loaded or empty), 파렛트 (박스 적재),
   드럼통 (파렛트), 작업대, 공구 캐비닛, 프레스, 공기 압축기, 제어반 (with
@@ -986,7 +999,13 @@ not change the session's scene.
   drawn on the crane (a carriage on the rails, masts, the table it rides
   on); one sent on once its recipe is done leaves the bay without it. Lay
   the rail with the library's 스토커 크레인 레일 through the stocker's
-  dock. Without a crane, cassettes go overhead. Release no faster than the stockers
+  dock. A stocker served by **overhead hoists** (`"rail": 2`), as a
+  semiconductor fab's is: a FOUP sent into it or out to its recipe's next
+  tool goes straight up to the hoist's rail (its middle 4.3 m up), along it
+  and straight down onto the load port, the move as long as that way,
+  drawn under the hoist's vehicle; hang the library's 천장 반송 레일 5.35 m
+  up over the load ports. Without either, cassettes and FOUPs go overhead
+  in an arc. Release no faster than the stockers
   can take — a source's **kanban** — or a full stocker and tools that cannot
   hand back what they finished lock each other up.
 - **How fast it runs**: **배속** in the flow bar (and in a robot's
@@ -1004,7 +1023,8 @@ not change the session's scene.
   view is from outside them: the near side cut away as the view goes round,
   the far side standing.
 - **What the parts look like**: a source's or a station's **부품 모양**
-  (부품, 차체 (BIW), 도장 차체, 완성차, 유리 기판, LCD 패널, LCD 모듈) is
+  (부품, 차체 (BIW), 도장 차체, 완성차, 유리 기판, LCD 패널, LCD 모듈,
+  유리 카세트, FOUP, 웨이퍼, 반도체 패키지 — a tray of chips) is
   what its parts look like once
   it has made them, so a car can be seen going down its line as it is
   built: a car body drawn at its stage — the painted ones in five colours

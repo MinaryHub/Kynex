@@ -1105,18 +1105,25 @@ impl Cell {
                 // by the crane.
                 let on_rail = |s: &Component| s.kind == Kind::Buffer && s.props.rail > 0;
                 let crane = if on_rail(target) {
-                    docks.get(&target.object)
+                    Some(target)
                 } else if on_rail(c) && by_recipe {
-                    docks.get(&c.object)
+                    Some(c)
                 } else {
                     None
                 };
-                let rail = crane.map(|&(on, along, _)| {
+                let rail = crane.and_then(|s| {
+                    let &(on, along, _) = docks.get(&s.object)?;
+                    // By overhead hoist: straight up to its rail, along it
+                    // and straight down; its way marked +Z.
+                    if s.props.rail == 2 {
+                        let up = |p: DVec3| DVec3::new(p.x, p.y, super::HOIST_RIDE);
+                        return Some([up(from), up(to), DVec3::Z]);
+                    }
                     let onto = |p: DVec3| {
                         let q = on + along * (p - on).dot(along);
                         DVec3::new(q.x, q.y, p.z)
                     };
-                    [onto(from), onto(to), along]
+                    Some([onto(from), onto(to), along])
                 });
                 let length = match rail {
                     Some([a, b, _]) => from.distance(a) + a.distance(b) + b.distance(to),
@@ -1265,7 +1272,12 @@ impl Cell {
                     // By a stocker's crane: along its path at an even pace,
                     // facing the rail's way.
                     if let Some([a, b, along]) = p.rail {
-                        let (a, b) = (DVec3::new(a.x, a.y, from.z), DVec3::new(b.x, b.y, target.z));
+                        let overhead = along.z > 0.5;
+                        let (a, b) = if overhead {
+                            (a, b)
+                        } else {
+                            (DVec3::new(a.x, a.y, from.z), DVec3::new(b.x, b.y, target.z))
+                        };
                         let legs = [(*from, a), (a, b), (b, target)];
                         let total: f64 = legs.iter().map(|(u, v)| u.distance(*v)).sum();
                         let mut left = t * total;
@@ -1278,7 +1290,12 @@ impl Cell {
                             }
                             left -= l;
                         }
-                        let turn = DQuat::from_rotation_z(along.y.atan2(along.x));
+                        let way = if overhead { b - a } else { along };
+                        let turn = if way.truncate().length() > 1e-6 {
+                            DQuat::from_rotation_z(way.y.atan2(way.x))
+                        } else {
+                            DQuat::IDENTITY
+                        };
                         p.world = DAffine3::from_rotation_translation(turn, at);
                         continue;
                     }
@@ -1289,8 +1306,9 @@ impl Cell {
                     } else {
                         DQuat::IDENTITY
                     };
-                    // A sheet goes overhead, lifted and set down again.
-                    let lift = if (p.look == 4 || p.look >= 7) && way.truncate().length() > 2.0 {
+                    // A sheet, a cassette or a FOUP goes overhead, lifted and
+                    // set down again.
+                    let lift = if matches!(p.look, 4 | 7 | 8) && way.truncate().length() > 2.0 {
                         DVec3::Z * LIFT * (std::f64::consts::PI * t).sin()
                     } else {
                         DVec3::ZERO

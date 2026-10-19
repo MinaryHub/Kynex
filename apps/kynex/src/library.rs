@@ -108,10 +108,11 @@ const fn c(
     }
 }
 
-/// What a flow piece stands as: a table its parts are set out on, or a
-/// mark on the floor — where something as big as a car body stands, or
-/// one rides into a booth, a jig or onto a line placed over it.
-const BASES: &[&str] = &["작업대", "바닥 표시"];
+/// What a flow piece stands as: a table its parts are set out on, a mark
+/// on the floor — where something as big as a car body stands, or one
+/// rides into a booth, a jig or onto a line placed over it — or a tool's
+/// load port, where an overhead hoist sets a FOUP down.
+const BASES: &[&str] = &["작업대", "바닥 표시", "로드 포트"];
 
 /// The tools a robot can carry on its flange, by number (see [`tool_urdf`]).
 pub const TOOLS: &[&str] = &[
@@ -633,6 +634,57 @@ pub const TEMPLATES: &[Template] = &[
             p("width", "폭", 8.0, 2.0, 40.0),
             p("height", "높이", 5.0, 3.0, 10.0),
         ],
+    },
+    // A semiconductor fab's own equipment (`semiconductor`): its deposition,
+    // etch, photo and wet tools, stockers and hoist rail are the display
+    // fab's.
+    Template {
+        key: "vertical_furnace",
+        name: "종형 확산로 (산화·확산)",
+        group: "반도체 공장",
+        params: &[],
+    },
+    Template {
+        key: "ion_implanter",
+        name: "이온 주입기",
+        group: "반도체 공장",
+        params: &[],
+    },
+    Template {
+        key: "cmp_tool",
+        name: "CMP 연마기",
+        group: "반도체 공장",
+        params: &[],
+    },
+    Template {
+        key: "wafer_prober",
+        name: "웨이퍼 프로버 (EDS)",
+        group: "반도체 공장",
+        params: &[],
+    },
+    Template {
+        key: "dicing_saw",
+        name: "다이싱 쏘",
+        group: "반도체 공장",
+        params: &[],
+    },
+    Template {
+        key: "bonder",
+        name: "본더 (다이·와이어)",
+        group: "반도체 공장",
+        params: &[c("bond", "본딩", 0.0, semiconductor::BONDS)],
+    },
+    Template {
+        key: "mold_press",
+        name: "몰딩 프레스",
+        group: "반도체 공장",
+        params: &[],
+    },
+    Template {
+        key: "test_handler",
+        name: "테스트 핸들러",
+        group: "반도체 공장",
+        params: &[],
     },
     // A car plant's own equipment (`automotive`).
     Template {
@@ -2276,15 +2328,18 @@ fn build(item: &Item) -> Result<Built, String> {
         "flow_source" | "flow_station" | "flow_buffer" | "flow_sink" => {
             let c = Colours::new(&mut doc);
             // A table of its own size and colour; its top where parts stand.
-            // Or a mark on the floor, a car body's size, 2 cm thick.
+            // Or a mark on the floor, a car body's size, 2 cm thick; or a
+            // tool's load port, where a FOUP is set down, 0.9 m up.
             let (name, mut size, colour, kind) = match item.template.as_str() {
                 "flow_source" => ("source", [0.6, 0.6, 0.8], c.accent, Kind::Source),
                 "flow_station" => ("station", [1.0, 0.8, 0.9], c.machine, Kind::Station),
                 "flow_buffer" => ("buffer", [1.2, 0.5, 0.6], c.pallet, Kind::Buffer),
                 _ => ("sink", [0.6, 0.6, 0.7], c.dark, Kind::Sink),
             };
-            if item.param("base").round() as usize == 1 {
-                size = [5.0, 2.4, 0.02];
+            match item.param("base").round() as usize {
+                1 => size = [5.0, 2.4, 0.02],
+                2 => size = [0.5, 0.5, 0.9],
+                _ => {}
             }
             let table = block(
                 &mut doc,
@@ -2485,6 +2540,7 @@ fn build(item: &Item) -> Result<Built, String> {
         key if interior::KEYS.contains(&key) => interior::build(&mut doc, item),
         key if automotive::KEYS.contains(&key) => automotive::build(&mut doc, item),
         key if display::KEYS.contains(&key) => display::build(&mut doc, item),
+        key if semiconductor::KEYS.contains(&key) => semiconductor::build(&mut doc, item),
         other => return Err(format!("no template {other:?}")),
     }
     let order = doc.hierarchy().into_iter().map(|(id, _)| id).collect();
@@ -3087,8 +3143,10 @@ mod tests;
 
 mod automotive;
 mod display;
+mod semiconductor;
 pub(crate) use automotive::car_look;
 pub(crate) use display::display_look;
+pub(crate) use semiconductor::semi_look;
 
 /// A flow part's look drawn as meshes: one for each colour of it, with the
 /// colour, in the part's own frame (its middle on the floor, facing +X).

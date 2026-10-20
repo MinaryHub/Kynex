@@ -895,6 +895,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .project-list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .project-list li:hover { background: var(--panel-2); }
 .project-list li.current { color: var(--accent); cursor: default; }
+.project-sub { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--line-2); font-weight: 600; }
+.project-sub .muted { font-weight: 400; margin-left: 6px; }
+.demo-list { max-height: 220px; }
+.demo-list li { flex-direction: column; gap: 2px; }
 .project-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-dir { font-size: 11px; overflow-wrap: anywhere; }
 .toolbar button:disabled { opacity: 0.35; cursor: default; }
@@ -996,11 +1000,7 @@ body[data-level="2"] [data-min="3"] { display: none !important; }
 .level-switch button.on { background: var(--accent); color: #fff; }
 .level-hint { display: block; margin-top: 4px; font-size: 11px; }
 
-/* The samples, under the projects. */
-.project-samples-head { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-2); font-weight: 600; font-size: 12px; }
-.project-samples-head .muted { font-weight: 400; font-size: 11px; margin-left: 6px; }
-.project-samples li > span:first-child { white-space: normal; }
-.project-samples small { display: block; font-size: 11px; line-height: 1.35; margin-top: 2px; }
+/* A sample's level, in the project panel. */
 .sample-level { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; font-size: 10px; line-height: 16px; vertical-align: 1px; background: var(--panel-2); }
 .sample-level.l1 { color: #3ddc84; }
 .sample-level.l2 { color: #f2b53c; }

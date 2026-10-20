@@ -1,6 +1,7 @@
 // Projects: the one open (the `project` event), and making a new one,
 // opening another or saving this one under another name — by name, in the
-// projects folder KYNEX keeps.
+// projects folder KYNEX keeps; and the demos and samples that come with
+// KYNEX, each opened as a copy of it in that folder.
 
 async function post(request) {
   const response = await fetch('/robot', {
@@ -19,6 +20,8 @@ export class ProjectPanel {
     this.panel = document.getElementById('project-panel');
     this.name = document.getElementById('project-new-name');
     this.list = document.getElementById('project-list');
+    this.demos = document.getElementById('project-demos');
+    this.samples = document.getElementById('project-samples');
     this.state = null;
     document.getElementById('project-new').addEventListener('click', () => {
       const name = this.name.value.trim();
@@ -34,22 +37,6 @@ export class ProjectPanel {
     this.name.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') document.getElementById('project-new').click();
     });
-    // A sample: a copy of it opened.
-    this.samples = document.getElementById('project-samples');
-    this.samples.addEventListener('click', async (e) => {
-      const li = e.target.closest('li[data-key]');
-      if (!li) return;
-      const title = li.dataset.title;
-      if (!confirm(`샘플 "${title}"의 사본을 프로젝트로 만들어 엽니다. 지금 프로젝트는 저장되고, 실행 중인 프로그램과 PLC 연결은 멈춥니다.`)) return;
-      try {
-        const answer = await post({ op: 'project', action: 'sample', key: li.dataset.key });
-        if (!answer.ok) return this.ctx.toast(answer.error || '열 수 없습니다');
-        this.ctx.toast(`샘플 "${title}"을(를) 열었습니다`);
-        this.refresh();
-      } catch (err) {
-        this.ctx.toast(`프로젝트: ${err.message}`);
-      }
-    });
     this.list.addEventListener('click', (e) => {
       const li = e.target.closest('li[data-name]');
       if (!li || li.classList.contains('current')) return;
@@ -57,6 +44,23 @@ export class ProjectPanel {
       if (!confirm(`프로젝트 "${name}"을(를) 엽니다. 지금 프로젝트는 저장되고, 실행 중인 프로그램과 PLC 연결은 멈춥니다.`)) return;
       this.act('open', name, `프로젝트 "${name}"을(를) 열었습니다`);
     });
+    // A demo or a sample: opened as a copy.
+    const openDemo = async (e) => {
+      const li = e.target.closest('li[data-demo]');
+      if (!li) return;
+      const name = li.dataset.demo;
+      if (!confirm(`예제 "${name}"의 사본을 프로젝트 폴더에 만들어 엽니다. 지금 프로젝트는 저장되고, 실행 중인 프로그램과 PLC 연결은 멈춥니다.`)) return;
+      try {
+        const answer = await post({ op: 'project', action: 'demo', name });
+        if (!answer.ok) return this.ctx.toast(answer.error || '열 수 없습니다');
+        this.ctx.toast(`예제를 "${answer.name}"(으)로 열었습니다. 바꾼 것은 이 사본에 저장됩니다`);
+        this.refresh();
+      } catch (err) {
+        this.ctx.toast(`예제: ${err.message}`);
+      }
+    };
+    this.demos.addEventListener('click', openDemo);
+    this.samples.addEventListener('click', openDemo);
   }
 
   toggle() {
@@ -103,11 +107,14 @@ export class ProjectPanel {
           .map((p) => `<li data-name="${esc(p.name)}" class="${p.current ? 'current' : ''}" title="${p.current ? '지금 열린 프로젝트' : '눌러서 열기'}"><span>${esc(p.name)}</span><span class="muted num">${p.current ? '열림 · ' : ''}${when(p.modified)}</span></li>`)
           .join('')
       : '<li class="muted">아직 저장된 프로젝트가 없습니다</li>';
+    this.demos.innerHTML = (answer.demos ?? [])
+      .map((d) => `<li data-demo="${esc(d.name)}" title="눌러서 사본을 만들어 열기"><span>${esc(d.name)}</span><span class="muted">${esc(d.about)}</span></li>`)
+      .join('');
     const level = { 1: '초급', 2: '중급', 3: '전문가' };
     this.samples.innerHTML = (answer.samples ?? [])
       .map(
-        (s) =>
-          `<li data-key="${esc(s.key)}" data-title="${esc(s.title)}" title="${esc(s.about)}"><span><span class="sample-level l${s.level}">${level[s.level] ?? ''}</span>${esc(s.title.replace(/^샘플 /, ''))}<small class="muted">${esc(s.about)}</small></span></li>`,
+        (d) =>
+          `<li data-demo="${esc(d.name)}" title="눌러서 사본을 만들어 열기"><span><span class="sample-level l${d.level}">${level[d.level] ?? ''}</span>${esc(d.name.replace(/^샘플 /, ''))}</span><span class="muted">${esc(d.about)}</span></li>`,
       )
       .join('');
   }

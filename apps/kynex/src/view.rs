@@ -1272,8 +1272,9 @@ impl Stage {
     }
 
     /// Makes a new project, opens one, or saves this one under another
-    /// name; or lists those in the projects folder. Only by name, in that
-    /// folder: no path from a page reaches the file system.
+    /// name; or lists those in the projects folder, and the demos that come
+    /// with KYNEX; or opens a demo, as a copy of it in that folder. Only by
+    /// name, in that folder: no path from a page reaches the file system.
     fn project_op(&mut self, doc: &Document, body: &str) -> String {
         let req: Value = serde_json::from_str(body).unwrap_or_default();
         let dir = self.projects.clone();
@@ -1284,44 +1285,39 @@ impl Stage {
         let answer: Result<Value, String> = match req["action"].as_str().unwrap_or_default() {
             "list" => {
                 let mut projects = list_projects(&dir);
-                let samples: Vec<Value> = crate::samples::SAMPLES
-                    .iter()
-                    .map(|s| serde_json::json!({ "key": s.key, "title": s.title, "level": s.level, "about": s.about }))
-                    .collect();
                 // The one open, if it is one of these.
                 for p in &mut projects {
                     let file = dir.join(format!("{}.json", p["name"].as_str().unwrap_or("")));
                     p["current"] = (file == self.file).into();
                 }
-                Ok(serde_json::json!({ "projects": projects, "samples": samples }))
+                let demos: Vec<Value> = crate::demos::DEMOS
+                    .iter()
+                    .map(|d| serde_json::json!({ "name": d.name, "about": d.about }))
+                    .collect();
+                // And the samples, one for each thing KYNEX does, with the
+                // level each is for.
+                let samples: Vec<Value> = crate::demos::SAMPLES
+                    .iter()
+                    .map(|(level, d)| serde_json::json!({ "name": d.name, "about": d.about, "level": level }))
+                    .collect();
+                Ok(serde_json::json!({ "projects": projects, "demos": demos, "samples": samples }))
             }
+            // A demo: copied into the projects folder, not over a project
+            // of that name there, and opened.
+            "demo" => crate::demos::demo(req["name"].as_str().unwrap_or(""))
+                .ok_or_else(|| "그 이름의 예제가 없습니다".to_string())
+                .and_then(|demo| crate::demos::copy(demo, &dir))
+                .and_then(|file| {
+                    let name = file.file_stem().map(|s| s.to_string_lossy().to_string());
+                    self.switch(doc, &file)?;
+                    Ok(serde_json::json!({ "name": name }))
+                }),
             "new" => named().and_then(|file| {
                 if file.exists() {
                     return Err("같은 이름의 프로젝트가 이미 있습니다".into());
                 }
                 self.switch(doc, &file)
             }),
-            // A sample: a copy of it opened, by its title (2, 3, … if
-            // there is one already), the sample kept as it is.
-            "sample" => (|| {
-                let key = req["key"].as_str().unwrap_or_default();
-                let sample = crate::samples::find(key).ok_or("그런 샘플이 없습니다")?;
-                std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-                let file = (1..1000)
-                    .map(|n| {
-                        let name = if n == 1 {
-                            sample.title.to_string()
-                        } else {
-                            format!("{} {n}", sample.title)
-                        };
-                        dir.join(format!("{name}.json"))
-                    })
-                    .find(|f| !f.exists())
-                    .ok_or("샘플 사본 이름을 정하지 못했습니다")?;
-                std::fs::write(&file, sample.text)
-                    .map_err(|e| format!("{}: {e}", file.display()))?;
-                self.switch(doc, &file)
-            })(),
             "open" => named().and_then(|file| {
                 if !file.is_file() {
                     return Err("그 이름의 프로젝트가 없습니다".into());
@@ -1806,7 +1802,7 @@ fn edit_label(op: &str) -> &'static str {
 
 /// A project's name as a file's in the projects folder may be: no folder
 /// in it, nothing a file system takes for something else.
-pub(crate) fn project_name(name: &str) -> Result<String, String> {
+fn project_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     let bad = |c: char| c.is_control() || r#"/\:*?"<>|"#.contains(c);
     if name.is_empty() {
@@ -2182,6 +2178,43 @@ mod tests {
         assert!(names.contains(&("start", false)));
         assert!(names.contains(&("셀 B", true)));
         assert!(names.contains(&("셀 A", false)) && names.contains(&("빈 셀", false)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The demos that come with KYNEX listed beside the projects, and one
+    /// opened as a copy in the projects folder — again, as another copy,
+    /// the first left as it is.
+    #[test]
+    fn a_demo_opens_as_a_copy_in_the_projects_folder() {
+        let dir = std::env::temp_dir().join(format!("kynex-demo-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(dir.join("start.json"))).unwrap();
+        stage.projects = dir.clone();
+        stage.replaced(&doc);
+        let project =
+            |action: &str, name: &str| json!({"op": "project", "action": action, "name": name});
+        let list = ask(&mut stage, &doc, project("list", ""), true);
+        let demos: Vec<&str> = list["demos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(demos.len(), crate::demos::DEMOS.len(), "{list}");
+        assert!(demos.contains(&"반도체 공장"));
+
+        let opened = ask(&mut stage, &doc, project("demo", "LCD 공장"), true);
+        assert_eq!(opened["ok"], true, "{opened}");
+        assert_eq!(opened["name"], "LCD 공장");
+        assert!(stage.take_reset());
+        assert!(!stage.library.items().is_empty(), "its equipment");
+        assert_eq!(stage.file, dir.join("LCD 공장.json"));
+        let again = ask(&mut stage, &doc, project("demo", "LCD 공장"), true);
+        assert_eq!(again["name"], "LCD 공장 2", "{again}");
+        assert!(dir.join("LCD 공장.json").is_file());
+        let missing = ask(&mut stage, &doc, project("demo", "없는 예제"), true);
+        assert_eq!(missing["ok"], false, "{missing}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

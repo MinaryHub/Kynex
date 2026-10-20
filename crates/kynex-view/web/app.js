@@ -1617,10 +1617,54 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
 });
 
+// Space: everything going stopped, or, nothing going, the process flow and
+// every robot with a program set going.
+function playPause() {
+  const flow = timelinePanel.flowState;
+  const going = !!flow?.on || robotPanel.going().length > 0;
+  if (going) {
+    if (flow?.on) timelinePanel.flowOp('stop');
+    robotPanel.playAll(false);
+    toast('정지했습니다 (스페이스: 다시 실행)');
+    return;
+  }
+  const flows = (cellPanel.cell.components ?? []).some((c) => c.flow);
+  if (flows) timelinePanel.flowOp('start');
+  const robots = robotPanel.playAll(true);
+  if (!flows && !robots) return toast('실행할 공정 흐름도, 프로그램이 있는 로봇도 없습니다');
+  toast(`실행합니다${flows ? ' · 공정 흐름' : ''}${robots ? ` · 로봇 ${robots}대` : ''} (스페이스: 정지, +/−: 배속)`);
+}
+
+// + and −: the simulation's clock a step faster or slower, through the
+// speeds the speed list offers.
+const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200];
+async function stepSpeed(up) {
+  const now = robotPanel.clock?.speed ?? 1;
+  // The next of the list past where it is now, either way.
+  const speed = up ? SPEEDS.find((s) => s > now + 1e-9) : [...SPEEDS].reverse().find((s) => s < now - 1e-9);
+  if (speed === undefined) return toast(`배속 ${now}배 (${up ? '가장 빠름' : '가장 느림'})`);
+  try {
+    const answer = await fetch('/robot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'speed', speed }),
+    }).then((r) => r.json());
+    if (!answer.ok) return toast(answer.error || '배속을 바꾸지 못했습니다');
+    toast(`배속 ${speed}배`);
+  } catch (err) {
+    toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+  }
+}
+
 window.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.matches('input, textarea, select') || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
-  if (k === 'f') frame();
+  // Space on a button pressed last: the key is the view's, not the button's.
+  if (k === ' ' && e.target.closest('button')) e.target.blur();
+  if (k === ' ') playPause();
+  else if (k === '+' || k === '=') stepSpeed(true);
+  else if (k === '-' || k === '_') stepSpeed(false);
+  else if (k === 'f') frame();
   else if (k === 'j') setToggle('joints', !view.joints);
   else if (k === 'w') setToggle('wire', !view.wire);
   else if (k === 'g') setToggle('grid', !view.grid);

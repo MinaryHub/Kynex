@@ -267,6 +267,27 @@ export class RobotPanel {
           : '연결 중…';
   }
 
+  // The robots whose programs are going.
+  going() {
+    return this.robots.filter((r) => {
+      const run = this.runOf(r.root);
+      return run && !['done', 'alarm'].includes(run.state);
+    });
+  }
+
+  // Every robot with a program set going, or every program stopped.
+  // Returns how many.
+  playAll(on) {
+    if (!on) {
+      const n = this.going().length;
+      if (n) this.queue = this.queue.then(() => post({ op: 'stop' }).catch(() => {}));
+      return n;
+    }
+    const list = this.robots.filter((r) => (this.programs[r.root] ?? this.programs[String(r.root)])?.steps?.length);
+    for (const r of list) this.programOp(r, { op: 'play' });
+    return list.length;
+  }
+
   // A robot's run: its button, its state, and the step it is at.
   showRun(section, run) {
     const play = section.querySelector('[data-act="play"]');

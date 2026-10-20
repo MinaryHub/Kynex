@@ -690,6 +690,11 @@ view is chosen (drawn orange) and **Delete** undoes the link, the
 equipment left as it is. Arrows and dots are picked by how near the
 pointer is to them on the screen, the same however near the view is.
 
+**Space** runs the simulation: nothing going, it starts the process flow
+and every robot that has a program; anything going, it stops it all.
+**+** and **−** make the simulation's clock a step faster or slower
+(¼, ½, 1, 2, 5, 10, 20, 50, 100, 200 times).
+
 The wheel zooms toward what is under the pointer — the equipment there,
 or the floor —, the view and the point it turns about drawn in together,
 so that it turns and pans about what is looked at, as far as it is near;

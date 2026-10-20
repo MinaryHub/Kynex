@@ -119,6 +119,9 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   robot follows the bar on the screen at once — what is beyond the joint
   turned (or slid) where the bar is, without waiting for KYNEX to answer —
   and takes KYNEX's own pose as each answer comes and once it is let go.
+- **Run and stop**: the toolbar's green ▶ runs the flow and every robot
+  with a program, as Space does; while anything runs it is a red ■ that
+  stops them, with the clock's speed beside it when it is not 1× (+/−).
 - **Smooth motion**: while a program or the flow runs, KYNEX tells poses
   some twenty times a second, not evenly, each stamped with when it was
   made. The page keeps each moving part's last few poses on that clock and

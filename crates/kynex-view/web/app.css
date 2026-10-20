@@ -205,6 +205,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .toolbar .rec-dot { fill: currentColor; stroke: none; }
 .toolbar button.recording { color: #ff5a5a; background: rgba(255, 90, 90, 0.14); }
 .toolbar .rec-time { font: 11px var(--mono); }
+/* Run and stop: a triangle, a square while running. */
+.toolbar button.play-btn { display: inline-flex; gap: 3px; color: var(--ok); }
+.toolbar .play-btn svg { fill: currentColor; stroke: none; }
+.toolbar .play-btn .ic-stop, .toolbar .play-btn.on .ic-play { display: none; }
+.toolbar .play-btn.on .ic-stop { display: block; }
+.toolbar button.play-btn.on { color: #ff6b6b; background: rgba(255, 95, 95, 0.14); }
+.toolbar .play-speed { font: 11px var(--mono); }
+.toolbar .play-speed:empty { display: none; }
 .measure-readout {
   position: absolute;
   left: 50%;

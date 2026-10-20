@@ -1882,6 +1882,7 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
     projectPanel.panel.hidden = true;
     floorPanel.toggle();
   }
+  if (b.dataset.action === 'play') playPause();
   if (b.dataset.action === 'undo') history('undo');
   if (b.dataset.action === 'redo') history('redo');
   if (b.dataset.action === 'frame') frame();
@@ -2320,7 +2321,25 @@ function updateXray(now) {
 }
 const _xm = new THREE.Matrix4();
 
+// The run button: ▶ while nothing runs, ■ while something does, and the
+// clock's speed beside it when it is not 1×. Looked at each frame, drawn
+// only when it changes.
+let playShown = '';
+function showPlay() {
+  const on = running();
+  const speed = robotPanel.clock?.speed ?? 1;
+  const key = `${on}|${speed}`;
+  if (key === playShown) return;
+  playShown = key;
+  const b = document.querySelector('[data-action="play"]');
+  if (!b) return;
+  b.classList.toggle('on', on);
+  b.title = on ? '정지 (스페이스)' : '실행: 공정 흐름과 프로그램이 있는 로봇을 함께 돌립니다 (스페이스)';
+  b.querySelector('.play-speed').textContent = speed !== 1 ? `${speed}×` : '';
+}
+
 renderer.setAnimationLoop(() => {
+  showPlay();
   glide(performance.now());
   quietMarkers();
   grid.material.uniforms.uCamera.value.copy(camera.position);

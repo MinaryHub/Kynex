@@ -372,6 +372,13 @@ export class RobotPanel {
     for (const root of [...this.ui.keys()]) if (!list.some((r) => r.root === root)) this.ui.delete(root);
     if (this.handleRoot && !list.some((r) => r.root === this.handleRoot && r.tool)) this.showHandle(null);
     this.render();
+    // A robot gone: its paths with it (drawn again only when which robots
+    // there are has changed, not as they move).
+    const key = list.map((r) => r.root).join(',');
+    if (key !== this.robotsKey) {
+      this.robotsKey = key;
+      this.drawPaths();
+    }
   }
 
   render() {
@@ -1036,7 +1043,10 @@ export class RobotPanel {
       child.geometry.dispose();
       child.material.dispose();
     }
-    for (const program of Object.values(this.programs)) {
+    // Only the robots in the scene: one taken away leaves no path.
+    const here = new Set(this.robots.map((r) => String(r.root)));
+    for (const [root, program] of Object.entries(this.programs)) {
+      if (!here.has(String(root))) continue;
       if (program.trace.length >= 6) {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(program.trace, 3));

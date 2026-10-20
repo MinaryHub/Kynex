@@ -1223,7 +1223,10 @@ impl Stage {
         server.state("templates", self.library.thumbnails());
         server.state("scenarios", &self.scenarios_json());
         let programs = self.posing.take_programs_changed();
-        if programs {
+        let items = self.library.take_items_changed();
+        // Told again when the equipment changed too: a robot taken away
+        // takes its paths with it, one moved moves them.
+        if programs || items || replaced {
             server.state(
                 "programs",
                 &self
@@ -1232,7 +1235,6 @@ impl Stage {
             );
         }
         let roles = self.cell.take_roles_changed();
-        let items = self.library.take_items_changed();
         let scenarios = std::mem::take(&mut self.scenarios_changed);
         let plc = std::mem::take(&mut self.plc_changed);
         server.state("plc", &self.plc.to_json().to_string());

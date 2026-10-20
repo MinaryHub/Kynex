@@ -43,10 +43,10 @@ export function onLevel(f) {
 // The settings a beginner sets: the one time or rate that makes each
 // kind of equipment what it is.
 const BASIC = {
-  source: ['feed'],
-  station: ['cycle'],
-  buffer: ['capacity'],
-  conveyor: ['speed'],
+  source: ['feed', 'carrier', 'capacity'],
+  station: ['cycle', 'carrier'],
+  buffer: ['capacity', 'carrier'],
+  conveyor: ['speed', 'carrier'],
   cnc: ['cycle'],
   molder: ['cycle'],
   amr: ['speed', 'capacity'],

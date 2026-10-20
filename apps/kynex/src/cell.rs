@@ -1168,6 +1168,10 @@ pub struct Cell {
     charging: std::collections::BTreeSet<u64>,
     blocked: BTreeMap<u64, u64>,
     jobs: Vec<fleet::Job>,
+    /// Where each part waiting on a table stands, by part: the component
+    /// and the place in its rows. A part keeps its place from when it comes
+    /// until it goes, the others staying where they are as it does.
+    slots: BTreeMap<u64, (u64, usize)>,
 }
 
 /// A signal the cell shares with a PLC besides its machines' commands and
@@ -3760,7 +3764,20 @@ impl Cell {
                 .filter_map(|(i, p)| belt.along_of(p).map(|x| (i, x)))
                 .collect();
             on.sort_by(|a, b| b.1.total_cmp(&a.1));
-            let mut limit = end;
+            // Parts waiting on the belt for a robot or an AMR to take them
+            // stand where they are: those behind stop short of them.
+            let mut limit = self
+                .parts
+                .iter()
+                .filter(|p| {
+                    p.held.is_none()
+                        && matches!(
+                            p.flow,
+                            Some(flow::Place::Waiting { .. } | flow::Place::Riding { .. })
+                        )
+                })
+                .filter_map(|p| belt.along_of(p))
+                .fold(end, |l, x| l.min(x - gap));
             let mut gone = Vec::new();
             for (i, x) in on {
                 // Held behind a stop ahead of it.

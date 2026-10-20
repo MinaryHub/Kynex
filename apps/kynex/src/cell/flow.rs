@@ -1187,19 +1187,21 @@ impl Cell {
         let mut facing: BTreeMap<u64, f64> = BTreeMap::new();
         // Those waiting at each for a carrier.
         let mut waiting_at: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-        // A robot's part not yet in its gripper keeps its place, first, so
-        // that those behind it do not close up onto it before it is taken.
+        // A robot's part not yet in its gripper stays exactly where it is —
+        // the robot was sent there —, and the others are set out around it,
+        // not onto its place (see below).
         let ungripped: Vec<u64> = self
             .jobs
             .iter()
             .filter(|j| j.by == 3 && j.amr.is_some() && !j.gripped)
             .map(|j| j.part)
             .collect();
-        for j in &self.jobs {
-            if ungripped.contains(&j.part) {
-                waiting_at.entry(j.from).or_default().push(j.part);
-            }
+        for j in self.jobs.iter().filter(|j| ungripped.contains(&j.part)) {
+            waiting_at.entry(j.from).or_default().push(j.part);
         }
+        // Places given out this time, for those that have gone to give up
+        // theirs.
+        let mut placed: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
         for p in &self.parts {
             if let Some(Place::Waiting { at, .. }) = &p.flow {
                 waiting_at.entry(*at).or_default().push(p.uid);
@@ -1209,6 +1211,15 @@ impl Cell {
             let Some(&(top, along, across)) = docks.get(object) else {
                 continue;
             };
+            // A belt's parts stay where the belt brought them: one waiting
+            // at its end for a robot or an AMR is taken from there.
+            if self
+                .components
+                .iter()
+                .any(|c| c.object == *object && c.kind == Kind::Conveyor)
+            {
+                continue;
+            }
             let order = s
                 .working
                 .iter()
@@ -1248,18 +1259,37 @@ impl Cell {
                 }
                 continue;
             }
-            for (k, uid) in order.iter().enumerate() {
+            // Each part in the place it was given when it came — the lowest
+            // free one —, kept until it goes: one taken away leaves a gap
+            // the next to come fills, the others not moving up.
+            let mut used: std::collections::BTreeSet<usize> = order
+                .iter()
+                .filter_map(|u| self.slots.get(u).filter(|s| s.0 == *object).map(|s| s.1))
+                .collect();
+            for uid in &order {
+                let k = match self.slots.get(uid) {
+                    Some(&(o, k)) if o == *object => k,
+                    _ => {
+                        let k = (0..).find(|k| !used.contains(k)).unwrap_or(0);
+                        used.insert(k);
+                        self.slots.insert(*uid, (*object, k));
+                        k
+                    }
+                };
+                placed.insert(*uid);
                 // On a rack: ten to a shelf, the lowest first; else rows of
                 // five across the top, from its middle.
-                let (level, k) = match shelves {
+                let (level, i) = match shelves {
                     Some(tops) => (Some(tops[(k / 10).min(tops.len() - 1)]), k % 10),
                     None => (None, k),
                 };
-                let (col, row) = ((k % 5) as f64 - 2.0, (k / 5) as f64);
+                let (col, row) = ((i % 5) as f64 - 2.0, (i / 5) as f64);
                 let base = level.unwrap_or(top);
                 spots.insert(*uid, base + along * col * PITCH + across * row * PITCH);
             }
         }
+        // A part no longer set out on a table gives up its place.
+        self.slots.retain(|u, _| placed.contains(u));
         for p in &mut self.parts {
             let half = p.size().1 / 2.0;
             // A robot's part not yet gripped: where it waited, as above.

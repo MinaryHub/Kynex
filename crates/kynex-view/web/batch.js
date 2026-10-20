@@ -209,6 +209,14 @@ export class Batch {
     return { geometry, matrix, color: this.base.get(uid) };
   }
 
+  // Where part `uid` is drawn now, into `matrix`; false when it is not.
+  matrixOf(uid, matrix) {
+    const it = this.inst.get(uid);
+    if (!it) return false;
+    this.mesh.getMatrixAt(it.id, matrix);
+    return true;
+  }
+
   uidAt(instanceId) {
     return this.owner[instanceId];
   }

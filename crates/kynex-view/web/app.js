@@ -2183,8 +2183,16 @@ function xrayMaterial(color) {
 function xrayItems(now) {
   const placed = libraryPanel.library?.items ?? [];
   const walls = new Set(placed.filter((i) => WALLS.has(i.template)).map((i) => i.root));
-  const roots = new Set(placed.filter((i) => !XRAY_NEVER.has(i.template) || walls.has(i.root)).map((i) => i.root));
-  const key = `${records.size}|${[...roots].join(',')}`;
+  // A robot is what does the work: never drawn see-through, nor what it
+  // stands in (its cell, its track) — a copy left standing as it moves.
+  const holdsRobot = new Set();
+  for (const r of robots) {
+    for (let at = r.root, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) holdsRobot.add(at);
+  }
+  const roots = new Set(
+    placed.filter((i) => (!XRAY_NEVER.has(i.template) || walls.has(i.root)) && !holdsRobot.has(i.root)).map((i) => i.root),
+  );
+  const key = `${records.size}|${robots.length}|${[...roots].join(',')}`;
   if (xray.items && key === xray.key && now - xray.built < 5000) return xray.items;
   xrayOff();
   const items = new Map();
@@ -2236,6 +2244,7 @@ function xrayOn(root, it) {
     const mesh = new THREE.Mesh(copy.geometry, xrayMaterial(copy.color));
     mesh.matrixAutoUpdate = false;
     mesh.matrix.copy(copy.matrix);
+    mesh.userData.uid = uid;
     mesh.renderOrder = 5;
     xray.group.add(mesh);
     meshes.push(mesh);
@@ -2256,6 +2265,13 @@ function xrayOff(root) {
 }
 
 function updateXray(now) {
+  // See-through copies follow what they copy as it moves: a door opening,
+  // a press coming down.
+  for (const on of xray.on.values()) {
+    for (const m of on.meshes) {
+      if (batch.matrixOf(m.userData.uid, _xm)) m.matrix.copy(_xm);
+    }
+  }
   if (now - xray.at < 200 || !batch.mesh) return;
   xray.at = now;
   // The flow's products: its parts, not their pieces.

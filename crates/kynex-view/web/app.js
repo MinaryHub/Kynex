@@ -507,7 +507,105 @@ function onUpdate(data) {
   else robotPanel.refresh();
   if (treeChanged) renderTree();
   if (selected != null) showInspector(selected);
+  // A joint still being dragged: shown where the slider is, over the pose
+  // just told; let go and caught up with, as told.
+  if (jointPreview?.ending && jointCaughtUp()) endJointPreview();
+  else if (jointPreview) showJointPreview();
   touched();
+}
+
+// A joint dragged on the robot panel moves on the screen at once: what is
+// beyond it turned about its axis (or slid along it) from the pose KYNEX
+// last told to where the slider is, without waiting for KYNEX to answer.
+// Each pose it tells is drawn so too, until the slider is let go; then
+// what it told last stands. `uid` null ends it.
+let jointPreview = null;
+const _jp = new THREE.Matrix4();
+const _jm = new THREE.Matrix4();
+const _jo = new THREE.Vector3();
+const _ja = new THREE.Vector3();
+function previewJoint(uid, position) {
+  const was = jointPreview;
+  if (uid == null) {
+    // Let go: kept until KYNEX tells the pose it was let go at (or a
+    // moment has passed), so that it does not jump back meanwhile.
+    if (!was) return;
+    was.ending = true;
+    clearTimeout(was.timer);
+    was.timer = setTimeout(() => jointPreview === was && endJointPreview(), 1500);
+    if (jointCaughtUp()) endJointPreview();
+    return;
+  }
+  // Another joint: the last one's parts as told first.
+  if (was && was.uid !== uid) endJointPreview();
+  else if (was?.timer) clearTimeout(was.timer);
+  jointPreview = { uid, position, below: was?.uid === uid ? was.below : partsBeyond(uid) };
+  showJointPreview();
+}
+
+// Whether the pose KYNEX told has the joint where the slider was let go.
+function jointCaughtUp() {
+  const p = jointPreview;
+  const j = p && robots.flatMap((r) => r.joints).find((x) => x.uid === p.uid);
+  return !j || Math.abs(j.position - p.position) < 1e-4;
+}
+
+function endJointPreview() {
+  const was = jointPreview;
+  jointPreview = null;
+  if (!was) return;
+  clearTimeout(was.timer);
+  // As KYNEX last told it.
+  for (const u of was.below) {
+    const rec = records.get(u);
+    if (!rec) continue;
+    batch.move(u, rec.matrix);
+    if (gizmos.has(u)) setGizmo(rec);
+  }
+  shadowsDirty = true;
+}
+
+// Every object below `uid`: what a joint moves.
+function partsBeyond(uid) {
+  const children = new Map();
+  for (const rec of records.values()) {
+    if (rec.parent == null) continue;
+    if (!children.has(rec.parent)) children.set(rec.parent, []);
+    children.get(rec.parent).push(rec.uid);
+  }
+  const out = [];
+  const stack = [...(children.get(uid) ?? [])];
+  while (stack.length) {
+    const u = stack.pop();
+    out.push(u);
+    stack.push(...(children.get(u) ?? []));
+  }
+  return out;
+}
+
+function showJointPreview() {
+  const p = jointPreview;
+  const j = robots.flatMap((r) => r.joints).find((x) => x.uid === p.uid);
+  if (!j) return;
+  // From the joint as told: its place and axis in the world, its position.
+  const d = p.position - j.position;
+  _jo.fromArray(j.origin);
+  _ja.fromArray(j.axis).normalize();
+  if (j.slides) {
+    _jp.makeTranslation(_ja.x * d, _ja.y * d, _ja.z * d);
+  } else {
+    _jp.makeTranslation(_jo.x, _jo.y, _jo.z)
+      .multiply(_jm.makeRotationAxis(_ja, d))
+      .multiply(_jm.makeTranslation(-_jo.x, -_jo.y, -_jo.z));
+  }
+  for (const u of p.below) {
+    const rec = records.get(u);
+    if (!rec) continue;
+    const m = _jm.multiplyMatrices(_jp, new THREE.Matrix4().fromArray(rec.matrix)).toArray();
+    batch.move(u, m);
+    if (gizmos.has(u)) setGizmo({ ...rec, matrix: m });
+  }
+  shadowsDirty = true;
 }
 
 const STATUS_TEXT = {
@@ -757,6 +855,7 @@ const robotPanel = new RobotPanel({
   selected: () => selected,
   toast,
   escapeHtml,
+  previewJoint: (uid, position) => previewJoint(uid, position),
 });
 const cellPanel = new CellPanel({
   scene,

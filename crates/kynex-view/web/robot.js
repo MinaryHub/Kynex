@@ -1457,12 +1457,15 @@ export class RobotPanel {
       const t = Math.min(Math.max((ev.clientX - rect.left) / rect.width, 0), 1);
       let v = a + t * (b - a);
       if (limited) v = Math.min(Math.max(v, lo), hi);
-      // Where the pointer is, at once; the joint follows when KYNEX answers.
+      // Where the pointer is, at once — the mark, and the robot on the
+      // screen —; KYNEX's own pose when it answers.
       track.querySelector('.mark').style.left = `${(((v - a) / (b - a)) * 100).toFixed(2)}%`;
+      this.ctx.previewJoint?.(uid, v);
       this.send(r, { op: 'jog', robot: r.root, joint: uid, position: v });
     };
     const up = () => {
       delete track.dataset.dragging;
+      this.ctx.previewJoint?.(null);
       track.removeEventListener('pointermove', move);
       track.removeEventListener('pointerup', up);
       track.removeEventListener('pointercancel', up);

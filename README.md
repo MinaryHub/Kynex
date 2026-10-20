@@ -115,7 +115,10 @@ The robot panel can pose a robot in the viewer. KYNEX works out the pose
 is marked **로컬 자세** and keeps that pose while the session moves on.
 **세션 자세로** lets go of it, and the robot takes the session's pose again.
 
-- **Joints**: drag a joint's bar. The joint stays within its limits.
+- **Joints**: drag a joint's bar. The joint stays within its limits. The
+  robot follows the bar on the screen at once — what is beyond the joint
+  turned (or slid) where the bar is, without waiting for KYNEX to answer —
+  and takes KYNEX's own pose as each answer comes and once it is let go.
 - **TCP pendant**: X/Y/Z and Rx/Ry/Rz jog buttons, in world or tool
   axes. Hold a button to repeat. Steps are 1 mm · 1°, 10 mm · 5° or
   50 mm · 15°. **이동할 때 자세 유지** keeps the tool's orientation while it

@@ -1097,10 +1097,39 @@ const chainOf = (uid) => {
   for (let at = uid, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
   return uids;
 };
+// What of the flow's markers is under the pointer: a dot, an arrow.
+const markerAt = (x, y) => {
+  const r = canvas.getBoundingClientRect();
+  const project = (v) => {
+    const p = v.clone().project(camera);
+    // Behind the camera: nowhere on the screen.
+    if (p.z > 1) return [Infinity, Infinity];
+    return [r.left + ((p.x + 1) / 2) * r.width, r.top + ((1 - p.y) / 2) * r.height];
+  };
+  return cellPanel.pickMarker(x, y, project);
+};
 canvas.addEventListener(
   'pointerdown',
   (e) => {
-    if (!cellPanel.linking() || e.button !== 0) return;
+    if (e.button !== 0) return;
+    // A dot over a piece that sends parts on: always a link's start.
+    const marker = markerAt(e.clientX, e.clientY);
+    if (marker?.handle) {
+      const c = cellPanel.componentOf(marker.handle);
+      const at = c?.flow?.at;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      controls.enabled = false;
+      linkDrag = {
+        uids: [marker.handle],
+        x: e.clientX,
+        y: e.clientY,
+        from: new THREE.Vector3(at[0], at[1], at[2] + 0.45),
+        moved: false,
+      };
+      return;
+    }
+    if (!cellPanel.linking()) return;
     const hit = partAt(e.clientX, e.clientY);
     const uids = hit ? chainOf(hit.uid) : [];
     if (!cellPanel.sender(uids)) return;
@@ -1110,6 +1139,12 @@ canvas.addEventListener(
   },
   { capture: true },
 );
+// A hand over a dot: it can be dragged.
+canvas.addEventListener('pointermove', (e) => {
+  if (e.buttons || linkDrag || view.interact) return;
+  const over = markerAt(e.clientX, e.clientY);
+  canvas.style.cursor = over?.handle ? 'grab' : over?.link ? 'pointer' : cellPanel.linking() ? 'crosshair' : '';
+});
 canvas.addEventListener('pointermove', (e) => {
   if (!linkDrag) return;
   if (!linkDrag.moved && Math.hypot(e.clientX - linkDrag.x, e.clientY - linkDrag.y) < 6) return;
@@ -1149,6 +1184,12 @@ canvas.addEventListener('pointerup', (e) => {
   const uidOf = (h) => (h.batchId !== undefined ? batch.uidAt(h.batchId) : h.object.userData.uid);
   const hits = ray.intersectObjects(targets, true);
   const hit = hits.find((h) => uidOf(h) != null);
+  // An arrow of the flow: chosen, to undo with Delete.
+  if (!view.measure && !cellPanel.picking()) {
+    const marker = markerAt(e.clientX, e.clientY);
+    if (marker?.link) return cellPanel.chooseLink(marker.link);
+    cellPanel.chooseLink(null);
+  }
   // Measuring: the click is a point on a shape.
   if (view.measure) {
     const shape = hits.find((h) => h.batchId !== undefined);
@@ -1555,6 +1596,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === '1') frame(selected, 'front');
   else if (k === '3') frame(selected, 'right');
   else if (libraryPanel.key(k)) return e.preventDefault();
+  else if ((k === 'delete' || k === 'backspace') && cellPanel.cutChosenLink()) return e.preventDefault();
   else if (k === 'delete' && libraryPanel.removeSelected()) return e.preventDefault();
   else if (k === 'escape') {
     libraryPanel.arm(null);

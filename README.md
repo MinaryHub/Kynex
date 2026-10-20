@@ -681,7 +681,14 @@ equipment in order — the source, each machine, the sink — and each is
 linked to the one before; it ends at a sink, or with Esc. Or drag from one
 piece of equipment onto the next: a dashed line follows the pointer and
 the two are linked where it is let go (a press anywhere else still turns
-the view). Equipment not
+the view).
+
+Out of link mode too, each piece that sends parts on — a source, a
+station, a buffer, a conveyor — has an orange dot over it: dragged onto
+other equipment, it links the two. An arrow of the flow clicked in the 3D
+view is chosen (drawn orange) and **Delete** undoes the link, the
+equipment left as it is. Arrows and dots are picked by how near the
+pointer is to them on the screen, the same however near the view is. Equipment not
 yet of the flow is made so as it is clicked: a CNC machine or a moulder a
 공정 스테이션 keeping its time (at 전문가, after asking: it was a robot
 cell's machine), one with no role the 소재 공급 if it is the first, else a

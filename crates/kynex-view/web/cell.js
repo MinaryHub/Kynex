@@ -720,9 +720,14 @@ export class CellPanel {
   // clicking the one then the other would.
   dragLink(from, to, root = null) {
     const c = this.sender(from);
-    if (!c || !this.link) return null;
-    this.link.from = c.object;
-    return this.linkTo(to, root);
+    if (!c) return null;
+    // Out of link mode, for this link alone.
+    const once = !this.link;
+    if (once) this.link = { from: c.object, once: true };
+    else this.link.from = c.object;
+    const made = this.linkTo(to, root);
+    if (once && made == null && this.link?.once) this.link = null;
+    return made;
   }
 
   // Linking on to `object` of role `kind`: from the last, and on from it
@@ -752,7 +757,8 @@ export class CellPanel {
     } else if (note) {
       this.ctx.toast(`${name}: ${note}`);
     }
-    if (done) this.stopLinking();
+    if (this.link?.once) this.link = null;
+    else if (done) this.stopLinking();
     else this.link.from = object;
     return object;
   }
@@ -958,6 +964,78 @@ export class CellPanel {
     return { material, w };
   }
 
+  // The dot a link is dragged from: an orange disc, ringed white. Made
+  // once (drawMarkers leaves it be).
+  dotTexture() {
+    if (this.dot) return this.dot;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath();
+    ctx.arc(32, 32, 26, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff8a3d';
+    ctx.fill();
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    this.dot = new THREE.CanvasTexture(canvas);
+    this.dot.colorSpace = THREE.SRGBColorSpace;
+    return this.dot;
+  }
+
+  // The dot or the arrow at (x, y) on the screen, `project` giving a
+  // point's place there: { handle } — a piece's object to drag a link
+  // from — within 12 pixels, else { link } — an arrow, { from, to } —
+  // within 10 of its line; or null. Judged on the screen, the same however
+  // near or far.
+  pickMarker(x, y, project) {
+    let best = null;
+    for (const o of this.markers.children) {
+      if (!o.userData.handle) continue;
+      const [px, py] = project(o.position);
+      const d = Math.hypot(px - x, py - y);
+      if (d < 12 && (!best || d < best.d)) best = { d, handle: o.userData.handle };
+    }
+    if (best) return { handle: best.handle };
+    for (const o of this.markers.children) {
+      const l = o.userData.link;
+      if (!l) continue;
+      const [ax, ay] = project(o.userData.a);
+      const [bx, by] = project(o.userData.b);
+      const [dx, dy] = [bx - ax, by - ay];
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / Math.max(dx * dx + dy * dy, 1e-9)));
+      const d = Math.hypot(ax + t * dx - x, ay + t * dy - y);
+      if (d < 10 && (!best || d < best.d)) best = { d, link: l };
+    }
+    return best ? { link: best.link } : null;
+  }
+
+  // The arrow chosen in the 3D view, to undo with Delete; or none.
+  chooseLink(link) {
+    const same = link && this.chosenLink?.from === link.from && this.chosenLink?.to === link.to;
+    if (same || (!link && !this.chosenLink)) return;
+    this.chosenLink = link;
+    this.drawMarkers();
+    if (link) {
+      const name = (u) => this.componentOf(u)?.name ?? '';
+      this.ctx.toast(`연결 ${name(link.from)} → ${name(link.to)} · Delete 키로 끊기`);
+    }
+  }
+
+  // The arrow chosen, undone. Whether there was one.
+  cutChosenLink() {
+    const link = this.chosenLink;
+    if (!link) return false;
+    this.chosenLink = null;
+    const have = this.componentOf(link.from)?.flow?.next ?? [];
+    const name = (u) => this.componentOf(u)?.name ?? '';
+    this.send({ op: 'flow_next', object: link.from, next: have.filter((n) => n !== link.to) }, () =>
+      this.ctx.toast(`연결을 끊었습니다: ${name(link.from)} → ${name(link.to)}`),
+    );
+    this.drawMarkers();
+    return true;
+  }
+
   drawMarkers() {
     for (const child of [...this.markers.children]) {
       child.removeFromParent();
@@ -965,7 +1043,8 @@ export class CellPanel {
       // An arrow is a group: its shaft and its head each their own.
       child.traverse((o) => {
         o.geometry?.dispose();
-        o.material?.map?.dispose();
+        // The link dot's picture is made once, kept.
+        if (o.material?.map && o.material.map !== this.dot) o.material.map.dispose();
         o.material?.dispose();
       });
     }
@@ -1001,7 +1080,18 @@ export class CellPanel {
         const way = to.clone().sub(from);
         const length = way.length();
         if (length < 1e-6) continue;
-        const arrow = new THREE.ArrowHelper(way.normalize(), from, length, 0x5aa9ff, Math.min(0.25, length * 0.3), 0.12);
+        const chosen = this.chosenLink?.from === c.object && this.chosenLink?.to === n;
+        const arrow = new THREE.ArrowHelper(
+          way.normalize(),
+          from,
+          length,
+          chosen ? 0xff8a3d : 0x5aa9ff,
+          Math.min(chosen ? 0.4 : 0.25, length * 0.3),
+          chosen ? 0.2 : 0.12,
+        );
+        arrow.userData.link = { from: c.object, to: n };
+        arrow.userData.a = from.clone();
+        arrow.userData.b = to.clone();
         arrow.traverse((o) => {
           if (o.material) {
             o.material.depthTest = false;
@@ -1014,6 +1104,19 @@ export class CellPanel {
       }
     }
     for (const a of arrows) this.markers.add(a);
+    // A dot over each piece that sends parts on: dragged onto other
+    // equipment, it links the two.
+    for (const c of this.cell.components) {
+      const a = at.get(c.object);
+      if (!a || !this.sends(c.object)) continue;
+      const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dotTexture(), depthTest: false, transparent: true }));
+      dot.material.sizeAttenuation = false;
+      dot.scale.set(0.022, 0.022, 1);
+      dot.position.set(a[0], a[1], a[2] + 0.45);
+      dot.renderOrder = 11;
+      dot.userData.handle = c.object;
+      this.markers.add(dot);
+    }
     this.drawNames(at, this.drawLoads(at));
     this.drawProgress(at);
     // The AMRs' lanes: a line between each two stops linked.

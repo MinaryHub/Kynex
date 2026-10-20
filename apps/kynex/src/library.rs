@@ -874,6 +874,10 @@ pub const TEMPLATES: &[Template] = &[
     },
 ];
 
+/// Templates that hang, or stand where they are put, not set down on what
+/// is below them: a lamp, a crane, a rail overhead.
+const HUNG: &[&str] = &["ceiling_light", "overhead_crane", "crane_rail", "oht_rail"];
+
 pub fn template(key: &str) -> Option<&'static Template> {
     TEMPLATES.iter().find(|t| t.key == key)
 }
@@ -1497,6 +1501,12 @@ impl Library {
             } else {
                 None
             };
+            // Set down, when asked (placed or dragged on the page): not
+            // where it is put exactly, as a height typed in or a plant
+            // laid out by code is.
+            if snapped.is_none() && req["settle"] == true {
+                self.settle(&mut item);
+            }
             let built = self.build(&item)?;
             roles.added = role_uids(&item, &built);
             roles.props = role_props(&item, &built);
@@ -1598,6 +1608,15 @@ impl Library {
                 tilt(item, m)?;
             }
             self.items = next;
+            // Each set down where it now is, when asked.
+            let moved: Vec<u64> = moves.iter().filter_map(|m| m["item"].as_u64()).collect();
+            for id in moved.into_iter().filter(|_| req["settle"] == true) {
+                if let Some(k) = self.items.iter().position(|i| i.id == id) {
+                    let mut item = self.items[k].clone();
+                    self.settle(&mut item);
+                    self.items[k] = item;
+                }
+            }
             self.items_changed = true;
             return Ok(json!({ "ok": true }));
         }
@@ -1716,6 +1735,9 @@ impl Library {
                 } else {
                     None
                 };
+                if snapped.is_none() && req["settle"] == true {
+                    self.settle(&mut item);
+                }
                 self.items[at] = item;
                 self.items_changed = true;
                 return Ok(json!({ "ok": true, "snapped": snapped }));
@@ -1757,6 +1779,95 @@ impl Library {
         }
         self.items_changed = true;
         Ok(json!({ "ok": true }))
+    }
+
+    /// `item` set down: its lowest point on the top of what bears at least
+    /// half of its footprint — another item whose top is no higher than its own
+    /// bottom now, the highest such —, or else on the floor; lifted up to
+    /// the floor if it was below it. What hangs (a lamp, a crane's rail)
+    /// and what is tilted stay where they are.
+    fn settle(&mut self, item: &mut Item) {
+        if HUNG.contains(&item.template.as_str()) || !item.upright() {
+            return;
+        }
+        let Some((lo, hi)) = self.local_box(item) else {
+            return;
+        };
+        let bottom = item.at.z + lo.z;
+        // Its footprint on the floor, turned as it stands.
+        let turn = DQuat::from_rotation_z(item.yaw);
+        let (mut flo, mut fhi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+        for x in [lo.x, hi.x] {
+            for y in [lo.y, hi.y] {
+                let v = item.at + turn * DVec3::new(x, y, 0.0);
+                flo = flo.min(v);
+                fhi = fhi.max(v);
+            }
+        }
+        let area = ((fhi.x - flo.x) * (fhi.y - flo.y)).max(1e-9);
+        let others: Vec<Item> = self
+            .items
+            .iter()
+            .filter(|o| {
+                o.id != item.id
+                    && o.upright()
+                    && !HUNG.contains(&o.template.as_str())
+                    && o.template != "floor_zone"
+            })
+            .cloned()
+            .collect();
+        let mut ground = 0.0_f64;
+        for o in &others {
+            let Some((olo, ohi)) = self.world_box(o) else {
+                continue;
+            };
+            // Stood on only what bears at least half of it — a pedestal, a
+            // table —, not a conveyor running through it.
+            let w = (fhi.x.min(ohi.x) - flo.x.max(olo.x)).max(0.0);
+            let d = (fhi.y.min(ohi.y) - flo.y.max(olo.y)).max(0.0);
+            if w * d >= area * 0.5 && ohi.z <= bottom + 0.05 {
+                ground = ground.max(ohi.z);
+            }
+        }
+        item.at.z = ground - lo.z;
+    }
+
+    /// `item`'s box in its own frame, as made.
+    fn local_box(&mut self, item: &Item) -> Option<(DVec3, DVec3)> {
+        let built = self.made(item).ok()?;
+        let doc = &built.doc;
+        let mut lo = DVec3::splat(f64::INFINITY);
+        let mut hi = DVec3::splat(f64::NEG_INFINITY);
+        for (id, o) in doc.objects() {
+            let Some(mesh) = o.mesh().and_then(|m| doc.mesh(m)) else {
+                continue;
+            };
+            let world = doc.world_transform(id);
+            for p in mesh.positions() {
+                let v = world.transform_point3(p.as_dvec3());
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        (lo.x <= hi.x).then_some((lo, hi))
+    }
+
+    /// `item`'s box where it stands, turned as it is about Z.
+    fn world_box(&mut self, item: &Item) -> Option<(DVec3, DVec3)> {
+        let (lo, hi) = self.local_box(item)?;
+        let turn = DQuat::from_rotation_z(item.yaw);
+        let mut wlo = DVec3::splat(f64::INFINITY);
+        let mut whi = DVec3::splat(f64::NEG_INFINITY);
+        for x in [lo.x, hi.x] {
+            for y in [lo.y, hi.y] {
+                for z in [lo.z, hi.z] {
+                    let v = item.at + turn * DVec3::new(x, y, z);
+                    wlo = wlo.min(v);
+                    whi = whi.max(v);
+                }
+            }
+        }
+        Some((wlo, whi))
     }
 
     /// Moves `item` onto the connection point of another it is nearest,

@@ -1254,7 +1254,19 @@ canvas.addEventListener('pointerup', (e) => {
     return;
   }
   if ((e.ctrlKey || e.metaKey || e.shiftKey) && hit) return toggleGroup(uidOf(hit));
-  select(hit ? uidOf(hit) : null);
+  // A click on a part chooses the whole of its equipment: the placed item
+  // it is part of, else its topmost object. With Alt, the part itself; a
+  // joint's marker is that joint.
+  const chosen = (h) => {
+    const uid = uidOf(h);
+    if (e.altKey || h.batchId === undefined) return uid;
+    const item = libraryPanel.itemOf(uid);
+    if (item) return item.root;
+    let top = uid;
+    for (let at = records.get(uid)?.parent, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) top = at;
+    return top;
+  };
+  select(hit ? chosen(hit) : null);
 });
 
 // ---- camera -----------------------------------------------------------------

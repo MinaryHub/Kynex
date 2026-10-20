@@ -131,11 +131,15 @@ export class LibraryPanel {
         : null;
       if (!e.value) {
         this.draggedAt = performance.now();
-        // Let go: onto what it connects to, if near (unless Alt is held) —
-        // one item alone.
+        // Let go: onto what it connects to, if near, else set down on the
+        // floor or what is below it (unless Alt is held) — one item alone;
+        // a group, each set down.
         if (this.handleItem != null && !this.alt && this.groupItems().length <= 1) {
           const z = new THREE.Euler().setFromQuaternion(this.proxy.quaternion, 'ZYX').z;
-          this.send({ op: 'move', item: this.handleItem, at: this.originAt(), yaw: z, snap: true }, (a) => this.saySnapped(a));
+          this.send({ op: 'move', item: this.handleItem, at: this.originAt(), yaw: z, snap: true, settle: true }, (a) => this.saySnapped(a));
+        } else if (this.handleItem != null && !this.alt) {
+          const moves = this.groupItems().map((i) => ({ item: i.id, at: [...i.at], yaw: i.yaw }));
+          this.move(null, null, null, { op: 'move_many', moves, settle: true });
         }
       }
     });
@@ -481,7 +485,7 @@ export class LibraryPanel {
     if (!hit) return;
     // Placed unturned, whatever it is: turned afterwards in the inspector.
     const t = this.library.templates.find((t) => t.key === key);
-    this.send({ op: 'place', template: key, at: this.onGrid(hit), yaw: 0, snap: !this.alt }, (a) =>
+    this.send({ op: 'place', template: key, at: this.onGrid(hit), yaw: 0, snap: !this.alt, settle: !this.alt }, (a) =>
       this.ctx.toast(`${t?.name ?? key}을(를) 놓았습니다${a.snapped ? ` · ${a.snapped}에 맞붙였습니다` : ''}`),
     );
   }
@@ -657,7 +661,7 @@ export class LibraryPanel {
           <select data-array="axis"><option value="x">X 방향으로 (YZ면)</option><option value="y">Y 방향으로 (XZ면)</option></select>
           <button class="text-btn quiet" data-item-act="mirror" title="선택한 장비 상자의 끝에 붙여, 위치와 방향을 거울처럼 뒤집은 복사본을 놓습니다. 장비 형상 자체는 뒤집지 않습니다">만들기</button></div>
       </details>
-      <div class="muted insp-hint">Ctrl·Shift+클릭: 장비 여러 개 선택</div>`;
+      <div class="muted insp-hint">Ctrl·Shift+클릭: 장비 여러 개 선택 · Alt+클릭: 장비 안의 부품</div>`;
   }
 
   // The array and mirror numbers as typed.

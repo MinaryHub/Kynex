@@ -145,7 +145,14 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
 - **Snapping**: a robot let go within 0.25 m of a pedestal's or an AMR's
   top stands on it; a conveyor let go near another's end runs on from it,
   in line, flowing the same way, its belt as high. Placing and letting go
-  of the move handle snap; hold Alt to let go where it is.
+  of the move handle snap; hold Alt to let go where it is. Otherwise
+  equipment placed or let go in the air, or below the grid, is set down:
+  on the floor, or on what bears at least half of it (a pedestal, a
+  table) — not on a conveyor running through it. Lamps, cranes and rails
+  overhead stay where they are; a height typed in is kept.
+- **Choosing in 3D**: a click on any part chooses the whole piece of
+  equipment it belongs to; Alt+click chooses the part itself (the tree
+  still lists every part).
 - **My equipment**: **내 장비로 저장** in the inspector keeps the selected
   object and everything below it — shapes, colours, roles and their
   settings — in the library under 내 장비, saved with the project, to be

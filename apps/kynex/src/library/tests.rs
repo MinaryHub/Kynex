@@ -1201,3 +1201,45 @@ fn copies_are_placed_items_locked_and_renamed() {
     );
     assert_eq!(empty["ok"], false);
 }
+
+/// Equipment placed or let go on the page is set down: on the floor
+/// whether put above it or below it, or on the top of what is below it if
+/// let go above that; a height typed in is kept.
+#[test]
+fn equipment_let_go_is_set_down_on_the_floor_or_on_what_is_below() {
+    let mut library = Library::default();
+    let place = |library: &mut Library, template: &str, at: [f64; 3], settle: bool| -> u64 {
+        let (a, _) = ask(
+            library,
+            json!({"op": "place", "template": template, "at": at, "settle": settle}),
+        );
+        a["item"].as_u64().unwrap()
+    };
+    let z = |library: &Library, id: u64| library.items.iter().find(|i| i.id == id).unwrap().at.z;
+    // Above the floor, and below it: on it.
+    let up = place(&mut library, "flow_station", [0.0, 0.0, 3.0], true);
+    assert!(z(&library, up).abs() < 1e-9, "{}", z(&library, up));
+    let down = place(&mut library, "flow_buffer", [3.0, 0.0, -1.0], true);
+    assert!(z(&library, down).abs() < 1e-9, "{}", z(&library, down));
+    // A pedestal 0.7 m high; a robot let go over it stands on it.
+    place(&mut library, "pedestal", [6.0, 0.0, 0.0], true);
+    let on = place(&mut library, "ur5e", [6.0, 0.0, 2.0], true);
+    assert!((z(&library, on) - 0.7).abs() < 0.02, "{}", z(&library, on));
+    // A long machine over a conveyor that runs through it: on the floor,
+    // not on the belt.
+    place(&mut library, "conveyor", [0.0, 6.0, 0.0], true);
+    let over = place(&mut library, "assembly_line", [0.0, 6.0, 3.0], true);
+    assert!(z(&library, over).abs() < 1e-9, "{}", z(&library, over));
+    // Dragged up into the air and let go: down again.
+    ask(
+        &mut library,
+        json!({"op": "move", "item": up, "at": [0.0, 0.0, 4.0], "settle": true}),
+    );
+    assert!(z(&library, up).abs() < 1e-9);
+    // A height typed in is kept.
+    ask(
+        &mut library,
+        json!({"op": "move", "item": up, "at": [0.0, 0.0, 1.5]}),
+    );
+    assert!((z(&library, up) - 1.5).abs() < 1e-9);
+}

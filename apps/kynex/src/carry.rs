@@ -120,7 +120,11 @@ impl Carry {
             }
             if let Some(why) = trouble {
                 self.tried.insert(part, time);
-                cell.flow_trouble(why);
+                // Out of reach of the robots free now: said only when no
+                // other is busy carrying, which may take it when done.
+                if self.carrying.is_empty() {
+                    cell.flow_trouble(why);
+                }
             }
         }
         changed
@@ -144,69 +148,93 @@ impl Carry {
         let tool = kin
             .tool(gripper, DAffine3::IDENTITY)
             .ok_or("no such grip point")?;
-        let up = DVec3::Z * 0.15;
         let mut seed = posing.positions(&kin, root);
         // The grip point turned as it stands now — a robot waits with its
         // tool down — whatever way it is mounted on the tool.
         let (_, down, _) = kin.pose(&seed, &tool).to_scale_rotation_translation();
-        let mut point = |name: &str, p: DVec3, linear: bool| -> Result<Point, String> {
+        let base = kin
+            .world_of(&seed, root)
+            .map_or(DVec3::ZERO, |b| b.translation);
+        let solve = |p: DVec3, rotation: kreate_math::DQuat, from: &[f64]| -> Option<Vec<f64>> {
             let found = kin.solve(
                 &tool,
                 &kynex_kin::Goal {
                     position: p,
-                    rotation: Some(down),
+                    rotation: Some(rotation),
                 },
-                &seed,
+                from,
                 &kynex_kin::Options {
                     restarts: 24,
                     ..kynex_kin::Options::default()
                 },
             );
-            if !found.reached {
-                return Err(format!(
-                    "{}: 로봇이 닿지 않는 곳입니다 ({:.2}, {:.2}, {:.2} m)",
-                    crate::collide::label(scene, root),
-                    p.x,
-                    p.y,
-                    p.z
-                ));
+            found.reached.then_some(found.positions)
+        };
+        // Each end reached from above, the tool down; or, where that is out
+        // of reach — a chuck deep in a machine, through its door —, from in
+        // front, level, the tool pointing at it from the robot's side.
+        let end = |p: DVec3, seed: &mut Vec<f64>| -> Result<(Vec<f64>, Vec<f64>), String> {
+            let level = (p - base).truncate();
+            let mut ways = vec![(DVec3::Z * 0.15, down)];
+            if level.length() > 1e-6 {
+                let toward = level.normalize().extend(0.0);
+                let turn = kreate_math::DQuat::from_rotation_arc(-DVec3::Z, toward);
+                ways.push((-toward * 0.15, turn * down));
             }
-            seed = found.positions.clone();
-            Ok(Point {
-                name: name.to_string(),
-                kind: if linear {
-                    MoveKind::Linear
-                } else {
-                    MoveKind::Joint
-                },
-                speed: if linear {
-                    crate::program::LINEAR_SPEED
-                } else {
-                    crate::program::JOINT_SPEED
-                },
-                positions: kin
-                    .vars
-                    .iter()
-                    .map(|v| v.uid)
-                    .zip(found.positions)
-                    .collect(),
-                pallet: None,
-                frame: None,
-                blend: 0.0,
-                via: None,
-                work: false,
-            })
+            for (back, rotation) in ways {
+                let Some(near) = solve(p + back, rotation, seed) else {
+                    continue;
+                };
+                let Some(at) = solve(p, rotation, &near) else {
+                    continue;
+                };
+                *seed = at.clone();
+                return Ok((near, at));
+            }
+            Err(format!(
+                "{}: 로봇이 닿지 않는 곳입니다 ({:.2}, {:.2}, {:.2} m)",
+                crate::collide::label(scene, root),
+                p.x,
+                p.y,
+                p.z
+            ))
+        };
+        let (pick_near, pick) = end(at, &mut seed)?;
+        let (put_near, put) = end(to, &mut seed)?;
+        let point = |name: &str, q: &[f64], linear: bool| Point {
+            name: name.to_string(),
+            kind: if linear {
+                MoveKind::Linear
+            } else {
+                MoveKind::Joint
+            },
+            speed: if linear {
+                crate::program::LINEAR_SPEED
+            } else {
+                crate::program::JOINT_SPEED
+            },
+            positions: kin
+                .vars
+                .iter()
+                .map(|v| v.uid)
+                .zip(q.iter().copied())
+                .collect(),
+            pallet: None,
+            frame: None,
+            blend: 0.0,
+            via: None,
+            work: false,
         };
         let mut program = Program::named("흐름 운반", Some(gripper), DVec3::ZERO);
         program.steps = vec![
-            Step::Move(point("집기 위", at + up, false)?),
-            Step::Move(point("집기", at, true)?),
+            Step::Move(point("집기 앞", &pick_near, false)),
+            Step::Move(point("집기", &pick, true)),
             Step::Do(Action::Grip { gripper }),
-            Step::Move(point("집은 뒤 위", at + up, true)?),
-            Step::Move(point("놓기 위", to + up, false)?),
-            Step::Move(point("놓기", to, true)?),
+            Step::Move(point("집은 뒤 물러남", &pick_near, true)),
+            Step::Move(point("놓기 앞", &put_near, false)),
+            Step::Move(point("놓기", &put, true)),
             Step::Do(Action::Release { gripper }),
-            Step::Move(point("놓은 뒤 위", to + up, true)?),
+            Step::Move(point("놓은 뒤 물러남", &put_near, true)),
         ];
         Ok(program)
     }

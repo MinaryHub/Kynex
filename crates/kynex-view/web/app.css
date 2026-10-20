@@ -1092,3 +1092,42 @@ body[data-level="2"] [data-min="3"] { display: none !important; }
 }
 .drag-tip.ok { border-color: var(--ok); color: var(--ok); }
 .drag-tip.bad { border-color: var(--bad); color: #ff8585; }
+
+/* A ? beside a setting, and the card it opens. */
+.help-q {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  /* Close to the name it explains, taking little room from the field. */
+  margin: 0 -2px 0 -3px;
+  padding: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: 600 9.5px/1 var(--sans);
+  cursor: help;
+  vertical-align: middle;
+}
+.help-q:hover { border-color: var(--info); color: var(--info); }
+/* A short name stays on one line beside its ?; the number gives way. */
+.insp-field.help-short { white-space: nowrap; }
+.insp-field.help-short > input.num { flex: 0 1 56px; width: auto; min-width: 38px; }
+.help-card {
+  position: fixed;
+  z-index: 95;
+  width: min(300px, calc(100vw - 16px));
+  padding: 9px 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.help-title { margin-bottom: 3px; font-weight: 600; }
+.help-text { margin: 0; }
+.help-tip { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid var(--line); color: var(--muted); }

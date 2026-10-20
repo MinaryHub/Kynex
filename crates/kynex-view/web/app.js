@@ -17,6 +17,7 @@ import { LibraryPanel } from '/library.js';
 import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
 import { showMenu } from '/menu.js';
+import { mountHelp } from '/help.js';
 
 // ---- state ------------------------------------------------------------------
 
@@ -353,15 +354,72 @@ function applyObject(rec) {
     old.visible === rec.visible && String(old.color) === String(rec.color);
   if (same && (batch.has(rec.uid) || rec.kind !== 'mesh')) {
     // Moved, nothing else: the common case, sixteen numbers.
-    batch.move(rec.uid, rec.matrix);
-    if (gizmos.has(rec.uid)) setGizmo(rec);
+    moveShown(rec);
   } else {
+    glides.delete(rec.uid);
     place(rec);
   }
   return !old || old.name !== rec.name || old.parent !== rec.parent || old.visible !== rec.visible;
 }
 
+// ---- smooth motion while the simulation runs -------------------------------
+// KYNEX tells poses some twenty times a second while a program or the flow
+// runs; drawn as told, a robot steps. Meanwhile each object moved glides
+// from where it is drawn to where it was told, over about the time between
+// tellings, so that it moves every frame. Not while nothing runs: a pose
+// asked for — a drag, a jog — shows as soon as it is told.
+const glides = new Map();
+let lastTold = 0;
+let toldGap = 50;
+const _gm = new THREE.Matrix4();
+const _gp = new THREE.Vector3();
+const _gq = new THREE.Quaternion();
+const _gs = new THREE.Vector3();
+const running = () => !!timelinePanel.flowState?.on || robotPanel.going().length > 0;
+
+// How long apart tellings come, as they have lately.
+function told() {
+  const now = performance.now();
+  if (lastTold) toldGap = toldGap * 0.8 + Math.min(now - lastTold, 250) * 0.2;
+  lastTold = now;
+}
+
+function moveShown(rec) {
+  if (!running() || jointPreview) {
+    glides.delete(rec.uid);
+    batch.move(rec.uid, rec.matrix);
+    if (gizmos.has(rec.uid)) setGizmo(rec);
+    return;
+  }
+  // From where it is drawn now.
+  const from = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() };
+  const it = batch.inst.get(rec.uid);
+  if (it) batch.mesh.getMatrixAt(it.id, _gm);
+  else if (gizmos.has(rec.uid)) _gm.copy(gizmos.get(rec.uid).matrix);
+  else _gm.fromArray(rec.matrix);
+  _gm.decompose(from.p, from.q, from.s);
+  const to = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() };
+  _gm.fromArray(rec.matrix).decompose(to.p, to.q, to.s);
+  glides.set(rec.uid, { rec, from, to, t0: performance.now(), dur: Math.min(Math.max(toldGap * 1.1, 16), 150) });
+}
+
+// Each frame: every gliding object where it is by now.
+function glide(now) {
+  for (const [uid, g] of glides) {
+    const t = Math.min((now - g.t0) / g.dur, 1);
+    _gp.lerpVectors(g.from.p, g.to.p, t);
+    _gq.slerpQuaternions(g.from.q, g.to.q, t);
+    _gs.lerpVectors(g.from.s, g.to.s, t);
+    const m = _gm.compose(_gp, _gq, _gs).toArray();
+    batch.move(uid, m);
+    if (gizmos.has(uid)) setGizmo({ ...g.rec, matrix: m });
+    if (t >= 1) glides.delete(uid);
+  }
+  if (glides.size) shadowsDirty = true;
+}
+
 function removeObject(uid) {
+  glides.delete(uid);
   batch.remove(uid);
   removeGizmo(uid);
   records.delete(uid);
@@ -487,6 +545,7 @@ function onUpdate(data) {
   // Already in the scene that was fetched, or older than it.
   if (!batch.mesh || data.v <= heldVersion) return;
   heldVersion = data.v;
+  told();
   for (const [id, mesh] of Object.entries(data.meshes)) {
     const levels = buildGeometry(mesh);
     if (batch.hasGeometry(id)) batch.replaceGeometry(id, levels);
@@ -890,6 +949,8 @@ function pick(x, y) {
 
 const plcPanel = new PlcPanel({ toast, escapeHtml, robots: () => robotPanel.robots });
 mountLevelSwitch(document.getElementById('level-switch'));
+// A ? beside each setting, for what it is.
+mountHelp();
 // Linking mode shown on its button.
 const linkButton = () => document.querySelector('[data-action="link"]');
 cellPanel.onLinking = (on) => {
@@ -2200,6 +2261,7 @@ function updateXray(now) {
 const _xm = new THREE.Matrix4();
 
 renderer.setAnimationLoop(() => {
+  glide(performance.now());
   quietMarkers();
   grid.material.uniforms.uCamera.value.copy(camera.position);
   // The flow's signs never taller on the screen than a line of text.

@@ -119,6 +119,10 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   robot follows the bar on the screen at once — what is beyond the joint
   turned (or slid) where the bar is, without waiting for KYNEX to answer —
   and takes KYNEX's own pose as each answer comes and once it is let go.
+- **Smooth motion**: while a program or the flow runs, KYNEX tells poses
+  some twenty times a second; the page glides each moving part from where
+  it is drawn to where it was told over about the time between tellings,
+  so robots and parts move every frame rather than in steps.
 - **TCP pendant**: X/Y/Z and Rx/Ry/Rz jog buttons, in world or tool
   axes. Hold a button to repeat. Steps are 1 mm · 1°, 10 mm · 5° or
   50 mm · 15°. **이동할 때 자세 유지** keeps the tool's orientation while it
@@ -153,6 +157,11 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   on the floor, or on what bears at least half of it (a pedestal, a
   table) — not on a conveyor running through it. Lamps, cranes and rails
   overhead stay where they are; a height typed in is kept.
+- **What a setting is**: every setting in the inspector — position, the
+  equipment's sizes, a role's values, the PLC and real-machine fields —,
+  in the site's drawing and in the flow's settings has a **?** beside its
+  name: pressed, it opens a short card saying what the value is, what it
+  changes and a value to start from (Esc or a click elsewhere closes it).
 - **Choosing in 3D**: a click on any part chooses the whole piece of
   equipment it belongs to; Alt+click chooses the part itself (the tree
   still lists every part).

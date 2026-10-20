@@ -603,6 +603,26 @@ impl Cell {
         let coming = coming.get(&t.object).copied().unwrap_or(0) as usize;
         let empty = Station::default();
         let s = self.stations.get(&t.object).unwrap_or(&empty);
+        // A machine — a CNC, a molder, made a station — takes one part at a
+        // time into its chuck or mould: none more while one is waiting, at
+        // work or done there.
+        let machine = self
+            .door_stations
+            .as_ref()
+            .is_some_and(|(_, _, d)| d.contains(&t.object));
+        if t.kind == Kind::Station && machine {
+            // And one done, waiting there for the robot to take it out.
+            let taking = self
+                .jobs
+                .iter()
+                .filter(|j| j.from == t.object && !j.gripped)
+                .count();
+            let inside = s.queue.len()
+                + s.working.iter().map(|(_, p)| p.len()).sum::<usize>()
+                + s.out.len()
+                + taking;
+            return 1u32.saturating_sub((inside + coming) as u32);
+        }
         let held = match t.kind {
             Kind::Station => s.queue.len(),
             Kind::Buffer => s.queue.len() + s.out.len(),

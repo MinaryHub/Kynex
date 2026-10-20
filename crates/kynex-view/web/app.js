@@ -1263,8 +1263,36 @@ function grabbable(uid) {
 function partAt(x, y) {
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1), camera);
-  const hit = batch.mesh && ray.intersectObject(batch.mesh, false).find((h) => batch.uidAt(h.batchId) != null);
-  return hit ? { uid: batch.uidAt(hit.batchId), point: hit.point.clone() } : null;
+  if (!batch.mesh) return null;
+  const hit = shapeHit(ray.intersectObjects([batch.mesh, ...xray.group.children], false));
+  return hit ? { uid: shapeUid(hit), point: hit.point.clone() } : null;
+}
+
+// A hit on a shape: on the batch, or on a see-through copy standing in for
+// equipment hidden while it shows a product through it.
+const isShape = (h) => h.batchId !== undefined || h.object.userData.xray === true;
+const shapeUid = (h) => (h.batchId !== undefined ? batch.uidAt(h.batchId) : h.object.userData.uid);
+
+// Of `hits`, nearest first, the one meant: the nearest shape, but a
+// product seen through see-through equipment rather than the equipment.
+function shapeHit(hits) {
+  const shapes = hits.filter((h) => isShape(h) && shapeUid(h) != null);
+  const first = shapes[0];
+  if (!first?.object.userData.xray) return first ?? null;
+  for (const h of shapes) {
+    if (!h.object.userData.xray) return isProduct(shapeUid(h)) ? h : first;
+  }
+  return first;
+}
+
+// Whether `uid` is one of the flow's products (see `updateXray`).
+function isProduct(uid) {
+  try {
+    const n = BigInt(uid);
+    return n >= 0xffffn << 48n && n < (0xffffn << 48n) + (1n << 40n);
+  } catch {
+    return false;
+  }
 }
 
 // How far round `axis` through `pivot` the pointer has gone from `from`
@@ -1579,11 +1607,15 @@ canvas.addEventListener('pointerup', (e) => {
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   const targets = [...gizmos.values()].filter((g) => g.visible);
-  if (batch.mesh) targets.push(batch.mesh);
-  const uidOf = (h) => (h.batchId !== undefined ? batch.uidAt(h.batchId) : h.object.userData.uid);
+  if (batch.mesh) targets.push(batch.mesh, ...xray.group.children);
+  const uidOf = shapeUid;
   lineSlack();
   const hits = ray.intersectObjects(targets, true);
-  const hit = hits.find((h) => uidOf(h) != null);
+  // A joint's or link's marker nearer than any shape is chosen as it is;
+  // else the shape meant (see `shapeHit`).
+  const marker = hits.find((h) => !isShape(h) && uidOf(h) != null);
+  const shape = shapeHit(hits);
+  const hit = marker && (!shape || marker.distance < shape.distance) ? marker : shape;
   // An arrow of the flow: chosen, to undo with Delete.
   if (!view.measure && !cellPanel.picking()) {
     const marker = markerAt(e.clientX, e.clientY);
@@ -1592,14 +1624,14 @@ canvas.addEventListener('pointerup', (e) => {
   }
   // Measuring: the click is a point on a shape.
   if (view.measure) {
-    const shape = hits.find((h) => h.batchId !== undefined);
+    const shape = hits.find(isShape);
     if (shape) measureAt(shape.point);
     return;
   }
   // Picking an edge to follow: the click is on a part's shape, not a
   // choice of it, and not on a joint's marker.
   if (robotPanel.picking()) {
-    const shape = hits.find((h) => h.batchId !== undefined && uidOf(h) != null);
+    const shape = hits.find((h) => isShape(h) && uidOf(h) != null);
     if (shape) robotPanel.pickEdge(uidOf(shape), shape.point);
     return;
   }
@@ -1614,7 +1646,7 @@ canvas.addEventListener('pointerup', (e) => {
   }
   // Picking a door's hinge or a connector: a point on any shape.
   if (cellPanel.picking()) {
-    const shape = hits.find((h) => h.batchId !== undefined);
+    const shape = hits.find(isShape);
     if (shape) cellPanel.pickPoint(shape.point);
     return;
   }
@@ -1624,7 +1656,7 @@ canvas.addEventListener('pointerup', (e) => {
   // joint's marker is that joint.
   const chosen = (h) => {
     const uid = uidOf(h);
-    if (e.altKey || h.batchId === undefined) return uid;
+    if (e.altKey || !isShape(h)) return uid;
     const item = libraryPanel.itemOf(uid);
     if (item) return item.root;
     let top = uid;
@@ -2304,6 +2336,7 @@ function xrayOn(root, it) {
     mesh.matrixAutoUpdate = false;
     mesh.matrix.copy(copy.matrix);
     mesh.userData.uid = uid;
+    mesh.userData.xray = true;
     mesh.renderOrder = 5;
     xray.group.add(mesh);
     meshes.push(mesh);

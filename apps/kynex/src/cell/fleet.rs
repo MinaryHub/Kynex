@@ -48,6 +48,10 @@ pub struct Job {
     pub phase: Phase,
     /// How: by AMR (1) or by hand (2), as the sender says.
     pub by: u32,
+    /// By a robot (3): whether its gripper has taken the part yet. Until
+    /// then the part keeps its place where it waits; after, it goes with
+    /// the gripper, and once let go, on to where it goes.
+    pub gripped: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

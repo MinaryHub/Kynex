@@ -434,6 +434,28 @@ impl Posing {
         Value::Object(out).to_string()
     }
 
+    /// Every robot's pose as held now, to go back to.
+    pub fn held_now(&self) -> BTreeMap<u64, BTreeMap<u64, f64>> {
+        self.held.clone()
+    }
+
+    /// The robots posed as `held` was (see [`Posing::held_now`]): each robot
+    /// held now or then marked, for the viewers to draw again.
+    pub fn hold_again(
+        &mut self,
+        doc: &Document,
+        held: BTreeMap<u64, BTreeMap<u64, f64>>,
+    ) -> Changes {
+        let mut touched = Changes::default();
+        let roots: std::collections::BTreeSet<u64> =
+            self.held.keys().chain(held.keys()).copied().collect();
+        self.held = held;
+        for root in roots {
+            mark(doc, root, &mut touched);
+        }
+        touched
+    }
+
     /// Takes one request from the page, `doc` being the session's scene.
     /// Returns the answer, and what the viewers need to look at again.
     pub fn handle(&mut self, doc: &Document, body: &str) -> (String, Changes) {

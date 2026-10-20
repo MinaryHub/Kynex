@@ -1893,6 +1893,7 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
     floorPanel.toggle();
   }
   if (b.dataset.action === 'play') playPause();
+  if (b.dataset.action === 'reset-run') resetRun();
   if (b.dataset.action === 'undo') history('undo');
   if (b.dataset.action === 'redo') history('redo');
   if (b.dataset.action === 'frame') frame();
@@ -1991,6 +1992,26 @@ function playPause() {
   toast(`실행합니다${flows ? ' · 공정 흐름' : ''}${robots ? ` · 로봇 ${robots}대` : ''} (스페이스: 정지, +/−: 배속)`);
 }
 
+// Back to the start: the run stopped, every product taken away, the robots
+// posed as they stood when it started.
+async function resetRun() {
+  try {
+    const answer = await (
+      await fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'reset_run' }) })
+    ).json();
+    if (!answer.ok) return toast(answer.error || '처음으로 되돌리지 못했습니다');
+    // What was gliding drawn where it was last told, and as told from now.
+    for (const [uid, track] of tracks) {
+      batch.move(uid, track.rec.matrix);
+      if (gizmos.has(uid)) setGizmo(track.rec);
+    }
+    tracks.clear();
+    toast('처음으로 되돌렸습니다: 실행 정지, 로봇은 실행 전 자세, 제품은 모두 지움');
+  } catch (err) {
+    toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+  }
+}
+
 // + and −: the simulation's clock a step faster or slower, through the
 // speeds the speed list offers.
 const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200];
@@ -2025,6 +2046,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'w') setToggle('wire', !view.wire);
   else if (k === 'g') setToggle('grid', !view.grid);
   else if (k === 'l') setToggle('labels', !view.labels);
+  else if (k === 'home') resetRun();
   else if (k === 'm') setToggle('measure', !view.measure);
   else if (k === 'i') setToggle('interact', !view.interact);
   else if (k === '0') frame(selected, 'iso');

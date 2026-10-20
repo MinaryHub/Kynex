@@ -316,6 +316,8 @@ struct Stage {
     followed: std::collections::BTreeMap<u64, [f64; 6]>,
     /// The robots carrying a process flow's parts (see `crate::carry`).
     carrying: crate::carry::Carry,
+    /// The robots' poses as the run started, for 처음으로 to put them back.
+    before_run: Option<std::collections::BTreeMap<u64, std::collections::BTreeMap<u64, f64>>>,
     follow_grips: std::collections::BTreeMap<u64, bool>,
     /// The project file, and whether another was just opened in its place.
     file: PathBuf,
@@ -427,6 +429,7 @@ impl Stage {
             feeds: Default::default(),
             followed: Default::default(),
             carrying: Default::default(),
+            before_run: None,
             follow_grips: Default::default(),
             file,
             reset: false,
@@ -500,6 +503,15 @@ impl Stage {
                     .retain(|r| robot.is_some_and(|robot| robot != r.root));
                 touched |= self.runners.len() != before;
             }
+            // A run begun — the flow started with nothing running —: the
+            // robots' poses kept, to go back to.
+            if op == "flow"
+                && !self.running()
+                && serde_json::from_str::<Value>(&request.body)
+                    .is_ok_and(|v| v["action"] == "start")
+            {
+                self.before_run = Some(self.posing.held_now());
+            }
             // An edit can be undone: the project as it was before it.
             let before = undoable(&op).then(|| self.snapshot(doc));
             let reply = if let Some(why) = (!request.local)
@@ -543,7 +555,10 @@ impl Stage {
             } else if op == "follow" {
                 touched = true;
                 self.follow_op(doc, &request.body)
-            } else if matches!(op.as_str(), "play" | "stop" | "speed") {
+            } else if matches!(op.as_str(), "play" | "stop" | "speed" | "reset_run") {
+                if op == "play" && !self.running() {
+                    self.before_run = Some(self.posing.held_now());
+                }
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
                 answer
@@ -908,6 +923,23 @@ impl Stage {
                 _ => Err("speed is a positive number".to_string()),
             },
             // One robot's program, or every one's.
+            // Everything back as it was before the run: programs and the
+            // flow stopped, every part taken away, the robots posed as they
+            // stood when it started.
+            "reset_run" => {
+                self.runners.clear();
+                self.carrying = Default::default();
+                let scene = self.base.as_ref().unwrap_or(doc);
+                self.cell.handle(scene, r#"{"op":"flow","action":"reset"}"#);
+                self.cell.handle(scene, r#"{"op":"clear_parts"}"#);
+                if let Some(held) = self.before_run.take() {
+                    let moved = self.posing.hold_again(scene, held);
+                    self.placed.changed.extend(moved.changed);
+                }
+                self.timeline = None;
+                self.timeline_told = None;
+                Ok(())
+            }
             "stop" => {
                 match req["robot"].as_str().and_then(|s| s.parse::<u64>().ok()) {
                     Some(root) => self.runners.retain(|r| r.root != root),

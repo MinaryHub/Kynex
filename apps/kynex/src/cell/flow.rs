@@ -1087,6 +1087,7 @@ impl Cell {
                         amr: None,
                         phase: super::fleet::Phase::Waiting,
                         by: c.props.carrier,
+                        gripped: false,
                     });
                     continue;
                 }
@@ -1188,14 +1189,14 @@ impl Cell {
         let mut waiting_at: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         // A robot's part not yet in its gripper keeps its place, first, so
         // that those behind it do not close up onto it before it is taken.
+        let ungripped: Vec<u64> = self
+            .jobs
+            .iter()
+            .filter(|j| j.by == 3 && j.amr.is_some() && !j.gripped)
+            .map(|j| j.part)
+            .collect();
         for j in &self.jobs {
-            if j.by != 3 || j.amr.is_none() {
-                continue;
-            }
-            let waiting = self.parts.iter().any(|p| {
-                p.uid == j.part && p.held.is_none() && matches!(p.flow, Some(Place::Riding { .. }))
-            });
-            if waiting {
+            if ungripped.contains(&j.part) {
                 waiting_at.entry(j.from).or_default().push(j.part);
             }
         }
@@ -1262,8 +1263,7 @@ impl Cell {
         for p in &mut self.parts {
             let half = p.size().1 / 2.0;
             // A robot's part not yet gripped: where it waited, as above.
-            let ungripped = p.held.is_none() && matches!(p.flow, Some(Place::Riding { .. }));
-            if ungripped {
+            if ungripped.contains(&p.uid) && p.held.is_none() {
                 if let Some(spot) = spots.get(&p.uid) {
                     let turn = DQuat::from_rotation_z(facing.get(&p.uid).copied().unwrap_or(0.0));
                     p.world = DAffine3::from_rotation_translation(turn, *spot + DVec3::Z * half);

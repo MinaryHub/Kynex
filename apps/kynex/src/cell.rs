@@ -2634,6 +2634,12 @@ impl Cell {
                 && matches!(p.flow, Some(flow::Place::Riding { amr, .. }) if robot.contains(&amr))
                 && p.world.translation.distance(at.translation) < GRIP_REACH
         });
+        if let Some(k) = riding {
+            let uid = self.parts[k].uid;
+            if let Some(j) = self.jobs.iter_mut().find(|j| j.part == uid) {
+                j.gripped = true;
+            }
+        }
         let near = match riding {
             Some(k) => {
                 let p = &mut self.parts[k];

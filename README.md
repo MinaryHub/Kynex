@@ -690,6 +690,13 @@ view is chosen (drawn orange) and **Delete** undoes the link, the
 equipment left as it is. Arrows and dots are picked by how near the
 pointer is to them on the screen, the same however near the view is.
 
+The signs over the flow — each piece's name, a station's load and
+bottleneck, a cycle's progress — are as big as they are in the scene from
+afar, but never taller on the screen than a line of text, so that close
+up they do not cover what they name. **이름표** on the toolbar (or **L**)
+hides them, the load discs and the flow's arrows left; the choice is kept
+in the browser.
+
 **Space** runs the simulation: nothing going, it starts the process flow
 and every robot that has a program; anything going, it stops it all.
 **+** and **−** make the simulation's clock a step faster or slower

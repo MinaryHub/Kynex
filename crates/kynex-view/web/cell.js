@@ -181,6 +181,13 @@ export class CellPanel {
     // Each flow piece's name over it: drawn again only when a name or a
     // place changes, not with every report of the cell.
     this.names = new THREE.Group();
+    // The signs over the flow — names, loads, progress — shown or not, as
+    // last chosen in this browser.
+    try {
+      this.showLabels = localStorage.getItem('kynex.labels') !== 'off';
+    } catch {
+      this.showLabels = true;
+    }
     this.namesDrawn = '';
     ctx.scene.add(this.names);
     this.box = document.getElementById('insp-cell');
@@ -819,7 +826,9 @@ export class CellPanel {
       // Its name with its load, in one: two labels would cover each other.
       const text = c === top && stations.length > 1 ? `${c.name} · 병목 ${Math.round(u * 100)}%` : `${c.name} · ${Math.round(u * 100)}%`;
       const size = this.signSize(at);
-      this.markers.add(this.label(text, x, y, z + 0.3 + size, c === top && stations.length > 1 ? 'bottleneck' : 'load', size));
+      if (this.showLabels) {
+        this.markers.add(this.label(text, x, y, z + 0.3 + size, c === top && stations.length > 1 ? 'bottleneck' : 'load', size));
+      }
     }
     return new Set(stations.map((c) => c.object));
   }
@@ -833,10 +842,11 @@ export class CellPanel {
       (c) => ['source', 'station', 'buffer', 'sink'].includes(c.kind) && at.has(c.object) && !loaded.has(c.object),
     );
     const size = this.signSize(at);
-    const key = `${size.toFixed(2)}|` + named.map((c) => `${c.object}:${c.name}:${at.get(c.object).map((v) => v.toFixed(2))}`).join('|');
+    const key = `${this.showLabels}|${size.toFixed(2)}|` + named.map((c) => `${c.object}:${c.name}:${at.get(c.object).map((v) => v.toFixed(2))}`).join('|');
     if (key === this.namesDrawn) return;
     this.namesDrawn = key;
     for (const child of [...this.names.children]) child.removeFromParent();
+    if (!this.showLabels) return;
     for (const c of named) {
       const [x, y, z] = at.get(c.object);
       this.names.add(this.label(c.name, x, y, z + 0.3 + size, 'name', size));
@@ -846,6 +856,7 @@ export class CellPanel {
   // How far each station's work in hand has got: a pie over it, filling
   // as the cycle goes, while it works; none while it does not.
   drawProgress(at) {
+    if (!this.showLabels) return;
     const size = this.signSize(at);
     for (const c of this.cell.components) {
       const done = c.kind === 'station' ? c.flow?.progress : null;
@@ -854,6 +865,7 @@ export class CellPanel {
       const pie = new THREE.Sprite(this.pieMaterial(Math.round(done * 100)));
       pie.userData.kept = true;
       pie.scale.set(size * 1.5, size * 1.5, 1);
+      pie.userData.sign = { size: size * 1.5, aspect: 1 };
       // Over the station's label, which stands `size` high at z + 0.3 + size.
       pie.position.set(x, y, z + 0.3 + size * 2.4);
       pie.renderOrder = 9;
@@ -912,6 +924,31 @@ export class CellPanel {
     return Math.min(1.0, Math.max(0.35, spread / 80));
   }
 
+  // The signs shown, or hidden: names, loads and progress go; the load
+  // discs and the flow's arrows stay.
+  setLabels(on) {
+    this.showLabels = on;
+    try {
+      localStorage.setItem('kynex.labels', on ? 'on' : 'off');
+    } catch {}
+    this.namesDrawn = null;
+    this.drawMarkers();
+  }
+
+  // Each sign as tall as it is in the scene, but never taller on the screen
+  // than `most` pixels: close up, it no longer grows to cover what it
+  // names. `perPixel` gives metres a pixel at a point's distance.
+  fitSigns(camera, perPixel, most = 20) {
+    for (const group of [this.markers, this.names]) {
+      for (const o of group.children) {
+        const sign = o.userData.sign;
+        if (!sign) continue;
+        const h = Math.min(sign.size, most * perPixel(o.position.distanceTo(camera.position)));
+        o.scale.set(h * sign.aspect, h, 1);
+      }
+    }
+  }
+
   // A word over the scene, always facing the camera, `size` metres high in
   // it: a `load` dark, the `bottleneck` red, a `name` blue-grey. The same
   // word drawn again reuses its picture: a running flow's loads are told
@@ -934,8 +971,10 @@ export class CellPanel {
     const sprite = new THREE.Sprite(kept.material);
     // Kept for the next time: not to be let go with the markers.
     sprite.userData.kept = true;
-    // Smaller as it is farther, as a sign in the scene is.
+    // Smaller as it is farther, as a sign in the scene is; never taller on
+    // the screen than a line of text (see `fitSigns`).
     sprite.scale.set((size * kept.w) / 64, size, 1);
+    sprite.userData.sign = { size, aspect: kept.w / 64 };
     sprite.position.set(x, y, z);
     sprite.renderOrder = 9;
     return sprite;

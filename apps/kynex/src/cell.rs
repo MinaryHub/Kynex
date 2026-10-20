@@ -39,12 +39,18 @@ pub const LOOKS: &[&str] = &[
     "FOUP",
     "웨이퍼",
     "반도체 패키지",
+    "음료 프리폼",
+    "빈 병",
+    "충전·캡 병",
+    "라벨 병",
+    "수축 포장 팩",
+    "음료 팔레트",
 ];
 
 /// How far apart parts of each look stand in line at a station, and the
 /// lanes they stand in in a store, metres. A part of the first look is set
 /// out on its station's table instead.
-const LOOK_PITCH: [(f64, f64); 11] = [
+const LOOK_PITCH: [(f64, f64); 17] = [
     (0.0, 0.0),
     (5.2, 2.6),
     (5.2, 2.6),
@@ -56,13 +62,19 @@ const LOOK_PITCH: [(f64, f64); 11] = [
     (0.6, 0.6),
     (0.4, 0.4),
     (0.4, 0.25),
+    (0.45, 0.32),
+    (0.45, 0.32),
+    (0.45, 0.32),
+    (0.45, 0.32),
+    (0.43, 0.3),
+    (1.3, 1.1),
 ];
 
 /// How far apart parts of each look are stacked one over another in a store,
 /// metres, and how many to a stack — sheets and panels twenty high, cassettes
 /// five on a stocker's shelves, FOUPs four, wafers twenty-five, trays ten;
 /// none for a car body, which stands in lanes.
-const LOOK_STACK: [(f64, usize); 11] = [
+const LOOK_STACK: [(f64, usize); 17] = [
     (0.0, 1),
     (0.0, 1),
     (0.0, 1),
@@ -74,6 +86,12 @@ const LOOK_STACK: [(f64, usize); 11] = [
     (0.45, 4),
     (0.01, 25),
     (0.02, 10),
+    (0.0, 1),
+    (0.0, 1),
+    (0.0, 1),
+    (0.0, 1),
+    (0.27, 4),
+    (0.0, 1),
 ];
 
 /// How high a sheet is lifted to go between a tool and a stocker, metres:
@@ -104,6 +122,8 @@ fn look_key(p: &Part) -> usize {
         7 if carried => return CRANE_LOOK,
         8 if carried => return HOIST_LOOK,
         look @ 8..=10 => return CRANE_LOOK + 1 + (look as usize - 8),
+        // A beverage line's: a tray, a pack, a pallet.
+        look @ 11..=16 => return HOIST_LOOK + 1 + (look as usize - 11),
         _ => {}
     }
     match p.look as usize {
@@ -133,6 +153,7 @@ fn look_meshes() -> &'static Vec<crate::library::LookMeshes> {
             .chain(std::iter::once(
                 [crate::library::semi_look(0), hoist_look().clone()].concat(),
             ))
+            .chain((0..6).map(crate::library::beverage_look))
             .collect()
     })
 }
@@ -674,7 +695,7 @@ impl Props {
         self.crew = v["crew"]
             .as_f64()
             .map_or(self.crew, |x| if x > 0.5 { 1 } else { 0 });
-        self.takes = few("takes", self.takes, 20);
+        self.takes = few("takes", self.takes, 100);
         self.makes = few("makes", self.makes, 20);
         self.dist = v["dist"]
             .as_f64()

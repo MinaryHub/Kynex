@@ -475,14 +475,27 @@ the computer KYNEX runs on can make, open or save projects.
 **예제 (demos).** Under the projects, the panel lists the demo projects
 that come with KYNEX, built into it (`apps/kynex/demos`, `demos.rs`), so
 every build and installer has them: 성능 데모 공장, 공장 내부 전시, 대규모
-물류 창고, 자동차 공장, LCD 공장, 반도체 공장 — each with its process flow
-and its scenarios to compare. One clicked is copied into the projects
+물류 창고, 자동차 공장, LCD 공장, 음료 공장, 반도체 공장 — each with its
+process flow and its scenarios to compare. One clicked is copied into the projects
 folder under its name and opened; what is changed is saved to the copy.
 Opened again, it is another copy (`자동차 공장 2`, …), never over a project
 already there, so the demo can always be had as it came. A test runs each
 demo's first scenario, so a demo the program no longer reads is caught;
 to change a demo, open its copy, change it, and copy the file over the
 one in `apps/kynex/demos`.
+
+**음료 공장** is a PET bottling line for 24,000 bottles an hour, its flow
+counted in trays of 24: preforms blown to bottles, rinsed, filled and
+capped (the filler the slowest, 3.6 s a tray, as a line is laid out),
+inspected, labelled, gathered on the accumulation table, shrink-wrapped
+in packs, palletised sixty packs to a pallet, wrapped, and taken by two
+AMRs to the warehouse; the syrup room's tanks beside it. Each part is
+drawn as it is at its stage — a tray of preforms, of bottles, a pack, a
+pallet. Six scenarios: a faster filler, fewer labeller breakdowns, a
+bigger accumulation table, both, and a blow moulder breaking down more
+often. It is built by `apps/kynex/src/demos/beverage.rs`
+(`cargo test -p kynex --release -- --ignored make_beverage_plant`), its
+equipment in the library's 음료 공장 group (`library/beverage.rs`).
 
 **기능별 샘플.** Below the demos, eleven small samples, each showing one
 thing KYNEX does and marked 초급, 중급 or 전문가: a line on a site plan, a

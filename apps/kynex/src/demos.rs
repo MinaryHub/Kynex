@@ -41,6 +41,11 @@ pub const DEMOS: &[Demo] = &[
         file: include_str!("../demos/lcd_fab.json"),
     },
     Demo {
+        name: "음료 공장",
+        about: "PET 병 라인 24,000병/시: 블로 성형·충전·검사·라벨·수축 포장·팔레타이징, 시럽실, AMR 출하",
+        file: include_str!("../demos/beverage_plant.json"),
+    },
+    Demo {
         name: "반도체 공장",
         about: "FOUP와 천장 반송(OHT), 6개 층 전공정, EDS와 후공정 패키징",
         file: include_str!("../demos/semiconductor_fab.json"),
@@ -164,6 +169,10 @@ pub fn copy(demo: &Demo, dir: &Path) -> Result<PathBuf, String> {
     std::fs::write(&file, demo.file).map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(file)
 }
+
+/// The beverage plant demo's maker (see `demos/beverage.rs`).
+#[cfg(test)]
+mod beverage;
 
 #[cfg(test)]
 mod tests {

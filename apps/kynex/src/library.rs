@@ -299,7 +299,7 @@ pub const TEMPLATES: &[Template] = &[
         // or a disassembly.
         params: &[
             q("cycle", "처리 시간", 45.0, 1.0, 36000.0, "s"),
-            q("takes", "투입 수", 1.0, 1.0, 20.0, "개"),
+            q("takes", "투입 수", 1.0, 1.0, 100.0, "개"),
             q("makes", "배출 수", 1.0, 1.0, 20.0, "개"),
             c("look", "부품 모양", 0.0, crate::cell::LOOKS),
             c("base", "형태", 0.0, BASES),
@@ -725,6 +725,67 @@ pub const TEMPLATES: &[Template] = &[
         name: "검사 라이트 터널",
         group: "자동차 공장",
         params: &[p("length", "길이", 6.0, 3.0, 12.0)],
+    },
+    // A beverage plant's own equipment (`beverage`).
+    Template {
+        key: "blow_molder",
+        name: "블로 성형기",
+        group: "음료 공장",
+        params: &[],
+    },
+    Template {
+        key: "filler_capper",
+        name: "세척·충전·캡핑 모노블록",
+        group: "음료 공장",
+        params: &[],
+    },
+    Template {
+        key: "bottle_inspector",
+        name: "액면·캡 검사기",
+        group: "음료 공장",
+        params: &[],
+    },
+    Template {
+        key: "labeler",
+        name: "라벨러",
+        group: "음료 공장",
+        params: &[],
+    },
+    Template {
+        key: "shrink_wrapper",
+        name: "수축 포장기",
+        group: "음료 공장",
+        params: &[p("length", "길이", 8.0, 5.0, 16.0)],
+    },
+    Template {
+        key: "palletizer",
+        name: "팔레타이저",
+        group: "음료 공장",
+        params: &[],
+    },
+    Template {
+        key: "stretch_wrapper",
+        name: "팔레트 랩핑기",
+        group: "음료 공장",
+        params: &[],
+    },
+    Template {
+        key: "process_tank",
+        name: "공정 탱크 (시럽·조합·CIP)",
+        group: "음료 공장",
+        params: &[
+            p("diameter", "지름", 2.0, 0.5, 5.0),
+            p("height", "높이", 3.5, 1.0, 10.0),
+        ],
+    },
+    Template {
+        key: "bottle_conveyor",
+        name: "병 컨베이어",
+        group: "음료 공장",
+        params: &[
+            p("length", "길이", 6.0, 0.5, 60.0),
+            p("height", "높이", 1.1, 0.3, 2.0),
+        ],
     },
 ];
 
@@ -2539,6 +2600,7 @@ fn build(item: &Item) -> Result<Built, String> {
         }
         key if interior::KEYS.contains(&key) => interior::build(&mut doc, item),
         key if automotive::KEYS.contains(&key) => automotive::build(&mut doc, item),
+        key if beverage::KEYS.contains(&key) => beverage::build(&mut doc, item),
         key if display::KEYS.contains(&key) => display::build(&mut doc, item),
         key if semiconductor::KEYS.contains(&key) => semiconductor::build(&mut doc, item),
         other => return Err(format!("no template {other:?}")),
@@ -3142,9 +3204,11 @@ pub fn is_op(op: &str) -> bool {
 mod tests;
 
 mod automotive;
+mod beverage;
 mod display;
 mod semiconductor;
 pub(crate) use automotive::car_look;
+pub(crate) use beverage::beverage_look;
 pub(crate) use display::display_look;
 pub(crate) use semiconductor::semi_look;
 

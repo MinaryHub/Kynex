@@ -1209,6 +1209,8 @@ function showInspector(uid) {
   document.getElementById('insp-parent').textContent = rec.parent != null ? records.get(rec.parent)?.name ?? '—' : '—';
   cellPanel.showFor(roleObject(uid));
   libraryPanel.showFor(uid);
+  // Placed equipment: its own section heads the inspector.
+  document.getElementById('inspector').classList.toggle('is-item', !!libraryPanel.itemOf(uid));
   document.getElementById('inspector').hidden = false;
 }
 document.getElementById('insp-close').addEventListener('click', () => select(null));

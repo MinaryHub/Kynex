@@ -483,7 +483,14 @@ impl Cell {
             Some((lo, hi)) => DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, hi.z),
             None => world.translation,
         };
-        Some((top, along, across))
+        // A machine a part goes into — a lathe's chuck, a press's mould —:
+        // the part there, not on its roof.
+        let held = ["chuck", "mould"]
+            .into_iter()
+            .find_map(|w| part_named(doc, id, w))
+            .and_then(|h| bounds(doc, h))
+            .map(|(lo, hi)| DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, hi.z));
+        Some((held.unwrap_or(top), along, across))
     }
 
     /// Each component's dock and each rack's shelf tops, for the scene at
@@ -552,7 +559,13 @@ impl Cell {
                     Some((lo, hi)) => DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, hi.z),
                     None => world.translation,
                 };
-                (*object, (top, along, across))
+                // Into a machine's chuck or mould, as `dock` has it.
+                let held = ["chuck", "mould"]
+                    .into_iter()
+                    .find_map(|w| part_named(doc, *id, w))
+                    .and_then(|h| bounds(doc, h))
+                    .map(|(lo, hi)| DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, hi.z));
+                (*object, (held.unwrap_or(top), along, across))
             })
             .collect();
         self.docks_seen = Some(Docks {

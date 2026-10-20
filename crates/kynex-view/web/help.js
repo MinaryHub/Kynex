@@ -169,6 +169,8 @@ function keysOf(label) {
 
 // The words of `label` without what is in its fields: its name.
 function nameOf(label) {
+  const span = label.querySelector(':scope > .insp-label');
+  if (span) return span.textContent.trim();
   let text = '';
   for (const n of label.childNodes) if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
   return text.replace(/\s+/g, ' ').trim();
@@ -236,8 +238,18 @@ function decorate(label) {
   button.setAttribute('aria-label', '설명');
   button.tabIndex = -1;
   label.dataset.helpId ||= `h${++ids}`;
-  // A short name is kept on one line beside it (see app.css).
-  label.classList.toggle('help-short', nameOf(label).length <= 6);
+  // The name in a span of its own, so the row can be laid out as name, ?,
+  // field, unit; a long one takes the whole row (see app.css).
+  const name = nameOf(label);
+  if (name && !label.querySelector(':scope > .insp-label')) {
+    const span = document.createElement('span');
+    span.className = 'insp-label';
+    span.textContent = name;
+    span.title = name;
+    for (const n of [...label.childNodes]) if (n.nodeType === Node.TEXT_NODE) n.remove();
+    label.prepend(span);
+  }
+  label.classList.toggle('help-long', name.length > 2);
   // Right after the name, before its fields.
   const field = [...label.children].find((n) => n.matches('input, select, textarea'));
   label.insertBefore(button, field ?? null);

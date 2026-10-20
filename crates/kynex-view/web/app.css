@@ -318,8 +318,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   position: absolute;
   top: 12px;
   left: 12px;
-  width: 270px;
+  width: 296px;
   max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
   border: 1px solid var(--line-2);
   border-radius: 10px;
   background: rgba(20, 23, 28, 0.92);
@@ -1121,8 +1123,28 @@ body[data-level="2"] [data-min="3"] { display: none !important; }
 }
 .help-q:hover { border-color: var(--info); color: var(--info); }
 /* A short name stays on one line beside its ?; the number gives way. */
-.insp-field.help-short { white-space: nowrap; }
-.insp-field.help-short > input.num { flex: 0 1 56px; width: auto; min-width: 38px; }
+/* A setting's row: name, ?, field, unit. Two to a line when the name is
+   short; a longer name takes a line of its own rather than being cut. */
+.insp-props .insp-field:has(> .insp-label) {
+  display: grid;
+  grid-template-columns: 30px 13px minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+.insp-props .insp-field.help-long:has(> .insp-label) {
+  grid-column: 1 / -1;
+  grid-template-columns: 112px 13px minmax(0, 150px) auto;
+}
+.insp-field > .insp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.insp-props .insp-field:has(> .insp-label) > :is(input, select) { width: 100%; min-width: 0; }
+.insp-props .insp-field:has(> .insp-label) > span:not(.insp-label) { white-space: nowrap; font-size: 10.5px; }
+/* Equipment chosen: its section says all the top would, once. */
+.inspector.is-item .insp-grid { display: none; }
+.inspector.is-item .insp-head { position: absolute; top: 8px; right: 8px; margin: 0; }
+.inspector.is-item .insp-head > :not(#insp-close) { display: none; }
+.inspector.is-item .insp-item { margin-top: 0; padding-top: 0; border-top: 0; }
+.inspector.is-item .insp-item-head { padding-right: 26px; }
 .help-card {
   position: fixed;
   z-index: 95;

@@ -661,7 +661,7 @@ export class LibraryPanel {
           <select data-array="axis"><option value="x">X 방향으로 (YZ면)</option><option value="y">Y 방향으로 (XZ면)</option></select>
           <button class="text-btn quiet" data-item-act="mirror" title="선택한 장비 상자의 끝에 붙여, 위치와 방향을 거울처럼 뒤집은 복사본을 놓습니다. 장비 형상 자체는 뒤집지 않습니다">만들기</button></div>
       </details>
-      <div class="muted insp-hint">Ctrl·Shift+클릭: 장비 여러 개 선택 · Alt+클릭: 장비 안의 부품</div>`;
+      <div class="muted insp-hint">Ctrl+클릭: 여러 개 · Alt+클릭: 안의 부품</div>`;
   }
 
   // The array and mirror numbers as typed.

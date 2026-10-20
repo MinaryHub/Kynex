@@ -38,6 +38,7 @@ use serde_json::{json, Value};
 mod bench;
 mod cell;
 mod collide;
+mod demos;
 mod edges;
 mod floor;
 mod import;

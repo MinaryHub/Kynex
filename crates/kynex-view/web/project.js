@@ -1,6 +1,7 @@
 // Projects: the one open (the `project` event), and making a new one,
 // opening another or saving this one under another name — by name, in the
-// projects folder KYNEX keeps.
+// projects folder KYNEX keeps; and the demos that come with KYNEX, each
+// opened as a copy of it in that folder.
 
 async function post(request) {
   const response = await fetch('/robot', {
@@ -19,6 +20,7 @@ export class ProjectPanel {
     this.panel = document.getElementById('project-panel');
     this.name = document.getElementById('project-new-name');
     this.list = document.getElementById('project-list');
+    this.demos = document.getElementById('project-demos');
     this.state = null;
     document.getElementById('project-new').addEventListener('click', () => {
       const name = this.name.value.trim();
@@ -40,6 +42,20 @@ export class ProjectPanel {
       const name = li.dataset.name;
       if (!confirm(`프로젝트 "${name}"을(를) 엽니다. 지금 프로젝트는 저장되고, 실행 중인 프로그램과 PLC 연결은 멈춥니다.`)) return;
       this.act('open', name, `프로젝트 "${name}"을(를) 열었습니다`);
+    });
+    this.demos.addEventListener('click', async (e) => {
+      const li = e.target.closest('li[data-demo]');
+      if (!li) return;
+      const name = li.dataset.demo;
+      if (!confirm(`예제 "${name}"의 사본을 프로젝트 폴더에 만들어 엽니다. 지금 프로젝트는 저장되고, 실행 중인 프로그램과 PLC 연결은 멈춥니다.`)) return;
+      try {
+        const answer = await post({ op: 'project', action: 'demo', name });
+        if (!answer.ok) return this.ctx.toast(answer.error || '열 수 없습니다');
+        this.ctx.toast(`예제를 "${answer.name}"(으)로 열었습니다. 바꾼 것은 이 사본에 저장됩니다`);
+        this.refresh();
+      } catch (err) {
+        this.ctx.toast(`예제: ${err.message}`);
+      }
     });
   }
 
@@ -87,5 +103,8 @@ export class ProjectPanel {
           .map((p) => `<li data-name="${esc(p.name)}" class="${p.current ? 'current' : ''}" title="${p.current ? '지금 열린 프로젝트' : '눌러서 열기'}"><span>${esc(p.name)}</span><span class="muted num">${p.current ? '열림 · ' : ''}${when(p.modified)}</span></li>`)
           .join('')
       : '<li class="muted">아직 저장된 프로젝트가 없습니다</li>';
+    this.demos.innerHTML = (answer.demos ?? [])
+      .map((d) => `<li data-demo="${esc(d.name)}" title="눌러서 사본을 만들어 열기"><span>${esc(d.name)}</span><span class="muted">${esc(d.about)}</span></li>`)
+      .join('');
   }
 }

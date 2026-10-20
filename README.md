@@ -472,6 +472,18 @@ new one whole. The scene's geometry still comes from Kreate, or from
 `--file`; the project holds what KYNEX adds to it. As with the PLC, only
 the computer KYNEX runs on can make, open or save projects.
 
+**예제 (demos).** Under the projects, the panel lists the demo projects
+that come with KYNEX, built into it (`apps/kynex/demos`, `demos.rs`), so
+every build and installer has them: 성능 데모 공장, 공장 내부 전시, 대규모
+물류 창고, 자동차 공장, LCD 공장, 반도체 공장 — each with its process flow
+and its scenarios to compare. One clicked is copied into the projects
+folder under its name and opened; what is changed is saved to the copy.
+Opened again, it is another copy (`자동차 공장 2`, …), never over a project
+already there, so the demo can always be had as it came. A test runs each
+demo's first scenario, so a demo the program no longer reads is caught;
+to change a demo, open its copy, change it, and copy the file over the
+one in `apps/kynex/demos`.
+
 **URScript** downloads the program as a `.script` file for a Universal
 Robots controller, **RAPID** as a `.mod` module for an ABB one, **DRL**
 as a `.drl` program for a Doosan Robotics one, and **TP** as an `.ls` file for a FANUC one. Only the button for the
@@ -1410,7 +1422,8 @@ without administrator rights, or for all users if chosen; it adds a Start
 menu entry, a desktop one if asked, and starts KYNEX at the end. The MSI
 (WiX 5) installs for all users, as IT deploys it, and replaces an older
 version; it shows no wizard pages, as the standard ones need a licence to
-accept and KYNEX has none yet. Removing either leaves the user's projects
+accept and KYNEX has none yet. The demo projects are inside the programs
+themselves; there is nothing more to install. Removing either leaves the user's projects
 (`Documents\KYNEX`) and settings (`%APPDATA%\kynex`). Both programs carry
 KYNEX's icon and version (`apps/kynex/assets/kynex.rc`, built in by
 `build.rs` with the Windows SDK's `rc.exe`).

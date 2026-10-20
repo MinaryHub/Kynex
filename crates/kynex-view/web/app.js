@@ -131,14 +131,17 @@ const grid = new THREE.Mesh(
         vec2 p = vWorld.xy;
         vec2 fw = fwidth(p);
         float px = max(fw.x, fw.y);
-        // The finest step at least ten pixels apart here, and how far it
-        // is on to the next: it fades out as it nears it.
-        float lg = log(max(px * 10.0, 1e-4)) / log(10.0);
-        float s0 = max(pow(10.0, floor(lg)), 0.1);
-        float t = s0 > 0.1 ? fract(lg) : 0.0;
+        // The finest step at least fifteen pixels apart here, and how far
+        // it is on to the next: it fades out as it nears it.
+        float lg = log(max(px * 15.0, 1e-4)) / log(10.0);
+        // Tenths of a metre at the finest: closer still, they stay as they
+        // are; else they fade as they close up, as every step does.
+        float level = floor(lg);
+        float s0 = pow(10.0, max(level, -1.0));
+        float t = level >= -1.0 ? fract(lg) : 0.0;
         // One grid: its lines, every tenth a little stronger; the finer
         // ones fading out as they close up, the tenths becoming the lines.
-        float a0 = lines(p, s0) * 0.32 * (1.0 - t);
+        float a0 = lines(p, s0) * 0.32 * (1.0 - t) * (1.0 - t);
         float a1 = lines(p, s0 * 10.0) * (0.32 + 0.18 * (1.0 - t));
         float a = max(a0, a1);
         vec3 colour = uMajor;

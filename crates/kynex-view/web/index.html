@@ -75,7 +75,7 @@
       <button data-action="floor" title="부지 도면: 공장 배치도 이미지를 바닥에 실제 크기로 깔고 그 위에 설비를 놓습니다"><svg viewBox="0 0 20 20"><path d="M2.5 5l5-2 5 2 5-2v12l-5 2-5-2-5 2zM7.5 3v12M12.5 5v12"/></svg></button>
       <button data-action="undo" id="undo-btn" disabled title="되돌리기 (Ctrl+Z)"><svg viewBox="0 0 20 20"><path d="M7 4L3 8l4 4M3 8h9a5 5 0 010 10H8"/></svg></button>
       <button data-action="redo" id="redo-btn" disabled title="다시 하기 (Ctrl+Y)"><svg viewBox="0 0 20 20"><path d="M13 4l4 4-4 4M17 8H8a5 5 0 000 10h4"/></svg></button>
-      <button data-action="link" title="연결: 설비를 공급부터 배출까지 차례로 누르면 앞의 것에서 다음 것으로 잇습니다 (Esc: 끝)"><svg viewBox="0 0 20 20"><circle cx="4.5" cy="10" r="2"/><circle cx="15.5" cy="10" r="2"/><path d="M6.5 10h7M11 7.5l2.5 2.5-2.5 2.5"/></svg></button>
+      <button data-action="link" title="연결: 설비를 공급부터 배출까지 차례로 누르거나, 한 설비에서 다음 설비로 끌어다 놓아 잇습니다 (Esc: 끝)"><svg viewBox="0 0 20 20"><circle cx="4.5" cy="10" r="2"/><circle cx="15.5" cy="10" r="2"/><path d="M6.5 10h7M11 7.5l2.5 2.5-2.5 2.5"/></svg></button>
       <span class="sep"></span>
       <button data-action="frame" title="화면 맞춤 (F)"><svg viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/></svg></button>
       <span class="sep"></span>
@@ -123,6 +123,7 @@
       <div class="project-row">
         <input id="project-new-name" type="text" placeholder="새 이름" spellcheck="false" maxlength="60">
         <button class="text-btn" id="project-new" title="빈 프로젝트를 이 이름으로 만들고 엽니다">새로 만들기</button>
+        <button class="text-btn" id="project-save" title="지금 상태를 저장합니다: 다른 프로젝트를 저장하지 않고 열면 이때로 돌아옵니다">저장</button>
         <button class="text-btn quiet" id="project-save-as" title="지금 프로젝트를 이 이름으로 저장하고, 이제부터 그 파일에 저장합니다">다른 이름으로 저장</button>
       </div>
       <ul class="project-list" id="project-list"></ul>
@@ -223,6 +224,7 @@
       <div class="tl-head">
         <div class="tl-tabs" role="tablist">
           <button class="on" data-tl-tab="timeline" role="tab">타임라인</button>
+          <button data-tl-tab="flowchart" role="tab" title="공정 흐름을 상자와 화살표로: 끌어서 잇고, ✕로 끊습니다">공정 흐름도</button>
           <button data-tl-tab="stats" role="tab">통계</button>
           <button data-tl-tab="scenarios" role="tab">시나리오 비교</button>
         </div>
@@ -252,6 +254,7 @@
         <div class="tl-lanes" id="tl-lanes"></div>
         <div class="tl-legend" id="tl-legend"></div>
       </div>
+      <div class="tl-view fc-view" id="tl-view-flowchart" hidden></div>
       <div class="tl-view" id="tl-view-stats" hidden>
         <div class="sc-bar flow-bar">
           <span class="muted">마지막 실행의 통계입니다</span>

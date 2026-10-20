@@ -1005,3 +1005,31 @@ body[data-level="2"] [data-min="3"] { display: none !important; }
 .sample-level.l1 { color: #3ddc84; }
 .sample-level.l2 { color: #f2b53c; }
 .sample-level.l3 { color: #ff7a59; }
+
+/* A question over the page. */
+.modal { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); }
+.modal-card { width: min(440px, calc(100% - 32px)); padding: 14px 16px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); }
+.modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.modal-text { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: var(--muted, #9aa3ad); }
+.modal-name { width: 100%; height: 30px; margin-bottom: 12px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 14px; }
+.modal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.modal-actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* The process flow as a chart. */
+.fc-view { overflow: auto; padding: 4px 8px 12px; }
+.fc-hint { margin: 2px 0 6px; font-size: 11px; }
+.fc-svg { display: block; user-select: none; }
+.fc-node rect:first-of-type { fill: var(--panel-2); stroke: var(--kind); stroke-width: 1.2; cursor: pointer; }
+.fc-node:hover rect:first-of-type, .fc-node.target rect:first-of-type { stroke-width: 2.5; fill: var(--panel); }
+.fc-name { fill: var(--text); font-size: 12px; font-weight: 600; pointer-events: none; }
+.fc-kind { fill: var(--muted, #9aa3ad); font-size: 10.5px; pointer-events: none; }
+.fc-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; cursor: crosshair; }
+.fc-dot:hover { r: 9; }
+.fc-line, .fc-drag { fill: none; stroke: #5aa9ff; stroke-width: 1.8; }
+.fc-drag { stroke-dasharray: 5 4; pointer-events: none; }
+.fc-head { fill: #5aa9ff; }
+.fc-hit { fill: none; stroke: transparent; stroke-width: 14; }
+.fc-cut { opacity: 0; cursor: pointer; transition: opacity 0.12s; }
+.fc-cut circle { fill: var(--panel); stroke: #ff6b6b; stroke-width: 1.5; }
+.fc-cut path { stroke: #ff6b6b; stroke-width: 1.6; }
+.fc-edge:hover .fc-cut { opacity: 1; }

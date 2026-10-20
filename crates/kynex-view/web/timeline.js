@@ -9,6 +9,7 @@
 
 import { costCards, csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, sweepChart, throughputChart } from './stats.js';
 import { FIELDS } from './cell.js';
+import { FlowChart } from './flowchart.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -74,6 +75,11 @@ export class TimelinePanel {
     this.data = null;
     this.scenarios = { list: [], compared: [], comparing: false };
     this.tab = 'timeline';
+    this.chart = new FlowChart(document.getElementById('tl-view-flowchart'), {
+      escapeHtml: ctx.escapeHtml,
+      toast: ctx.toast,
+      select: (uid) => ctx.select?.(uid),
+    });
     document.getElementById('tl-close').addEventListener('click', () => this.ctx.toggle(false));
     for (const b of this.box.querySelectorAll('[data-tl-tab]')) {
       b.addEventListener('click', () => this.showTab(b.dataset.tlTab));
@@ -196,6 +202,7 @@ export class TimelinePanel {
     document.getElementById('tl-view-timeline').hidden = tab !== 'timeline';
     document.getElementById('tl-view-scenarios').hidden = tab !== 'scenarios';
     document.getElementById('tl-view-stats').hidden = tab !== 'stats';
+    document.getElementById('tl-view-flowchart').hidden = tab !== 'flowchart';
     this.render();
   }
 
@@ -361,6 +368,7 @@ export class TimelinePanel {
     const f = cell.flow;
     this.flowState = f;
     this.components = cell.components ?? [];
+    if (this.tab === 'flowchart' && !this.box.hidden) this.chart.render(this.components);
     document.getElementById('flow-bar').hidden = !any;
     if (!any || !f) return;
     document.getElementById('flow-run').textContent = f.on ? '■ 정지' : '▶ 실행';
@@ -454,6 +462,7 @@ export class TimelinePanel {
   }
 
   render() {
+    if (this.tab === 'flowchart') return this.chart.render(this.components ?? []);
     if (this.tab === 'scenarios') return this.renderScenarios();
     if (this.tab === 'stats') return this.renderStats();
     const { escapeHtml } = this.ctx;

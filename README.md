@@ -472,6 +472,16 @@ new one whole. The scene's geometry still comes from Kreate, or from
 `--file`; the project holds what KYNEX adds to it. As with the PLC, only
 the computer KYNEX runs on can make, open or save projects.
 
+Opening another project — or a new one, a demo, a sample — asks what to do
+with this one: **저장하고 열기** keeps it as it stands; **저장하지 않고 열기**
+puts it back as it was last saved — when it was opened, or when **저장**
+was last pressed —, what changed since left out (a project that was never
+saved is removed). The project file is still written whenever anything
+changes, so nothing is lost to a crash. **새로 만들기** asks the new
+project's name in the same dialog. The panels over the toolbar —
+projects, the site's drawing, the PLC — close when something outside
+them is clicked, or on Esc.
+
 **예제 (demos).** Under the projects, the panel lists the demo projects
 that come with KYNEX, built into it (`apps/kynex/demos`, `demos.rs`), so
 every build and installer has them: 성능 데모 공장, 공장 내부 전시, 대규모
@@ -655,11 +665,23 @@ higher level is lost at a lower one: it is only not shown.
 - **전문가**: everything — robot programs and their wiring, PLCs, and
   following real equipment (MTConnect, umati, MQTT, RTDE).
 
+### The process flow chart
+
+The timeline panel's **공정 흐름도** tab draws the process flow as boxes —
+sources, stations, buffers, conveyors, sinks, coloured by kind, with what
+each is doing — in columns by how far down the flow each is, an arrow for
+each link. Drag from a box's dot (●) onto another box to link them; the
+✕ on an arrow (shown when the pointer is over it) undoes the link;
+clicking a box selects its equipment in the scene.
+
 ### Linking by clicking, and the bottleneck in colour
 
 **연결** on the toolbar (or **＋ 화면에서 잇기** in the inspector): click
 equipment in order — the source, each machine, the sink — and each is
-linked to the one before; it ends at a sink, or with Esc. Equipment not
+linked to the one before; it ends at a sink, or with Esc. Or drag from one
+piece of equipment onto the next: a dashed line follows the pointer and
+the two are linked where it is let go (a press anywhere else still turns
+the view). Equipment not
 yet of the flow is made so as it is clicked: a CNC machine or a moulder a
 공정 스테이션 keeping its time (at 전문가, after asking: it was a robot
 cell's machine), one with no role the 소재 공급 if it is the first, else a

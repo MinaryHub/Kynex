@@ -672,7 +672,7 @@ export class CellPanel {
   startLinking(from = null) {
     this.link = { from: from && this.sends(from) ? from : null };
     this.onLinking?.(true);
-    this.ctx.toast(this.link.from ? '다음 공정이 될 설비를 차례로 누르세요 (Esc: 끝)' : '공급부터 배출까지 설비를 차례로 누르세요 (Esc: 끝)');
+    this.ctx.toast(this.link.from ? '다음 공정이 될 설비를 차례로 누르거나, 끌어다 놓으세요 (Esc: 끝)' : '공급부터 배출까지 설비를 차례로 누르거나, 한 설비에서 다음 설비로 끌어다 놓으세요 (Esc: 끝)');
   }
 
   stopLinking() {
@@ -708,6 +708,21 @@ export class CellPanel {
       this.linkOn(object, kind, made?.name ?? '', kind === 'source' ? '소재 공급으로 정했습니다' : '공정 스테이션으로 정했습니다 (공정 시간을 넣으세요)');
     });
     return object;
+  }
+
+  // The flow's piece among `uids` (an object and those above it) that
+  // sends parts on, if there is one: where a drag to link may start.
+  sender(uids) {
+    return uids.map((u) => this.componentOf(u)).find((c) => c?.flow && this.sends(c.object)) ?? null;
+  }
+
+  // A drag in the 3D view from equipment `from` (uids) to `to`: linked, as
+  // clicking the one then the other would.
+  dragLink(from, to, root = null) {
+    const c = this.sender(from);
+    if (!c || !this.link) return null;
+    this.link.from = c.object;
+    return this.linkTo(to, root);
   }
 
   // Linking on to `object` of role `kind`: from the last, and on from it

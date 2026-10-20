@@ -757,7 +757,12 @@ const floorPanel = new FloorPanel({
     flight = { from: { target: controls.target.clone(), position: camera.position.clone() }, to, t0: performance.now() };
   },
 });
-const timelinePanel = new TimelinePanel({ escapeHtml, toast, toggle: (on) => setToggle('timeline', on) });
+const timelinePanel = new TimelinePanel({
+  escapeHtml,
+  toast,
+  toggle: (on) => setToggle('timeline', on),
+  select: (uid) => select(uid),
+});
 
 const libraryPanel = new LibraryPanel({
   records,
@@ -1072,6 +1077,62 @@ document.getElementById('interact-reset').addEventListener('click', async () => 
   interacted.robots.clear();
   document.getElementById('interact-reset').hidden = true;
   toast('움직인 문과 관절을 처음 상태로 되돌렸습니다');
+});
+
+// Linking by dragging: in link mode, pressed on equipment that sends parts
+// on and dragged onto another, a line follows the pointer and the two are
+// linked where it is let go. A press anywhere else turns the view as ever.
+let linkDrag = null;
+const linkLine = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+  new THREE.LineDashedMaterial({ color: 0x5aa9ff, dashSize: 0.3, gapSize: 0.2, depthTest: false, transparent: true }),
+);
+linkLine.renderOrder = 10;
+linkLine.visible = false;
+scene.add(linkLine);
+const chainOf = (uid) => {
+  const uids = [];
+  for (let at = uid, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
+  return uids;
+};
+canvas.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (!cellPanel.linking() || e.button !== 0) return;
+    const hit = partAt(e.clientX, e.clientY);
+    const uids = hit ? chainOf(hit.uid) : [];
+    if (!cellPanel.sender(uids)) return;
+    // The view stays still while the line is drawn.
+    controls.enabled = false;
+    linkDrag = { uids, x: e.clientX, y: e.clientY, from: hit.point, moved: false };
+  },
+  { capture: true },
+);
+canvas.addEventListener('pointermove', (e) => {
+  if (!linkDrag) return;
+  if (!linkDrag.moved && Math.hypot(e.clientX - linkDrag.x, e.clientY - linkDrag.y) < 6) return;
+  linkDrag.moved = true;
+  // To what is under the pointer, or the floor.
+  const hit = partAt(e.clientX, e.clientY);
+  const to = hit?.point ?? ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
+  if (!to) return;
+  linkLine.geometry.setFromPoints([linkDrag.from, to]);
+  linkLine.computeLineDistances();
+  linkLine.visible = true;
+});
+window.addEventListener('pointerup', (e) => {
+  if (!linkDrag) return;
+  const drag = linkDrag;
+  linkDrag = null;
+  controls.enabled = true;
+  linkLine.visible = false;
+  if (!drag.moved) return;
+  const hit = partAt(e.clientX, e.clientY);
+  if (!hit) return toast('다음 공정이 될 설비 위에 놓으세요');
+  const uids = chainOf(hit.uid);
+  if (uids.some((u) => drag.uids.includes(u))) return;
+  const to = cellPanel.dragLink(drag.uids, uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+  if (to != null) select(to);
 });
 
 canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
@@ -1431,6 +1492,36 @@ function setHistory(h) {
 }
 
 // Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z — but in a field, the field's own.
+// The panels over the toolbar — projects, the site's drawing, the PLC —
+// close when something outside them is clicked (but their own button,
+// which toggles them), or on Esc, before Esc does anything else.
+const toolbarPanels = () => [projectPanel.panel, floorPanel.panel, plcPanel.panel];
+document.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (e.target.closest('.modal')) return;
+    for (const panel of toolbarPanels()) {
+      if (panel.hidden || panel.contains(e.target)) continue;
+      const own = { 'project-panel': 'project', 'floor-panel': 'floor', 'plc-panel': 'plc' }[panel.id];
+      if (e.target.closest(`.toolbar [data-action="${own}"]`)) continue;
+      panel.hidden = true;
+    }
+  },
+  true,
+);
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (e.key !== 'Escape' || document.querySelector('.modal:not([hidden])')) return;
+    const open = toolbarPanels().filter((p) => !p.hidden);
+    if (!open.length) return;
+    for (const p of open) p.hidden = true;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  },
+  true,
+);
+
 window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.target.matches('input, textarea, select')) return;
   const k = e.key.toLowerCase();

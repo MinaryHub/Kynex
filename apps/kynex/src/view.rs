@@ -281,6 +281,12 @@ struct Stage {
     floor: crate::floor::Floor,
     floor_changed: bool,
     floor_told: bool,
+    /// The project file as last saved on purpose — as it was opened, or
+    /// when 저장 was last pressed —, none if it was not there: what it goes
+    /// back to when another is opened without saving this one. It is
+    /// written whenever anything changes, all the same, so that nothing is
+    /// lost to a crash.
+    kept: Option<String>,
     /// When the cell was last told, and whether the page has asked for
     /// anything since: told at once if it has.
     cell_told: Option<Instant>,
@@ -401,6 +407,7 @@ impl Stage {
             floor: crate::floor::Floor::of(&saved.floor),
             floor_changed: false,
             floor_told: false,
+            kept: std::fs::read_to_string(&file).ok(),
             scenarios: saved.scenarios,
             compared: Vec::new(),
             scenarios_changed: false,
@@ -1278,6 +1285,9 @@ impl Stage {
     fn project_op(&mut self, doc: &Document, body: &str) -> String {
         let req: Value = serde_json::from_str(body).unwrap_or_default();
         let dir = self.projects.clone();
+        // Opening another, this one saved first; or not, put back as it was
+        // last saved.
+        let keep = req["keep"] != false;
         let named = || -> Result<PathBuf, String> {
             let name = project_name(req["name"].as_str().unwrap_or(""))?;
             Ok(dir.join(format!("{name}.json")))
@@ -1309,20 +1319,26 @@ impl Stage {
                 .and_then(|demo| crate::demos::copy(demo, &dir))
                 .and_then(|file| {
                     let name = file.file_stem().map(|s| s.to_string_lossy().to_string());
-                    self.switch(doc, &file)?;
+                    self.switch(doc, &file, keep)?;
                     Ok(serde_json::json!({ "name": name }))
                 }),
             "new" => named().and_then(|file| {
                 if file.exists() {
                     return Err("같은 이름의 프로젝트가 이미 있습니다".into());
                 }
-                self.switch(doc, &file)
+                self.switch(doc, &file, keep)
             }),
             "open" => named().and_then(|file| {
                 if !file.is_file() {
                     return Err("그 이름의 프로젝트가 없습니다".into());
                 }
-                self.switch(doc, &file)
+                self.switch(doc, &file, keep)
+            }),
+            // This project as it stands, kept: what it goes back to if
+            // another is opened without saving it.
+            "save" => self.save(doc).map(|()| {
+                self.kept = std::fs::read_to_string(&self.file).ok();
+                Value::Null
             }),
             "save_as" => named().and_then(|file| {
                 if file.exists() {
@@ -1339,6 +1355,7 @@ impl Stage {
                     return Err(e);
                 }
                 self._lock = lock;
+                self.kept = std::fs::read_to_string(&file).ok();
                 crate::paths::remember(&file);
                 println!("프로젝트를 다른 이름으로 저장했습니다: {}", file.display());
                 Ok(Value::Null)
@@ -1359,21 +1376,38 @@ impl Stage {
     /// Leaves this project, saved, for the one in `file` (made if it is not
     /// there): what ran stops, the PLC and the real machines are let go,
     /// and the viewers are shown the scene anew.
-    fn switch(&mut self, doc: &Document, file: &Path) -> Result<Value, String> {
+    fn switch(&mut self, doc: &Document, file: &Path, keep: bool) -> Result<Value, String> {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         // Read first: a file that cannot be read leaves this project open.
         let mut next = Stage::open(Some(file.to_path_buf()))?;
         next.projects = self.projects.clone();
-        if let Err(e) = self.save(doc) {
+        let left = if keep { self.save(doc) } else { self.discard() };
+        if let Err(e) = left {
             println!("프로젝트를 저장하지 못했습니다: {e}");
         }
         *self = next;
         self.replaced(doc);
         self.save(doc)?;
+        self.kept = std::fs::read_to_string(&self.file).ok();
         self.reset = true;
         Ok(Value::Null)
+    }
+
+    /// The project file put back as it was last saved on purpose, what
+    /// changed since left out; gone, if it was not there then.
+    fn discard(&self) -> Result<(), String> {
+        let done = match &self.kept {
+            Some(text) => std::fs::write(&self.file, text),
+            None => match std::fs::remove_file(&self.file) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            },
+        };
+        done.map_err(|e| format!("{}: {e}", self.file.display()))?;
+        println!("저장하지 않고 닫았습니다: {}", self.file.display());
+        Ok(())
     }
 
     /// A request to the placed equipment (`library`), and the cell's roles
@@ -2178,6 +2212,44 @@ mod tests {
         assert!(names.contains(&("start", false)));
         assert!(names.contains(&("셀 B", true)));
         assert!(names.contains(&("셀 A", false)) && names.contains(&("빈 셀", false)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Another project opened without saving this one: this one goes back
+    /// to as it was last saved, what changed since left out; opened saving
+    /// it, what changed is kept.
+    #[test]
+    fn another_project_opened_with_or_without_saving_this_one() {
+        let dir = std::env::temp_dir().join(format!("kynex-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(dir.join("가.json"))).unwrap();
+        stage.projects = dir.clone();
+        stage.replaced(&doc);
+        let project = |action: &str, name: &str, keep: bool| json!({"op": "project", "action": action, "name": name, "keep": keep});
+        let place = json!({"op": "place", "template": "flow_station", "at": [0, 0, 0]});
+        let items = |file: &str| -> usize {
+            let v: Value =
+                serde_json::from_str(&std::fs::read_to_string(dir.join(file)).unwrap()).unwrap();
+            v["library"].as_array().map_or(0, Vec::len)
+        };
+        // One item, saved; another after it, not.
+        ask(&mut stage, &doc, place.clone(), true);
+        assert_eq!(
+            ask(&mut stage, &doc, project("save", "", true), true)["ok"],
+            true
+        );
+        ask(&mut stage, &doc, place.clone(), true);
+        stage.save(&doc).unwrap();
+        assert_eq!(items("가.json"), 2);
+        let opened = ask(&mut stage, &doc, project("new", "나", false), true);
+        assert_eq!(opened["ok"], true, "{opened}");
+        assert_eq!(items("가.json"), 1, "the second item left out");
+        // Back, an item more, and away again saving it.
+        ask(&mut stage, &doc, project("open", "가", true), true);
+        ask(&mut stage, &doc, place, true);
+        ask(&mut stage, &doc, project("open", "나", true), true);
+        assert_eq!(items("가.json"), 2, "kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

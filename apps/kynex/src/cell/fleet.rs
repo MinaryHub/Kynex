@@ -754,13 +754,19 @@ impl Cell {
     /// where it is, and where it is to be put (the top of what it goes to,
     /// as it would stand there).
     pub fn robot_jobs(&self, doc: &Document) -> Vec<(u64, DVec3, DVec3)> {
+        let belts = self.belts(doc);
         self.jobs
             .iter()
             .filter(|j| j.by == 3 && j.amr.is_none() && j.part != 0)
             .filter_map(|j| {
                 let p = self.parts.iter().find(|p| p.uid == j.part)?;
                 let to = self.components.iter().find(|c| c.object == j.to)?;
-                let (top, ..) = Self::dock(doc, to)?;
+                // Onto a belt at its start, where the flow puts its parts:
+                // not its middle, which may be out of the robot's reach.
+                let top = match belts.iter().find(|b| b.object == j.to) {
+                    Some(b) => b.centre + b.along * (-b.length / 2.0 + super::RAW.0),
+                    None => Self::dock(doc, to)?.0,
+                };
                 Some((
                     j.part,
                     p.world.translation,

@@ -1186,6 +1186,19 @@ impl Cell {
         let mut facing: BTreeMap<u64, f64> = BTreeMap::new();
         // Those waiting at each for a carrier.
         let mut waiting_at: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        // A robot's part not yet in its gripper keeps its place, first, so
+        // that those behind it do not close up onto it before it is taken.
+        for j in &self.jobs {
+            if j.by != 3 || j.amr.is_none() {
+                continue;
+            }
+            let waiting = self.parts.iter().any(|p| {
+                p.uid == j.part && p.held.is_none() && matches!(p.flow, Some(Place::Riding { .. }))
+            });
+            if waiting {
+                waiting_at.entry(j.from).or_default().push(j.part);
+            }
+        }
         for p in &self.parts {
             if let Some(Place::Waiting { at, .. }) = &p.flow {
                 waiting_at.entry(*at).or_default().push(p.uid);
@@ -1248,6 +1261,15 @@ impl Cell {
         }
         for p in &mut self.parts {
             let half = p.size().1 / 2.0;
+            // A robot's part not yet gripped: where it waited, as above.
+            let ungripped = p.held.is_none() && matches!(p.flow, Some(Place::Riding { .. }));
+            if ungripped {
+                if let Some(spot) = spots.get(&p.uid) {
+                    let turn = DQuat::from_rotation_z(facing.get(&p.uid).copied().unwrap_or(0.0));
+                    p.world = DAffine3::from_rotation_translation(turn, *spot + DVec3::Z * half);
+                }
+                continue;
+            }
             match &p.flow {
                 Some(Place::At(_) | Place::Waiting { .. }) => {
                     if let Some(spot) = spots.get(&p.uid) {

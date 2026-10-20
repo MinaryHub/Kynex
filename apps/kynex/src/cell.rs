@@ -2615,13 +2615,38 @@ impl Cell {
             return Err("이미 부품을 잡고 있습니다".into());
         }
         let at = Self::grip_point(doc, gripper).ok_or("no such gripper")?;
-        let near = self
-            .parts
-            .iter_mut()
-            .filter(|p| p.held.is_none())
-            .map(|p| (p.world.translation.distance(at.translation), p))
-            .filter(|(d, _)| *d < GRIP_REACH)
-            .min_by(|a, b| a.0.total_cmp(&b.0));
+        // A robot carrying the flow's part takes that part, not whichever
+        // is nearest: the others waiting beside it close up as it is
+        // taken, and one of them may have come to stand where it was.
+        let mut robot = Vec::new();
+        let mut up = id_of(doc, gripper)
+            .and_then(|id| doc.object(id))
+            .and_then(|o| o.parent);
+        for _ in 0..64 {
+            let Some(id) = up else { break };
+            if let Some(u) = doc.object_uid(id) {
+                robot.push(u.raw());
+            }
+            up = doc.object(id).and_then(|o| o.parent);
+        }
+        let riding = self.parts.iter().position(|p| {
+            p.held.is_none()
+                && matches!(p.flow, Some(flow::Place::Riding { amr, .. }) if robot.contains(&amr))
+                && p.world.translation.distance(at.translation) < GRIP_REACH
+        });
+        let near = match riding {
+            Some(k) => {
+                let p = &mut self.parts[k];
+                Some((p.world.translation.distance(at.translation), p))
+            }
+            None => self
+                .parts
+                .iter_mut()
+                .filter(|p| p.held.is_none())
+                .map(|p| (p.world.translation.distance(at.translation), p))
+                .filter(|(d, _)| *d < GRIP_REACH)
+                .min_by(|a, b| a.0.total_cmp(&b.0)),
+        };
         let Some((_, part)) = near else {
             return Err("잡을 부품이 그리퍼 가까이에 없습니다".into());
         };

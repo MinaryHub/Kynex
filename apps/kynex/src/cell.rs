@@ -1172,6 +1172,12 @@ pub struct Cell {
     /// and the place in its rows. A part keeps its place from when it comes
     /// until it goes, the others staying where they are as it does.
     slots: BTreeMap<u64, (u64, usize)>,
+    /// How far open the door of each station of the flow that has one is
+    /// (a machine made a station): open while a robot loads or unloads it.
+    station_doors: BTreeMap<u64, f64>,
+    /// When a robot was last coming to each such station: its door stays
+    /// open a moment after, for the next that may come.
+    station_door_wanted: BTreeMap<u64, f64>,
 }
 
 /// A signal the cell shares with a PLC besides its machines' commands and
@@ -4274,6 +4280,18 @@ impl Cell {
                 continue;
             };
             let open = self.machines.get(&c.object).map_or(0.0, |m| m.door);
+            for (door, props) in self.door_parts(doc, machine) {
+                if let Some(uid) = doc.object_uid(door) {
+                    out.push((uid.raw(), open, machine, props));
+                }
+            }
+        }
+        // A machine made a station of the flow: its door as a robot comes.
+        for c in self.components.iter().filter(|c| c.kind == Kind::Station) {
+            let Some(machine) = id_of(doc, c.object) else {
+                continue;
+            };
+            let open = self.station_doors.get(&c.object).copied().unwrap_or(0.0);
             for (door, props) in self.door_parts(doc, machine) {
                 if let Some(uid) = doc.object_uid(door) {
                     out.push((uid.raw(), open, machine, props));

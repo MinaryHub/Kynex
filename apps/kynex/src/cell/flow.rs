@@ -332,6 +332,8 @@ impl Cell {
                 self.removed.extend(gone);
                 self.stations.clear();
                 self.jobs.clear();
+                self.station_doors.clear();
+                self.station_door_wanted.clear();
                 self.rng = SEED;
                 self.warmed = false;
                 for orders in self.orders.values_mut() {
@@ -635,6 +637,47 @@ impl Cell {
         }
         let now = self.last_tick.unwrap_or(0.0);
         let mut happened = false;
+        // A station's door — a machine's, made a station — opens while a
+        // robot comes to load it or take from it, and shuts once it has.
+        let robot_at: Vec<u64> = self
+            .jobs
+            .iter()
+            .filter(|j| j.by == 3 && j.amr.is_some())
+            .flat_map(|j| [j.from, j.to])
+            .collect();
+        let stations: Vec<(u64, bool)> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Station)
+            .filter_map(|c| {
+                let id = id_of(doc, c.object)?;
+                (!self.door_parts(doc, id).is_empty())
+                    .then_some((c.object, robot_at.contains(&c.object)))
+            })
+            .collect();
+        for (object, coming) in stations {
+            if coming {
+                self.station_door_wanted.insert(object, now);
+            }
+            // Open while one comes, and a second after: shut between two
+            // robots one after the other only to open again would flicker.
+            let open = self
+                .station_door_wanted
+                .get(&object)
+                .is_some_and(|t| now - t < 1.0);
+            let was = self.station_doors.get(&object).copied().unwrap_or(0.0);
+            // Over at most a second and a half: before the robot is there.
+            let pace = dt / 1.5;
+            let now_open = if open {
+                (was + pace).min(1.0)
+            } else {
+                (was - pace).max(0.0)
+            };
+            if now_open != was {
+                self.station_doors.insert(object, now_open);
+                happened = true;
+            }
+        }
         // Warmed up: what came before is left out of its figures.
         if !self.warmed && self.flow_clock() >= self.flow_cfg.warmup {
             self.warmed = true;

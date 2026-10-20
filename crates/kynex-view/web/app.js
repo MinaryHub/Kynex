@@ -1191,6 +1191,15 @@ document.getElementById('insp-close').addEventListener('click', () => select(nul
 
 // Click to pick, unless the pointer travelled: that was an orbit.
 const ray = new THREE.Raycaster();
+// Thin marks — a link's axes, a joint's arrows — are met within a few
+// pixels of the pointer, not within a metre as three.js has it: in a small
+// cell a metre is the equipment beside them.
+function lineSlack() {
+  const r = canvas.getBoundingClientRect();
+  const metresPerPixel = (2 * camera.position.distanceTo(controls.target) * Math.tan((camera.fov * Math.PI) / 360)) / Math.max(1, r.height);
+  ray.params.Line.threshold = metresPerPixel * 5;
+  ray.params.Points.threshold = metresPerPixel * 5;
+}
 let down = null;
 // ---- interact: the parts that move, dragged along their own way ------------
 //
@@ -1546,6 +1555,7 @@ canvas.addEventListener('pointerup', (e) => {
   const targets = [...gizmos.values()].filter((g) => g.visible);
   if (batch.mesh) targets.push(batch.mesh);
   const uidOf = (h) => (h.batchId !== undefined ? batch.uidAt(h.batchId) : h.object.userData.uid);
+  lineSlack();
   const hits = ray.intersectObjects(targets, true);
   const hit = hits.find((h) => uidOf(h) != null);
   // An arrow of the flow: chosen, to undo with Delete.

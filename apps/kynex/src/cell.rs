@@ -1659,6 +1659,71 @@ impl Cell {
                 || !id_of(doc, c.object)
                     .is_some_and(|id| machines.iter().any(|m| is_below(doc, id, *m)))
         });
+        self.merge_nested_flow_roles(doc);
+    }
+
+    /// A flow role given to equipment that has the same role on a part of
+    /// it already — a conveyor chosen whole and made a conveyor, its belt
+    /// being one — is folded into that part's: what it sends to and how,
+    /// where the part's own sends nowhere or directly, and every link to it
+    /// made a link to the part. One piece of equipment, one place in the
+    /// flow.
+    fn merge_nested_flow_roles(&mut self, doc: &Document) {
+        let pairs: Vec<(u64, u64)> = self
+            .components
+            .iter()
+            .filter(|outer| outer.kind.flow() || outer.kind == Kind::Conveyor)
+            .filter_map(|outer| {
+                let id = id_of(doc, outer.object)?;
+                let inner = self.components.iter().find(|c| {
+                    c.kind == outer.kind
+                        && c.object != outer.object
+                        && id_of(doc, c.object).is_some_and(|cid| is_below(doc, cid, id))
+                })?;
+                Some((outer.object, inner.object))
+            })
+            .collect();
+        for (outer, inner) in pairs {
+            let known = |u: &u64, me: &Self| me.components.iter().any(|c| c.object == *u);
+            let inner_next: Vec<u64> = self
+                .flow_next
+                .get(&inner)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|u| known(u, self) && *u != outer)
+                .collect();
+            let outer_next = self.flow_next.remove(&outer).unwrap_or_default();
+            if inner_next.is_empty() && !outer_next.is_empty() {
+                self.flow_next.insert(inner, outer_next);
+            } else {
+                self.flow_next.insert(inner, inner_next);
+            }
+            if let Some(o) = self
+                .components
+                .iter()
+                .find(|c| c.object == outer)
+                .map(|c| c.props)
+            {
+                if let Some(c) = self.components.iter_mut().find(|c| c.object == inner) {
+                    if c.props.carrier == 0 {
+                        c.props.carrier = o.carrier;
+                        c.props.rule = o.rule;
+                    }
+                }
+            }
+            for next in self.flow_next.values_mut() {
+                for n in next.iter_mut() {
+                    if *n == outer {
+                        *n = inner;
+                    }
+                }
+                next.dedup();
+            }
+            self.components.retain(|c| c.object != outer);
+            self.roles_changed = true;
+            self.changed = true;
+        }
     }
 
     /// The roles, as saved to the project file: with those still waiting
@@ -2244,6 +2309,7 @@ impl Cell {
                 }
                 self.roles_changed = true;
                 self.changed = true;
+                self.merge_nested_flow_roles(doc);
             }
             "fill" => {
                 let object = uid("object")?;

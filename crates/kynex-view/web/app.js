@@ -960,9 +960,33 @@ const robotPanel = new RobotPanel({
   escapeHtml,
   previewJoint: (uid, position) => previewJoint(uid, position),
 });
+// The object whose cell role the inspector shows and sets for `uid`: it,
+// if it has a role; else, for equipment chosen whole, the part of it that
+// has the equipment's role — a conveyor's belt, a machine's body —, not a
+// part such as a robot's gripper. Kept while the selection and the cell
+// stay as they are.
+let roleOf = { uid: null, key: '', object: null };
+function roleObject(uid) {
+  if (uid == null) return null;
+  // Not yet made while the panel itself is being made.
+  let comps = [];
+  try {
+    comps = cellPanel.cell.components ?? [];
+  } catch {}
+  const key = `${records.size}|${comps.length}`;
+  if (roleOf.uid === uid && roleOf.key === key) return roleOf.object;
+  let object = uid;
+  if (!comps.some((c) => c.object === uid)) {
+    const WHOLE = new Set(['source', 'station', 'buffer', 'sink', 'conveyor', 'cnc', 'molder', 'positioner', 'amr']);
+    const inner = comps.find((c) => WHOLE.has(c.kind) && c.object !== uid && underOf(c.object, uid));
+    if (inner) object = inner.object;
+  }
+  roleOf = { uid, key, object };
+  return object;
+}
 const cellPanel = new CellPanel({
   scene,
-  selected: () => selected,
+  selected: () => roleObject(selected),
   toast,
   escapeHtml,
   select: (uid) => select(uid),
@@ -1183,7 +1207,7 @@ function showInspector(uid) {
   document.getElementById('insp-pos').textContent = `${(p.x * 1000).toFixed(1)}, ${(p.y * 1000).toFixed(1)}, ${(p.z * 1000).toFixed(1)}`;
   document.getElementById('insp-rot').textContent = `${deg(e.x)}, ${deg(e.y)}, ${deg(e.z)}`;
   document.getElementById('insp-parent').textContent = rec.parent != null ? records.get(rec.parent)?.name ?? '—' : '—';
-  cellPanel.showFor(uid);
+  cellPanel.showFor(roleObject(uid));
   libraryPanel.showFor(uid);
   document.getElementById('inspector').hidden = false;
 }

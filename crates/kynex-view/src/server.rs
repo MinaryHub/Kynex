@@ -106,6 +106,9 @@ impl Status {
 pub struct Server {
     addr: SocketAddr,
     hub: Arc<Mutex<Hub>>,
+    /// When it started: each update says how long after it was made, so
+    /// that a page can play moves back as evenly as they were made.
+    started: std::time::Instant,
 }
 
 struct Hub {
@@ -192,7 +195,11 @@ impl Server {
                     }
                 })?;
         }
-        Ok(Self { addr, hub })
+        Ok(Self {
+            addr,
+            hub,
+            started: std::time::Instant::now(),
+        })
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -223,6 +230,12 @@ impl Server {
         }
         if let Some(update) = hub.view.update(doc, changes) {
             hub.bin = None;
+            // Milliseconds since this KYNEX started, before the rest.
+            let t = self.started.elapsed().as_secs_f64() * 1000.0;
+            let update = match update.strip_prefix('{') {
+                Some(rest) => format!("{{\"t\":{t:.1},{rest}"),
+                None => update,
+            };
             hub.broadcast("update", &update);
         }
     }

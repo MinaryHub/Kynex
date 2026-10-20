@@ -356,7 +356,7 @@ function applyObject(rec) {
     // Moved, nothing else: the common case, sixteen numbers.
     moveShown(rec);
   } else {
-    glides.delete(rec.uid);
+    tracks.delete(rec.uid);
     place(rec);
   }
   return !old || old.name !== rec.name || old.parent !== rec.parent || old.visible !== rec.visible;
@@ -364,62 +364,106 @@ function applyObject(rec) {
 
 // ---- smooth motion while the simulation runs -------------------------------
 // KYNEX tells poses some twenty times a second while a program or the flow
-// runs; drawn as told, a robot steps. Meanwhile each object moved glides
-// from where it is drawn to where it was told, over about the time between
-// tellings, so that it moves every frame. Not while nothing runs: a pose
-// asked for — a drag, a jog — shows as soon as it is told.
-const glides = new Map();
-let lastTold = 0;
-let toldGap = 50;
+// runs, not evenly: drawn as they come, a robot steps and stutters. Each
+// update says when KYNEX made it (`t`, ms); meanwhile every object moved
+// keeps its last few poses on that clock, and is drawn as it was a little
+// while ago — between the two poses either side of then —, so that it
+// moves every frame at the speed it was made to. Not while nothing runs:
+// a pose asked for — a drag, a jog — shows as soon as it is told.
+const tracks = new Map();
+// The page's clock less KYNEX's, as small as it has been: when an update
+// made at `t` is due here.
+let clockOffset = null;
+let toldAt = 0;
+let lastMade = null;
+let madeGap = 50;
 const _gm = new THREE.Matrix4();
 const _gp = new THREE.Vector3();
 const _gq = new THREE.Quaternion();
 const _gs = new THREE.Vector3();
 const running = () => !!timelinePanel.flowState?.on || robotPanel.going().length > 0;
 
-// How long apart tellings come, as they have lately.
-function told() {
+// An update has come, made at `t` by KYNEX's clock (or now, if it does not
+// say): when it is due on the page's clock.
+function told(t) {
   const now = performance.now();
-  if (lastTold) toldGap = toldGap * 0.8 + Math.min(now - lastTold, 250) * 0.2;
-  lastTold = now;
+  if (t == null) {
+    toldAt = now;
+    return;
+  }
+  // The least delay seen, let creep up slowly so a clock drifting is
+  // followed.
+  const offset = now - t;
+  clockOffset = clockOffset == null ? offset : Math.min(clockOffset + 0.5, offset);
+  if (lastMade != null) madeGap = madeGap * 0.85 + Math.min(Math.max(t - lastMade, 5), 400) * 0.15;
+  lastMade = t;
+  toldAt = t + clockOffset;
+}
+
+// How long behind the drawing is kept: time for the next pose to come.
+const playDelay = () => Math.min(Math.max(madeGap * 1.8, 40), 600);
+
+function poseOf(matrix) {
+  const pose = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() };
+  _gm.fromArray(matrix).decompose(pose.p, pose.q, pose.s);
+  return pose;
 }
 
 function moveShown(rec) {
   if (!running() || jointPreview) {
-    glides.delete(rec.uid);
+    tracks.delete(rec.uid);
     batch.move(rec.uid, rec.matrix);
     if (gizmos.has(rec.uid)) setGizmo(rec);
     return;
   }
-  // From where it is drawn now.
-  const from = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() };
-  const it = batch.inst.get(rec.uid);
-  if (it) batch.mesh.getMatrixAt(it.id, _gm);
-  else if (gizmos.has(rec.uid)) _gm.copy(gizmos.get(rec.uid).matrix);
-  else _gm.fromArray(rec.matrix);
-  _gm.decompose(from.p, from.q, from.s);
-  const to = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() };
-  _gm.fromArray(rec.matrix).decompose(to.p, to.q, to.s);
-  glides.set(rec.uid, { rec, from, to, t0: performance.now(), dur: Math.min(Math.max(toldGap * 1.1, 16), 150) });
+  let track = tracks.get(rec.uid);
+  if (!track) {
+    // Starting from where it is drawn, a moment before.
+    const it = batch.inst.get(rec.uid);
+    let drawn;
+    if (it) drawn = batch.mesh.getMatrixAt(it.id, new THREE.Matrix4()).toArray();
+    else if (gizmos.has(rec.uid)) drawn = gizmos.get(rec.uid).matrix.toArray();
+    else drawn = Array.from(rec.matrix);
+    track = { rec, poses: [{ at: toldAt - madeGap, ...poseOf(drawn) }] };
+    tracks.set(rec.uid, track);
+  }
+  track.rec = rec;
+  track.poses.push({ at: toldAt, ...poseOf(rec.matrix) });
+  if (track.poses.length > 6) track.poses.shift();
 }
 
-// Each frame: every gliding object where it is by now.
+// Each frame: every object followed where it was `playDelay` ago.
 function glide(now) {
-  for (const [uid, g] of glides) {
-    const t = Math.min((now - g.t0) / g.dur, 1);
-    _gp.lerpVectors(g.from.p, g.to.p, t);
-    _gq.slerpQuaternions(g.from.q, g.to.q, t);
-    _gs.lerpVectors(g.from.s, g.to.s, t);
+  if (!tracks.size) return;
+  const at = now - playDelay();
+  const going = running();
+  for (const [uid, track] of tracks) {
+    const poses = track.poses;
+    let k = poses.length - 1;
+    while (k > 0 && poses[k - 1].at > at) k--;
+    const b = poses[k];
+    const a = poses[Math.max(k - 1, 0)];
+    const t = b.at > a.at ? Math.min(Math.max((at - a.at) / (b.at - a.at), 0), 1) : 1;
+    _gp.lerpVectors(a.p, b.p, t);
+    _gq.slerpQuaternions(a.q, b.q, t);
+    _gs.lerpVectors(a.s, b.s, t);
     const m = _gm.compose(_gp, _gq, _gs).toArray();
     batch.move(uid, m);
-    if (gizmos.has(uid)) setGizmo({ ...g.rec, matrix: m });
-    if (t >= 1) glides.delete(uid);
+    if (gizmos.has(uid)) setGizmo({ ...track.rec, matrix: m });
+    // Caught up with the last pose: no longer followed, once nothing
+    // runs or it has stood still a while.
+    const last = poses[poses.length - 1];
+    if (at >= last.at && (!going || at - last.at > 1000)) {
+      batch.move(uid, track.rec.matrix);
+      if (gizmos.has(uid)) setGizmo(track.rec);
+      tracks.delete(uid);
+    }
   }
-  if (glides.size) shadowsDirty = true;
+  shadowsDirty = true;
 }
 
 function removeObject(uid) {
-  glides.delete(uid);
+  tracks.delete(uid);
   batch.remove(uid);
   removeGizmo(uid);
   records.delete(uid);
@@ -545,7 +589,7 @@ function onUpdate(data) {
   // Already in the scene that was fetched, or older than it.
   if (!batch.mesh || data.v <= heldVersion) return;
   heldVersion = data.v;
-  told();
+  told(data.t);
   for (const [id, mesh] of Object.entries(data.meshes)) {
     const levels = buildGeometry(mesh);
     if (batch.hasGeometry(id)) batch.replaceGeometry(id, levels);
@@ -2412,3 +2456,4 @@ async function runBench(t) {
 }
 
 connect();
+

@@ -120,9 +120,11 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   turned (or slid) where the bar is, without waiting for KYNEX to answer —
   and takes KYNEX's own pose as each answer comes and once it is let go.
 - **Smooth motion**: while a program or the flow runs, KYNEX tells poses
-  some twenty times a second; the page glides each moving part from where
-  it is drawn to where it was told over about the time between tellings,
-  so robots and parts move every frame rather than in steps.
+  some twenty times a second, not evenly, each stamped with when it was
+  made. The page keeps each moving part's last few poses on that clock and
+  draws it as it was a moment ago (about two tellings back), between the
+  poses either side of then — so robots and parts move every frame, at the
+  speed they were made to, rather than stepping.
 - **TCP pendant**: X/Y/Z and Rx/Ry/Rz jog buttons, in world or tool
   axes. Hold a button to repeat. Steps are 1 mm · 1°, 10 mm · 5° or
   50 mm · 15°. **이동할 때 자세 유지** keeps the tool's orientation while it

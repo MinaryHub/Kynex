@@ -1178,6 +1178,9 @@ pub struct Cell {
     /// When a robot was last coming to each such station: its door stays
     /// open a moment after, for the next that may come.
     station_door_wanted: BTreeMap<u64, f64>,
+    /// The stations with a door, for those stations (and the scene's
+    /// version when found): looked for once, not at every step.
+    door_stations: Option<(u64, Vec<u64>, Vec<u64>)>,
 }
 
 /// A signal the cell shares with a PLC besides its machines' commands and
@@ -4287,7 +4290,14 @@ impl Cell {
             }
         }
         // A machine made a station of the flow: its door as a robot comes.
-        for c in self.components.iter().filter(|c| c.kind == Kind::Station) {
+        // Only those found to have one, once the flow has looked.
+        let with_door = self.door_stations.as_ref().map(|(_, _, d)| d);
+        for c in self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Station)
+            .filter(|c| with_door.is_none_or(|d| d.contains(&c.object)))
+        {
             let Some(machine) = id_of(doc, c.object) else {
                 continue;
             };

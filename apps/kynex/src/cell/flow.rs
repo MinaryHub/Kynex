@@ -645,16 +645,29 @@ impl Cell {
             .filter(|j| j.by == 3 && j.amr.is_some())
             .flat_map(|j| [j.from, j.to])
             .collect();
-        let stations: Vec<(u64, bool)> = self
+        let all: Vec<u64> = self
             .components
             .iter()
             .filter(|c| c.kind == Kind::Station)
-            .filter_map(|c| {
-                let id = id_of(doc, c.object)?;
-                (!self.door_parts(doc, id).is_empty())
-                    .then_some((c.object, robot_at.contains(&c.object)))
-            })
+            .map(|c| c.object)
             .collect();
+        let fresh = self
+            .door_stations
+            .as_ref()
+            .is_some_and(|(_, s, _)| *s == all);
+        if !fresh {
+            let with_door = all
+                .iter()
+                .copied()
+                .filter(|o| id_of(doc, *o).is_some_and(|id| !self.door_parts(doc, id).is_empty()))
+                .collect();
+            self.door_stations = Some((doc.version(), all, with_door));
+        }
+        let stations: Vec<(u64, bool)> = self
+            .door_stations
+            .as_ref()
+            .map(|(_, _, d)| d.iter().map(|o| (*o, robot_at.contains(o))).collect())
+            .unwrap_or_default();
         for (object, coming) in stations {
             if coming {
                 self.station_door_wanted.insert(object, now);

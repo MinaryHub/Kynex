@@ -691,11 +691,34 @@ the two are linked where it is let go (a press anywhere else still turns
 the view).
 
 Out of link mode too, each piece that sends parts on — a source, a
-station, a buffer, a conveyor — has an orange dot over it: dragged onto
-other equipment, it links the two. An arrow of the flow clicked in the 3D
-view is chosen (drawn orange) and **Delete** undoes the link, the
-equipment left as it is. Arrows and dots are picked by how near the
-pointer is to them on the screen, the same however near the view is.
+station, a buffer, a conveyor — has an orange handle (➔) over it, grown
+a little under the pointer: dragged onto other equipment, it links the
+two. While a link is drawn — from a handle, or from the last piece in link
+mode — the line is green where letting go would link and red where it
+would not, the equipment under the pointer is tinted, and a note by the
+pointer says what would happen: the link to be made, "already linked",
+"a source takes nothing", "the building is not of the flow", or that the
+equipment would become a station. A machine with a flow station standing
+on it — as the sample plants have — counts as that station: a drop on the
+machine, a click on it in link mode, a right click on it all mean the
+station. An arrow of the flow clicked in the 3D view is chosen (drawn
+orange) and **Delete** undoes the link, the equipment left as it is.
+Arrows and handles are picked by how near the pointer is to them on the
+screen, the same however near the view is.
+
+A **right click** — in the 3D view, on a row of the tree, on a box or an
+arrow of the flow chart — opens a menu. On equipment of the flow: **다음
+공정으로 연결** (every piece it could send to, nearest first, with the
+distance; and **화면에서 끌어 잇기…**, which starts link mode from it),
+**앞 공정에서 연결 받기**, **연결 끊기** (each of its links, or all), and
+**역할 바꾸기** (source, station, buffer, sink, or out of the flow). On
+equipment not yet of the flow: **공정 흐름에 넣기** with a role, or
+**앞 공정에서 연결 받기** / **다음 공정으로 연결**, which make it a
+station (a source, if the cell has none) and link it in one go. On an
+arrow: **연결 끊기**, **방향 뒤집기**, **사이에 끼우기** (a piece put into
+the link), and choosing either end. Walls, fences, columns and lights
+offer only 선택 · 화면 맞춤 · 삭제; the floor offers link mode, the signs
+and 화면 맞춤. The menu closes on a choice, a click outside it, or Esc.
 
 The signs over the flow — each piece's name, a station's load and
 bottleneck, a cycle's progress — are as big as they are in the scene from

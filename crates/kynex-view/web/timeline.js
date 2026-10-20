@@ -79,6 +79,9 @@ export class TimelinePanel {
       escapeHtml: ctx.escapeHtml,
       toast: ctx.toast,
       select: (uid) => ctx.select?.(uid),
+      showMenu: ctx.showMenu,
+      equipmentMenu: ctx.equipmentMenu,
+      linkMenu: ctx.linkMenu,
     });
     document.getElementById('tl-close').addEventListener('click', () => this.ctx.toggle(false));
     for (const b of this.box.querySelectorAll('[data-tl-tab]')) {

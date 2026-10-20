@@ -6,6 +6,20 @@
 import * as THREE from 'three';
 import { fieldsFor, getLevel, onLevel, roleShown } from './level.js';
 
+// The flow's roles, as a menu offers them.
+const FLOW_KINDS = [
+  ['source', '소재 공급'],
+  ['station', '공정 스테이션'],
+  ['buffer', '버퍼'],
+  ['sink', '배출'],
+];
+const FLOW_NAME = { ...Object.fromEntries(FLOW_KINDS), conveyor: '컨베이어' };
+// Templates that are the building, not equipment of the flow.
+const STRUCTURE = new Set([
+  'fence', 'guard_rail', 'factory_wall', 'factory_column', 'floor_zone', 'ceiling_light',
+  'crane_rail', 'oht_rail', 'roll_door', 'pipe_rack', 'amr_stop', 'overhead_crane',
+]);
+
 const KINDS = [
   ['', '없음'],
   ['cnc', 'CNC 장비'],
@@ -507,7 +521,9 @@ export class CellPanel {
       }
       // A beginner's: where it sends and how it is doing; the rest on
       // the way up.
-      const link = c.kind === 'sink' ? '' : '<button class="text-btn" data-link-pick title="3D 화면에서 다음 설비들을 차례로 눌러 잇습니다">＋ 화면에서 잇기</button>';
+      const link =
+        (c.kind === 'sink' ? '' : '<button class="text-btn" data-link-pick title="3D 화면에서 다음 설비들을 차례로 눌러 잇습니다">＋ 화면에서 잇기</button>') +
+        '<span class="muted insp-hint">3D에서: 설비 위 ➔ 손잡이를 다음 설비로 끌기 · 오른쪽 클릭: 연결 메뉴</span>';
       actions =
         link +
         (getLevel() >= 2
@@ -699,14 +715,14 @@ export class CellPanel {
   // the source if it is the first, else a station. Returns the one clicked,
   // to select.
   linkTo(uids, root = null) {
-    let c = uids.map((u) => this.componentOf(u)).find((c) => c?.flow);
-    if (c) return this.linkOn(c.object, c.kind, c.name);
-    const machine = uids.map((u) => this.componentOf(u)).find((c) => c && ['cnc', 'molder'].includes(c.kind));
-    const object = machine?.object ?? (root != null && !this.componentOf(root) ? root : null);
-    if (object == null) {
+    const piece = this.pieceOf(uids, root);
+    if (piece?.c?.flow) return this.linkOn(piece.c.object, piece.c.kind, piece.c.name);
+    if (!piece || piece.structure) {
       this.ctx.toast('설비를 누르세요 (공정 흐름에 넣을 수 있는 것)');
       return null;
     }
+    const object = piece.object;
+    const machine = piece.c && ['cnc', 'molder'].includes(piece.c.kind) ? piece.c : null;
     if (machine && getLevel() >= 3 && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return null;
     const kind = !machine && !this.link.from ? 'source' : 'station';
     const props = machine ? { cycle: machine.props.cycle } : {};
@@ -735,6 +751,279 @@ export class CellPanel {
     const made = this.linkTo(to, root);
     if (once && made == null && this.link?.once) this.link = null;
     return made;
+  }
+
+  // ---- Links made from a menu, a drag, a drop ------------------------------
+
+  // The equipment `uids` (an object and those above it; `root` the placed
+  // item's, if it is one) is in the flow: { object, c, name, structure }
+  // — the flow's piece among them, else a machine (CNC, molder), else the
+  // placed item, else the topmost object. `structure` for the building
+  // (walls, fences, lights), which never joins the flow. Null for nothing.
+  pieceOf(uids, root = null) {
+    const cs = uids.map((u) => this.componentOf(u));
+    const c = cs.find((c) => c?.flow);
+    if (c) return { object: c.object, c, name: c.name, structure: false };
+    const machine = cs.find((c) => c && ['cnc', 'molder'].includes(c.kind));
+    if (machine) return { object: machine.object, c: machine, name: machine.name, structure: false };
+    const item = this.ctx.itemOf?.(uids[0]);
+    const object = root ?? item?.root ?? uids[uids.length - 1] ?? null;
+    if (object == null) return null;
+    const structure = item ? STRUCTURE.has(item.template) : false;
+    // A zone painted on the floor is the floor: nothing to link to.
+    if (item?.template === 'floor_zone') return null;
+    // A flow piece standing on the equipment — a station set at a machine
+    // — is what the equipment means to the flow.
+    const on = structure ? null : this.flowOn(object);
+    if (on) return { object: on.object, c: on, name: on.name, structure: false };
+    return { object, c: this.componentOf(object) ?? null, name: this.ctx.nameOf?.(object) ?? '', structure };
+  }
+
+  // The flow's piece standing within equipment `object`'s footprint (a
+  // little beyond it), nearest its middle; or null.
+  flowOn(object) {
+    const box = this.ctx.bounds?.(object);
+    if (!box || box.isEmpty()) return null;
+    const m = 0.3;
+    const cx = (box.min.x + box.max.x) / 2;
+    const cy = (box.min.y + box.max.y) / 2;
+    let best = null;
+    for (const c of this.cell.components) {
+      const at = c.flow?.at;
+      if (!at || c.object === object) continue;
+      if (at[0] < box.min.x - m || at[0] > box.max.x + m || at[1] < box.min.y - m || at[1] > box.max.y + m) continue;
+      const d = Math.hypot(at[0] - cx, at[1] - cy);
+      if (!best || d < best.d) best = { d, c };
+    }
+    return best?.c ?? null;
+  }
+
+  nameOf(object) {
+    return this.componentOf(object)?.name ?? this.ctx.nameOf?.(object) ?? '';
+  }
+
+  // Metres between two pieces of the flow, or null when either has no place.
+  far(a, b) {
+    const p = this.componentOf(a)?.flow?.at;
+    const q = this.componentOf(b)?.flow?.at;
+    if (!p || !q) return null;
+    return Math.hypot(p[0] - q[0], p[1] - q[1]);
+  }
+
+  // Pieces parts can go on to from `object` (not itself, not a source),
+  // nearest first.
+  receivers(object) {
+    return this.cell.components
+      .filter((t) => t.object !== object && t.flow && ['station', 'buffer', 'sink', 'conveyor'].includes(t.kind))
+      .sort((a, b) => (this.far(object, a.object) ?? 1e9) - (this.far(object, b.object) ?? 1e9));
+  }
+
+  // Pieces that send parts on, other than `object`, nearest first.
+  senders(object) {
+    return this.cell.components
+      .filter((t) => t.object !== object && t.flow && this.sends(t.object))
+      .sort((a, b) => (this.far(object, a.object) ?? 1e9) - (this.far(object, b.object) ?? 1e9));
+  }
+
+  // Every link from or to `object`: [{ from, to }].
+  linksOf(object) {
+    const links = [];
+    for (const c of this.cell.components) {
+      for (const n of c.flow?.next ?? []) {
+        if (c.object === object || n === object) links.push({ from: c.object, to: n });
+      }
+    }
+    return links;
+  }
+
+  // `from` sends on to `to` as well; `then` once it does.
+  linkDirect(from, to, then = null) {
+    const have = this.componentOf(from)?.flow?.next ?? [];
+    const said = `${this.nameOf(from)} → ${this.nameOf(to)}`;
+    if (have.includes(to)) return this.ctx.toast(`이미 이어져 있습니다: ${said}`);
+    if (this.componentOf(to)?.kind === 'source') return this.ctx.toast('소재 공급으로는 보낼 수 없습니다');
+    this.send({ op: 'flow_next', object: from, next: [...have, to] }, () => {
+      this.ctx.toast(`이었습니다: ${said}`);
+      then?.();
+    });
+  }
+
+  unlink(from, to, then = null) {
+    const have = this.componentOf(from)?.flow?.next ?? [];
+    if (this.chosenLink?.from === from && this.chosenLink?.to === to) this.chosenLink = null;
+    this.send({ op: 'flow_next', object: from, next: have.filter((n) => n !== to) }, () => {
+      this.ctx.toast(`연결을 끊었습니다: ${this.nameOf(from)} → ${this.nameOf(to)}`);
+      then?.();
+    });
+  }
+
+  // Every link from and to `object` undone.
+  unlinkAll(object) {
+    const links = this.linksOf(object);
+    const froms = [...new Set(links.map((l) => l.from))];
+    for (const from of froms) {
+      const have = this.componentOf(from)?.flow?.next ?? [];
+      const next = from === object ? [] : have.filter((n) => n !== object);
+      this.send({ op: 'flow_next', object: from, next });
+    }
+    this.chosenLink = null;
+    this.ctx.toast(`${this.nameOf(object)}의 연결 ${links.length}개를 끊었습니다`);
+  }
+
+  // The link the other way round: `to` sends to `from` instead.
+  reverseLink({ from, to }) {
+    if (!this.sends(to)) return this.ctx.toast(`${this.nameOf(to)}에서는 부품이 나가지 않습니다`);
+    if (this.componentOf(from)?.kind === 'source') return this.ctx.toast('소재 공급으로는 보낼 수 없습니다');
+    this.unlink(from, to, () => this.linkDirect(to, from));
+  }
+
+  // `x` put into the link: `from` → `x` → `to`.
+  insertBetween({ from, to }, x) {
+    this.unlink(from, to, () => this.linkDirect(from, x, () => this.linkDirect(x, to)));
+  }
+
+  // Equipment `object` given the flow role `kind` (a machine keeping its
+  // cycle time), then `then`. `kind` null takes it out of the flow.
+  joinAs(object, kind, then = null) {
+    const c = this.componentOf(object);
+    const machine = c && ['cnc', 'molder'].includes(c.kind) ? c : null;
+    if (machine && getLevel() >= 3 && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return;
+    const props = machine ? { cycle: machine.props.cycle } : {};
+    const name = this.nameOf(object);
+    this.send({ op: 'role', object, kind, props }, () => {
+      this.ctx.toast(kind ? `${name}: ${FLOW_NAME[kind]}${kind === 'station' ? ' (공정 시간을 넣으세요)' : ''}` : `${name}: 공정 흐름에서 뺐습니다`);
+      then?.();
+    });
+  }
+
+  // What letting go of a link from `from` on `uids` (and `root`) would do:
+  // { ok, text, object } — `object` the equipment it would land on.
+  dropPreview(from, uids, root = null) {
+    const piece = uids.length ? this.pieceOf(uids, root) : null;
+    if (!piece) return { ok: false, text: '다음 공정이 될 설비 위에 놓으세요', object: null };
+    const { object, c, name } = piece;
+    const fromName = this.nameOf(from);
+    if (object === from || uids.includes(from)) return { ok: false, text: '같은 설비입니다', object };
+    if (piece.structure) return { ok: false, text: `${name}: 건물·구조물은 공정에 넣을 수 없습니다`, object };
+    if (c?.flow) {
+      if (c.kind === 'source') return { ok: false, text: `${name}: 소재 공급으로는 보낼 수 없습니다`, object };
+      if ((this.componentOf(from)?.flow?.next ?? []).includes(object)) return { ok: false, text: `이미 이어져 있습니다: ${fromName} → ${name}`, object };
+      return { ok: true, text: `${fromName} → ${name}`, object };
+    }
+    return { ok: true, text: `${fromName} → ${name} · 놓으면 공정 스테이션이 됩니다`, object };
+  }
+
+  // The menu for a right click on equipment `uids` (and `root`): linking
+  // it on, linking to it, undoing its links, its role; or null for nothing.
+  equipmentMenu(uids, root = null) {
+    const piece = this.pieceOf(uids, root);
+    if (!piece) return null;
+    const { object, c, name } = piece;
+    const hint = (t) => {
+      const d = this.far(object, t.object);
+      return `${FLOW_NAME[t.kind] ?? t.kind}${d != null ? ` · ${d.toFixed(1)} m` : ''}`;
+    };
+    const entries = [{ title: c?.flow ? `${name} · ${FLOW_NAME[c.kind] ?? c.kind}` : name }];
+    if (c?.flow) {
+      if (this.sends(object)) {
+        const have = c.flow.next ?? [];
+        const targets = this.receivers(object).filter((t) => !have.includes(t.object));
+        entries.push({
+          label: '다음 공정으로 연결',
+          sub: [
+            ...targets.map((t) => ({ label: t.name, hint: hint(t), run: () => this.linkDirect(object, t.object) })),
+            ...(targets.length ? [{ sep: true }] : []),
+            { label: '화면에서 끌어 잇기…', hint: '다음 설비를 누르면 이어짐', run: () => this.startLinking(object) },
+          ],
+        });
+      }
+      if (c.kind !== 'source') {
+        const from = this.senders(object).filter((s) => !(s.flow.next ?? []).includes(object));
+        entries.push({
+          label: '앞 공정에서 연결 받기',
+          sub: from.map((s) => ({ label: s.name, hint: hint(s), run: () => this.linkDirect(s.object, object) })),
+        });
+      }
+      const links = this.linksOf(object);
+      if (links.length) {
+        entries.push({
+          label: '연결 끊기',
+          sub: [
+            ...links.map((l) => ({ label: `${this.nameOf(l.from)} → ${this.nameOf(l.to)}`, danger: true, run: () => this.unlink(l.from, l.to) })),
+            ...(links.length > 1 ? [{ sep: true }, { label: `모두 끊기 (${links.length})`, danger: true, run: () => this.unlinkAll(object) }] : []),
+          ],
+        });
+      }
+      entries.push({
+        label: '역할 바꾸기',
+        sub: [
+          ...FLOW_KINDS.map(([k, label]) => ({ label, checked: c.kind === k, disabled: c.kind === k, run: () => this.joinAs(object, k) })),
+          { sep: true },
+          { label: '공정 흐름에서 빼기', danger: true, run: () => this.joinAs(object, null) },
+        ],
+      });
+    } else if (!piece.structure) {
+      entries.push({
+        label: '공정 흐름에 넣기',
+        sub: FLOW_KINDS.map(([k, label]) => ({ label, run: () => this.joinAs(object, k) })),
+      });
+      const from = this.senders(object);
+      entries.push({
+        label: '앞 공정에서 연결 받기',
+        hint: '공정 스테이션이 됩니다',
+        sub: from.map((s) => ({ label: s.name, hint: hint(s), run: () => this.joinAs(object, 'station', () => this.linkDirect(s.object, object)) })),
+      });
+      const targets = this.receivers(object);
+      const kind = this.cell.components.some((t) => t.kind === 'source') ? 'station' : 'source';
+      entries.push({
+        label: '다음 공정으로 연결',
+        hint: `${FLOW_NAME[kind]}이 됩니다`,
+        sub: targets.map((t) => ({ label: t.name, hint: hint(t), run: () => this.joinAs(object, kind, () => this.linkDirect(object, t.object)) })),
+      });
+    }
+    entries.push({ sep: true }, { label: '선택', run: () => this.ctx.select?.(object) }, { label: '화면 맞춤', hint: 'F', run: () => this.ctx.frame?.(object) });
+    if (this.ctx.remove) entries.push({ label: '삭제', hint: 'Delete', danger: true, run: () => this.ctx.remove(object) });
+    return entries;
+  }
+
+  // The menu for a right click on a link's arrow.
+  linkMenu(link) {
+    const a = this.nameOf(link.from);
+    const b = this.nameOf(link.to);
+    const between = this.cell.components.filter(
+      (x) => x.flow && x.object !== link.from && x.object !== link.to && this.sends(x.object) && x.kind !== 'source',
+    );
+    return [
+      { title: `${a} → ${b}` },
+      { label: '연결 끊기', hint: 'Delete', danger: true, run: () => this.unlink(link.from, link.to) },
+      { label: '방향 뒤집기', hint: `${b} → ${a}`, run: () => this.reverseLink(link) },
+      {
+        label: '사이에 끼우기',
+        sub: between.map((x) => ({ label: x.name, hint: FLOW_NAME[x.kind] ?? x.kind, run: () => this.insertBetween(link, x.object) })),
+      },
+      { sep: true },
+      { label: `${a} 선택`, run: () => this.ctx.select?.(link.from) },
+      { label: `${b} 선택`, run: () => this.ctx.select?.(link.to) },
+    ];
+  }
+
+  // The piece a link is being drawn from in link mode, and where it
+  // stands: { object, at } or null.
+  linkingFrom() {
+    const from = this.link?.from;
+    const at = from != null ? this.componentOf(from)?.flow?.at : null;
+    return from != null && at ? { object: from, at } : null;
+  }
+
+  // The link handle the pointer is over, grown a little.
+  hoverHandle(object) {
+    if (this.hovered === object) return;
+    this.hovered = object;
+    for (const o of this.markers.children) {
+      if (!o.userData.handle) continue;
+      const s = o.userData.size * (o.userData.handle === object ? 1.3 : 1);
+      o.scale.set(s, s, 1);
+    }
   }
 
   // Linking on to `object` of role `kind`: from the last, and on from it
@@ -1003,19 +1292,29 @@ export class CellPanel {
     return { material, w };
   }
 
-  // The dot a link is dragged from: an orange disc, ringed white. Made
-  // once (drawMarkers leaves it be).
+  // The handle a link is dragged from: an arrow in an orange disc, ringed
+  // white. Made once (drawMarkers leaves it be).
   dotTexture() {
     if (this.dot) return this.dot;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 64;
     const ctx = canvas.getContext('2d');
     ctx.beginPath();
-    ctx.arc(32, 32, 26, 0, Math.PI * 2);
+    ctx.arc(32, 32, 27, 0, Math.PI * 2);
     ctx.fillStyle = '#ff8a3d';
     ctx.fill();
-    ctx.lineWidth = 7;
+    ctx.lineWidth = 5;
     ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(18, 32);
+    ctx.lineTo(44, 32);
+    ctx.moveTo(34, 22);
+    ctx.lineTo(44, 32);
+    ctx.lineTo(34, 42);
     ctx.stroke();
     this.dot = new THREE.CanvasTexture(canvas);
     this.dot.colorSpace = THREE.SRGBColorSpace;
@@ -1033,7 +1332,7 @@ export class CellPanel {
       if (!o.userData.handle) continue;
       const [px, py] = project(o.position);
       const d = Math.hypot(px - x, py - y);
-      if (d < 12 && (!best || d < best.d)) best = { d, handle: o.userData.handle };
+      if (d < 16 && (!best || d < best.d)) best = { d, handle: o.userData.handle };
     }
     if (best) return { handle: best.handle };
     for (const o of this.markers.children) {
@@ -1150,10 +1449,12 @@ export class CellPanel {
       if (!a || !this.sends(c.object)) continue;
       const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dotTexture(), depthTest: false, transparent: true }));
       dot.material.sizeAttenuation = false;
-      dot.scale.set(0.016, 0.016, 1);
+      const size = this.hovered === c.object ? 0.0286 : 0.022;
+      dot.scale.set(size, size, 1);
       dot.position.set(a[0], a[1], a[2] + 0.45);
       dot.renderOrder = 11;
       dot.userData.handle = c.object;
+      dot.userData.size = 0.022;
       this.markers.add(dot);
     }
     this.drawNames(at, this.drawLoads(at));

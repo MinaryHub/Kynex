@@ -16,6 +16,7 @@ import { mountLevelSwitch } from '/level.js';
 import { LibraryPanel } from '/library.js';
 import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
+import { showMenu } from '/menu.js';
 
 // ---- state ------------------------------------------------------------------
 
@@ -202,6 +203,8 @@ const DEFAULT_COLOR = new THREE.Color().setRGB(0.62, 0.64, 0.67, THREE.LinearSRG
 const ACCENT = new THREE.Color(0xff8a3d);
 // Parts in contact: a robot's link and what it runs into.
 const CONTACT = new THREE.Color(0xff3b3b);
+// Equipment a link being drawn would land on.
+const LANDING = new THREE.Color(0x3fcf8e);
 let contacted = new Set();
 // The parts' one material: each part's own colour is its instance colour.
 const surface = new THREE.MeshStandardMaterial({
@@ -755,7 +758,21 @@ const robotPanel = new RobotPanel({
   toast,
   escapeHtml,
 });
-const cellPanel = new CellPanel({ scene, selected: () => selected, toast, escapeHtml });
+const cellPanel = new CellPanel({
+  scene,
+  selected: () => selected,
+  toast,
+  escapeHtml,
+  select: (uid) => select(uid),
+  frame: (uid) => frame(uid),
+  nameOf: (uid) => records.get(uid)?.name ?? '',
+  itemOf: (uid) => libraryPanel.itemOf(uid),
+  bounds: (uid) => bounds(uid),
+  remove: (uid) => {
+    select(uid);
+    if (!libraryPanel.removeSelected()) toast('라이브러리에서 놓은 장비만 지울 수 있습니다');
+  },
+});
 // The signs over the flow as last chosen in this browser.
 view.labels = cellPanel.showLabels;
 document.querySelector('[data-toggle="labels"]')?.classList.toggle('on', view.labels);
@@ -779,6 +796,7 @@ const linkButton = () => document.querySelector('[data-action="link"]');
 cellPanel.onLinking = (on) => {
   linkButton()?.classList.toggle('on', on);
   canvas.style.cursor = on ? 'crosshair' : '';
+  if (!on) previewLink(null);
 };
 const projectPanel = new ProjectPanel({ toast, escapeHtml });
 // The site's drawing: looked at from above when first laid.
@@ -799,6 +817,10 @@ const timelinePanel = new TimelinePanel({
   toast,
   toggle: (on) => setToggle('timeline', on),
   select: (uid) => select(uid),
+  // The flow chart's right-click menus: the same as the 3D view's.
+  showMenu,
+  equipmentMenu: (uid) => cellPanel.equipmentMenu(chainOf(uid), libraryPanel.itemOf(uid)?.root ?? null),
+  linkMenu: (link) => cellPanel.linkMenu(link),
 });
 
 const libraryPanel = new LibraryPanel({
@@ -842,6 +864,7 @@ document.getElementById('robots').addEventListener('dblclick', (e) => {
 // A part's colour over its own: red in contact, orange selected.
 function tintOf(rec) {
   if (contacted.has(rec.uid)) return colorOf(rec).lerp(CONTACT, 0.75);
+  if (dropTarget != null && underOf(rec.uid, dropTarget)) return colorOf(rec).lerp(LANDING, 0.6);
   if (selected === rec.uid) return colorOf(rec).lerp(ACCENT, 0.55);
   if (group.size && underGroup(rec.uid)) return colorOf(rec).lerp(ACCENT, 0.4);
   return null;
@@ -1174,37 +1197,139 @@ canvas.addEventListener(
   },
   { capture: true },
 );
-// A hand over a dot: it can be dragged.
+// A hand over a handle: it can be dragged, and it grows a little. In link
+// mode, a line from the last piece follows the pointer, and what is under
+// the pointer is shown as the link's end would be.
 canvas.addEventListener('pointermove', (e) => {
   if (e.buttons || linkDrag || view.interact) return;
   const over = markerAt(e.clientX, e.clientY);
+  cellPanel.hoverHandle(over?.handle ?? null);
   canvas.style.cursor = over?.handle ? 'grab' : over?.link ? 'pointer' : cellPanel.linking() ? 'crosshair' : '';
+  const from = cellPanel.linking() ? cellPanel.linkingFrom() : null;
+  if (from) previewLink(from.object, new THREE.Vector3(from.at[0], from.at[1], from.at[2] + 0.45), e.clientX, e.clientY);
+  else if (linkLine.visible) previewLink(null);
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!linkDrag) return;
   if (!linkDrag.moved && Math.hypot(e.clientX - linkDrag.x, e.clientY - linkDrag.y) < 6) return;
   linkDrag.moved = true;
-  // To what is under the pointer, or the floor.
-  const hit = partAt(e.clientX, e.clientY);
-  const to = hit?.point ?? ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
-  if (!to) return;
-  linkLine.geometry.setFromPoints([linkDrag.from, to]);
-  linkLine.computeLineDistances();
-  linkLine.visible = true;
+  const from = cellPanel.sender(linkDrag.uids)?.object;
+  if (from != null) previewLink(from, linkDrag.from, e.clientX, e.clientY);
 });
 window.addEventListener('pointerup', (e) => {
   if (!linkDrag) return;
   const drag = linkDrag;
   linkDrag = null;
   controls.enabled = true;
-  linkLine.visible = false;
+  previewLink(null);
   if (!drag.moved) return;
   const hit = partAt(e.clientX, e.clientY);
   if (!hit) return toast('다음 공정이 될 설비 위에 놓으세요');
   const uids = chainOf(hit.uid);
   if (uids.some((u) => drag.uids.includes(u))) return;
-  const to = cellPanel.dragLink(drag.uids, uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+  const root = libraryPanel.itemOf(uids[0])?.root ?? null;
+  const from = cellPanel.sender(drag.uids)?.object;
+  const preview = from != null ? cellPanel.dropPreview(from, uids, root) : null;
+  if (preview && !preview.ok) return toast(preview.text);
+  const to = cellPanel.dragLink(drag.uids, uids, root);
   if (to != null) select(to);
+});
+
+// The link being drawn — dragged from a handle, or from the last piece in
+// link mode — shown from `from` (its object, and `point` where the line
+// starts) to the pointer at (x, y): the line green where letting go would
+// link, red where it would not, a note by the pointer saying what would
+// happen, and the equipment under it tinted. `from` null takes it all
+// away.
+let dropTarget = null;
+const dragTip = document.getElementById('drag-tip');
+function previewLink(from, point = null, x = 0, y = 0) {
+  if (from == null) {
+    linkLine.visible = false;
+    dragTip.hidden = true;
+    setDropTarget(null);
+    return;
+  }
+  const hit = partAt(x, y);
+  const uids = hit ? chainOf(hit.uid) : [];
+  const to = hit?.point ?? ray.ray.intersectPlane(_floor, new THREE.Vector3());
+  const preview = cellPanel.dropPreview(from, uids, uids.length ? (libraryPanel.itemOf(uids[0])?.root ?? null) : null);
+  if (to) {
+    linkLine.geometry.setFromPoints([point, to]);
+    linkLine.computeLineDistances();
+    linkLine.material.color.set(!uids.length ? 0x5aa9ff : preview.ok ? 0x3fcf8e : 0xff5f5f);
+    linkLine.visible = true;
+  }
+  dragTip.textContent = preview.text;
+  dragTip.className = `drag-tip ${preview.ok ? 'ok' : uids.length ? 'bad' : ''}`;
+  dragTip.style.left = `${x + 14}px`;
+  dragTip.style.top = `${y + 18}px`;
+  dragTip.hidden = false;
+  setDropTarget(preview.ok ? preview.object : null);
+}
+
+// The equipment a link would land on, tinted (see tintOf).
+function setDropTarget(uid) {
+  if (uid === dropTarget) return;
+  const was = dropTarget;
+  dropTarget = uid;
+  for (const u of records.keys()) {
+    if ((was != null && underOf(u, was)) || (uid != null && underOf(u, uid))) highlight(u);
+  }
+}
+
+// Whether `uid` is `root` or below it.
+function underOf(uid, root) {
+  for (let at = uid, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) if (at === root) return true;
+  return false;
+}
+
+// A right click — pressed and let go without moving — opens a menu for
+// what is under the pointer: a link's arrow, equipment, or the floor.
+// Dragged, the right button pans the view as ever.
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+let rightDown = null;
+canvas.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
+  },
+  true,
+);
+window.addEventListener('pointerup', (e) => {
+  if (e.button !== 2 || !rightDown) return;
+  const d = rightDown;
+  rightDown = null;
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) return;
+  sceneMenu(e.clientX, e.clientY);
+});
+function sceneMenu(x, y) {
+  const marker = markerAt(x, y);
+  if (marker?.link) return showMenu(x, y, cellPanel.linkMenu(marker.link));
+  const hit = partAt(x, y);
+  if (hit) {
+    const uids = chainOf(hit.uid);
+    const entries = cellPanel.equipmentMenu(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+    if (entries) return showMenu(x, y, entries);
+  }
+  showMenu(x, y, [
+    {
+      label: cellPanel.linking() ? '연결 모드 끝' : '연결 모드 시작',
+      hint: '설비를 차례로 눌러 잇기',
+      run: () => (cellPanel.linking() ? cellPanel.stopLinking() : cellPanel.startLinking(selected)),
+    },
+    { label: view.labels ? '이름표 숨기기' : '이름표 보이기', hint: 'L', run: () => setToggle('labels', !view.labels) },
+    { label: '화면 맞춤', hint: 'F', run: () => frame() },
+  ]);
+}
+// The tree's rows too.
+document.getElementById('tree').addEventListener('contextmenu', (e) => {
+  const li = e.target.closest('.node[data-uid]');
+  if (!li) return;
+  e.preventDefault();
+  const uids = chainOf(li.dataset.uid);
+  const entries = cellPanel.equipmentMenu(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+  if (entries) showMenu(e.clientX, e.clientY, entries);
 });
 
 canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));

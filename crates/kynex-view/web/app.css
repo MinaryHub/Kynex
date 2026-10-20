@@ -1033,3 +1033,62 @@ body[data-level="2"] [data-min="3"] { display: none !important; }
 .fc-cut circle { fill: var(--panel); stroke: #ff6b6b; stroke-width: 1.5; }
 .fc-cut path { stroke: #ff6b6b; stroke-width: 1.6; }
 .fc-edge:hover .fc-cut { opacity: 1; }
+
+/* The right-click menu: a column of entries, a second beside it for a
+   submenu. */
+.ctx-menu { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
+.ctx-col {
+  position: fixed;
+  min-width: 190px;
+  max-width: 320px;
+  padding: 4px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  user-select: none;
+}
+.ctx-col.sub { max-height: 70vh; overflow-y: auto; }
+.ctx-title { padding: 5px 10px 4px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-item:hover, .ctx-item.open { background: rgba(90, 169, 255, 0.16); }
+.ctx-item:disabled { color: var(--faint); cursor: default; }
+.ctx-item:disabled:hover { background: none; }
+.ctx-item.danger { color: #ff8585; }
+.ctx-item.danger:hover { background: rgba(255, 95, 95, 0.14); }
+.ctx-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.ctx-hint { font-size: 11px; color: var(--muted); }
+.ctx-more { color: var(--muted); font-size: 11px; }
+
+/* What letting go of a link being drawn would do, by the pointer. */
+.drag-tip {
+  position: fixed;
+  z-index: 30;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.drag-tip.ok { border-color: var(--ok); color: var(--ok); }
+.drag-tip.bad { border-color: var(--bad); color: #ff8585; }

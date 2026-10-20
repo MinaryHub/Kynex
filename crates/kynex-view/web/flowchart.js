@@ -2,7 +2,8 @@
 // buffer, conveyor, sink — a box, in columns by how far down the flow it
 // is, an arrow for each link. Links are made by dragging from a box's dot
 // (●) onto another box, and undone with the ✕ on an arrow; a box clicked
-// selects its equipment.
+// selects its equipment. A right click on a box or an arrow opens the
+// same menu as in the 3D view.
 
 const KIND = {
   source: ['소재 공급', '#f2a33c'],
@@ -38,6 +39,7 @@ export class FlowChart {
     this.nodes = [];
     box.addEventListener('pointerdown', (e) => this.down(e));
     box.addEventListener('click', (e) => this.click(e));
+    box.addEventListener('contextmenu', (e) => this.menu(e));
   }
 
   // The flow's pieces of `components`, laid out in columns: each one
@@ -104,7 +106,7 @@ export class FlowChart {
           const d = `M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}`;
           // Its middle, for the ✕ that undoes it.
           const [mx, my] = [(x1 + x2) / 2, (y1 + y2) / 2];
-          return `<g class="fc-edge"><path d="${d}" class="fc-line" marker-end="url(#fc-arrow)"/><path d="${d}" class="fc-hit"/>
+          return `<g class="fc-edge" data-from="${esc(n.c.object)}" data-to="${esc(to)}"><path d="${d}" class="fc-line" marker-end="url(#fc-arrow)"/><path d="${d}" class="fc-hit"/>
             <g class="fc-cut" data-from="${esc(n.c.object)}" data-to="${esc(to)}" transform="translate(${mx},${my})"><title>연결 끊기</title><circle r="8"/><path d="M-3,-3 L3,3 M3,-3 L-3,3"/></g></g>`;
         }),
       )
@@ -125,7 +127,7 @@ export class FlowChart {
           ${dot}</g>`;
       })
       .join('');
-    this.box.innerHTML = `<p class="fc-hint muted">오른쪽 점(●)을 끌어 다음 공정 상자에 놓으면 연결 · 화살표의 ✕로 끊기 · 상자를 누르면 설비 선택</p>
+    this.box.innerHTML = `<p class="fc-hint muted">오른쪽 점(●)을 끌어 다음 공정 상자에 놓으면 연결 · 화살표의 ✕로 끊기 · 상자를 누르면 설비 선택 · 오른쪽 클릭: 연결 메뉴</p>
       <svg class="fc-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
         <defs><marker id="fc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="fc-head"/></marker></defs>
         ${edges}${boxes}<path class="fc-drag" hidden/></svg>`;
@@ -166,6 +168,19 @@ export class FlowChart {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+  }
+
+  // A right click: on a box, its equipment's menu; on an arrow, the link's.
+  menu(e) {
+    if (!this.ctx.showMenu) return;
+    const edge = e.target.closest('.fc-edge');
+    const node = e.target.closest('[data-node]');
+    if (!edge && !node) return;
+    e.preventDefault();
+    const entries = edge
+      ? this.ctx.linkMenu?.({ from: edge.dataset.from, to: edge.dataset.to })
+      : this.ctx.equipmentMenu?.(node.dataset.node);
+    if (entries) this.ctx.showMenu(e.clientX, e.clientY, entries);
   }
 
   click(e) {

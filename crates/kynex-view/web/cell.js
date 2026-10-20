@@ -1111,7 +1111,7 @@ export class CellPanel {
       if (!a || !this.sends(c.object)) continue;
       const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dotTexture(), depthTest: false, transparent: true }));
       dot.material.sizeAttenuation = false;
-      dot.scale.set(0.022, 0.022, 1);
+      dot.scale.set(0.016, 0.016, 1);
       dot.position.set(a[0], a[1], a[2] + 0.45);
       dot.renderOrder = 11;
       dot.userData.handle = c.object;

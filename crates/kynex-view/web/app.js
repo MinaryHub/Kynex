@@ -60,13 +60,45 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 // Brisk: the view stops soon after the pointer does, rather than gliding on.
 controls.dampingFactor = 0.25;
-// Toward what is under the pointer, not the middle of the view: on a big
-// floor, one wheel goes where one is looking.
-controls.zoomToCursor = true;
 controls.zoomSpeed = 1.6;
 controls.panSpeed = 1.3;
 controls.screenSpacePanning = true;
 controls.target.set(0, 0, 0.4);
+// The wheel: toward what is under the pointer — the equipment there, or
+// the floor —, the view and what it turns about drawn in to it together,
+// so that what the view turns and pans about is what is looked at, and
+// they go as far as it is near. Never nearer to it than this, metres (set
+// by the scene's size in fitShadows); never through it.
+controls.minDistance = 0.3;
+const floorPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    // The orbit's own zoom does not see it.
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const r = canvas.getBoundingClientRect();
+    const toward = new THREE.Raycaster();
+    toward.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+    // The nearer of what is there and the floor; else as far as the view
+    // is from what it turns about.
+    const hit = batch.mesh && toward.intersectObject(batch.mesh, false)[0];
+    const floor = toward.ray.intersectPlane(floorPlane, new THREE.Vector3());
+    const candidates = [hit?.point, floor].filter((p) => p && p.distanceTo(camera.position) > 1e-6);
+    candidates.sort((a, b) => a.distanceTo(camera.position) - b.distanceTo(camera.position));
+    const at = candidates[0] ?? toward.ray.at(camera.position.distanceTo(controls.target), new THREE.Vector3());
+    // A notch in, an eighth nearer; out, as much further.
+    const notches = THREE.MathUtils.clamp(e.deltaY / 100, -3, 3);
+    let scale = Math.pow(1.14, notches);
+    const far = camera.position.distanceTo(at);
+    if (far * scale < controls.minDistance) scale = controls.minDistance / far;
+    if (far * scale > camera.far * 0.6) scale = (camera.far * 0.6) / far;
+    if (Math.abs(scale - 1) < 1e-4) return;
+    camera.position.sub(at).multiplyScalar(scale).add(at);
+    controls.target.sub(at).multiplyScalar(scale).add(at);
+  },
+  { capture: true, passive: false },
+);
 
 const hemi = new THREE.HemisphereLight(0xe8eef7, 0x30343b, 1.6);
 hemi.position.set(0, 0, 1);
@@ -1297,6 +1329,9 @@ function fitShadows() {
   const box = bounds(null);
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   const r = Math.max(sphere.radius * 1.4, 1);
+  // The nearest the view comes to what it looks at: a two-hundredth of the
+  // scene, between 0.3 m (a cell's parts) and 1 m (a plant).
+  controls.minDistance = THREE.MathUtils.clamp(sphere.radius * 0.005, 0.3, 1);
   const cam = sun.shadow.camera;
   cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
   cam.near = 0.1; cam.far = r * 6;

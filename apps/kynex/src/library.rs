@@ -726,6 +726,91 @@ pub const TEMPLATES: &[Template] = &[
         group: "자동차 공장",
         params: &[p("length", "길이", 6.0, 3.0, 12.0)],
     },
+    // An oil refinery's equipment (`refinery`).
+    Template {
+        key: "storage_tank",
+        name: "저장 탱크 (부상 지붕)",
+        group: "정유 공장",
+        params: &[
+            p("diameter", "지름", 30.0, 5.0, 80.0),
+            p("height", "높이", 15.0, 4.0, 30.0),
+        ],
+    },
+    Template {
+        key: "distillation_column",
+        name: "증류탑",
+        group: "정유 공장",
+        params: &[
+            p("diameter", "지름", 5.0, 1.0, 12.0),
+            p("height", "높이", 45.0, 10.0, 90.0),
+        ],
+    },
+    Template {
+        key: "fired_heater",
+        name: "가열로",
+        group: "정유 공장",
+        params: &[
+            p("length", "길이", 18.0, 5.0, 40.0),
+            p("width", "폭", 9.0, 4.0, 20.0),
+            p("height", "높이", 16.0, 6.0, 40.0),
+        ],
+    },
+    Template {
+        key: "reactor",
+        name: "반응기",
+        group: "정유 공장",
+        params: &[
+            p("diameter", "지름", 4.0, 1.0, 10.0),
+            p("height", "높이", 18.0, 4.0, 50.0),
+        ],
+    },
+    Template {
+        key: "horizontal_vessel",
+        name: "수평 압력 용기 (탈염기·드럼)",
+        group: "정유 공장",
+        params: &[
+            p("diameter", "지름", 3.5, 1.0, 8.0),
+            p("length", "길이", 16.0, 3.0, 40.0),
+        ],
+    },
+    Template {
+        key: "fcc_unit",
+        name: "유동 접촉 분해 (FCC) 장치",
+        group: "정유 공장",
+        params: &[],
+    },
+    Template {
+        key: "air_cooler",
+        name: "공랭식 냉각기",
+        group: "정유 공장",
+        params: &[
+            p("length", "길이", 24.0, 6.0, 80.0),
+            p("width", "폭", 8.0, 3.0, 20.0),
+            p("height", "높이", 9.0, 4.0, 20.0),
+        ],
+    },
+    Template {
+        key: "lpg_sphere",
+        name: "구형 저장 탱크 (LPG)",
+        group: "정유 공장",
+        params: &[p("diameter", "지름", 16.0, 5.0, 30.0)],
+    },
+    Template {
+        key: "flare_stack",
+        name: "플레어 스택",
+        group: "정유 공장",
+        params: &[p("height", "높이", 80.0, 20.0, 150.0)],
+    },
+    Template {
+        key: "control_room",
+        name: "중앙 제어실",
+        group: "정유 공장",
+        params: &[
+            p("length", "길이", 30.0, 5.0, 80.0),
+            p("width", "폭", 15.0, 4.0, 40.0),
+            p("height", "높이", 6.0, 3.0, 15.0),
+        ],
+    },
     // A beverage plant's own equipment (`beverage`).
     Template {
         key: "blow_molder",
@@ -2601,6 +2686,7 @@ fn build(item: &Item) -> Result<Built, String> {
         key if interior::KEYS.contains(&key) => interior::build(&mut doc, item),
         key if automotive::KEYS.contains(&key) => automotive::build(&mut doc, item),
         key if beverage::KEYS.contains(&key) => beverage::build(&mut doc, item),
+        key if refinery::KEYS.contains(&key) => refinery::build(&mut doc, item),
         key if display::KEYS.contains(&key) => display::build(&mut doc, item),
         key if semiconductor::KEYS.contains(&key) => semiconductor::build(&mut doc, item),
         other => return Err(format!("no template {other:?}")),
@@ -3206,10 +3292,12 @@ mod tests;
 mod automotive;
 mod beverage;
 mod display;
+mod refinery;
 mod semiconductor;
 pub(crate) use automotive::car_look;
 pub(crate) use beverage::beverage_look;
 pub(crate) use display::display_look;
+pub(crate) use refinery::lot_look;
 pub(crate) use semiconductor::semi_look;
 
 /// A flow part's look drawn as meshes: one for each colour of it, with the

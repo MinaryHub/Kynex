@@ -46,6 +46,11 @@ pub const DEMOS: &[Demo] = &[
         file: include_str!("../demos/beverage_plant.json"),
     },
     Demo {
+        name: "정유 공장",
+        about: "원유 12만 배럴/일: 탈염·상압·감압 증류, 개질·수첨, FCC, 원유·제품 탱크, 플레어",
+        file: include_str!("../demos/refinery.json"),
+    },
+    Demo {
         name: "반도체 공장",
         about: "FOUP와 천장 반송(OHT), 6개 층 전공정, EDS와 후공정 패키징",
         file: include_str!("../demos/semiconductor_fab.json"),
@@ -170,9 +175,13 @@ pub fn copy(demo: &Demo, dir: &Path) -> Result<PathBuf, String> {
     Ok(file)
 }
 
-/// The beverage plant demo's maker (see `demos/beverage.rs`).
+/// The demos' makers (see `demos/`), and what they are built with.
 #[cfg(test)]
 mod beverage;
+#[cfg(test)]
+mod build;
+#[cfg(test)]
+mod refinery;
 
 #[cfg(test)]
 mod tests {

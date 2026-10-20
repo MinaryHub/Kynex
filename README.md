@@ -475,7 +475,7 @@ the computer KYNEX runs on can make, open or save projects.
 **예제 (demos).** Under the projects, the panel lists the demo projects
 that come with KYNEX, built into it (`apps/kynex/demos`, `demos.rs`), so
 every build and installer has them: 성능 데모 공장, 공장 내부 전시, 대규모
-물류 창고, 자동차 공장, LCD 공장, 음료 공장, 반도체 공장 — each with its
+물류 창고, 자동차 공장, LCD 공장, 음료 공장, 정유 공장, 반도체 공장 — each with its
 process flow and its scenarios to compare. One clicked is copied into the projects
 folder under its name and opened; what is changed is saved to the copy.
 Opened again, it is another copy (`자동차 공장 2`, …), never over a project
@@ -500,6 +500,24 @@ accumulation table, faster fillers, blow moulders breaking down more
 often, and one filler alone, to see what the second is worth. It is built by `apps/kynex/src/demos/beverage.rs`
 (`cargo test -p kynex --release -- --ignored make_beverage_plant`), its
 equipment in the library's 음료 공장 group (`library/beverage.rs`).
+
+**정유 공장** is a refinery of 120,000 barrels of crude a day, its flow
+counted in lots of 1,000 barrels: crude unloaded at the jetty into three
+tanks, desalted, and distilled in the crude unit into four cuts, one to
+each unit after it — naphtha hydrotreated and reformed to petrol,
+kerosene hydrotreated to jet fuel, gas oil hydrotreated to diesel, and
+the residue distilled again under vacuum, its gas oil cracked in the FCC
+to petrol and its residue sent to the heavy fuel oil tank. The crude unit
+is the refinery's heart and sets its pace; every unit after it is sized
+5–15 % above the cut it is given, after its breakdowns. A lot is drawn as
+an ISO tank container in its oil's colour. Six scenarios: 10 % more
+crude (and what then holds it back), the FCC breaking down more often, a
+bigger reformer, both, and a tanker late. The library's 정유 공장 group
+has its equipment (`library/refinery.rs`): floating-roof tanks,
+distillation columns, fired heaters, reactors, horizontal vessels, the
+FCC, air coolers, LPG spheres, the flare stack and the control room. It
+is built by `apps/kynex/src/demos/refinery.rs`; both plants are checked
+for equipment running into each other.
 
 **기능별 샘플.** Below the demos, eleven small samples, each showing one
 thing KYNEX does and marked 초급, 중급 or 전문가: a line on a site plan, a

@@ -45,12 +45,18 @@ pub const LOOKS: &[&str] = &[
     "라벨 병",
     "수축 포장 팩",
     "음료 팔레트",
+    "원유 로트",
+    "증류 유분 로트",
+    "휘발유 로트",
+    "항공유 로트",
+    "경유 로트",
+    "중질유 로트",
 ];
 
 /// How far apart parts of each look stand in line at a station, and the
 /// lanes they stand in in a store, metres. A part of the first look is set
 /// out on its station's table instead.
-const LOOK_PITCH: [(f64, f64); 17] = [
+const LOOK_PITCH: [(f64, f64); 23] = [
     (0.0, 0.0),
     (5.2, 2.6),
     (5.2, 2.6),
@@ -68,13 +74,19 @@ const LOOK_PITCH: [(f64, f64); 17] = [
     (0.45, 0.32),
     (0.43, 0.3),
     (1.3, 1.1),
+    (6.6, 3.0),
+    (6.6, 3.0),
+    (6.6, 3.0),
+    (6.6, 3.0),
+    (6.6, 3.0),
+    (6.6, 3.0),
 ];
 
 /// How far apart parts of each look are stacked one over another in a store,
 /// metres, and how many to a stack — sheets and panels twenty high, cassettes
 /// five on a stocker's shelves, FOUPs four, wafers twenty-five, trays ten;
 /// none for a car body, which stands in lanes.
-const LOOK_STACK: [(f64, usize); 17] = [
+const LOOK_STACK: [(f64, usize); 23] = [
     (0.0, 1),
     (0.0, 1),
     (0.0, 1),
@@ -92,6 +104,12 @@ const LOOK_STACK: [(f64, usize); 17] = [
     (0.0, 1),
     (0.27, 4),
     (0.0, 1),
+    (2.5, 3),
+    (2.5, 3),
+    (2.5, 3),
+    (2.5, 3),
+    (2.5, 3),
+    (2.5, 3),
 ];
 
 /// How high a sheet is lifted to go between a tool and a stocker, metres:
@@ -124,6 +142,8 @@ fn look_key(p: &Part) -> usize {
         look @ 8..=10 => return CRANE_LOOK + 1 + (look as usize - 8),
         // A beverage line's: a tray, a pack, a pallet.
         look @ 11..=16 => return HOIST_LOOK + 1 + (look as usize - 11),
+        // A refinery's: a lot of oil in its tank container.
+        look @ 17..=22 => return HOIST_LOOK + 7 + (look as usize - 17),
         _ => {}
     }
     match p.look as usize {
@@ -154,6 +174,7 @@ fn look_meshes() -> &'static Vec<crate::library::LookMeshes> {
                 [crate::library::semi_look(0), hoist_look().clone()].concat(),
             ))
             .chain((0..6).map(crate::library::beverage_look))
+            .chain((0..6).map(crate::library::lot_look))
             .collect()
     })
 }

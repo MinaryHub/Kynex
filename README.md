@@ -486,14 +486,18 @@ one in `apps/kynex/demos`.
 
 **음료 공장** is a PET bottling line for 24,000 bottles an hour, its flow
 counted in trays of 24: preforms blown to bottles, rinsed, filled and
-capped (the filler the slowest, 3.6 s a tray, as a line is laid out),
-inspected, labelled, gathered on the accumulation table, shrink-wrapped
-in packs, palletised sixty packs to a pallet, wrapped, and taken by two
-AMRs to the warehouse; the syrup room's tanks beside it. Each part is
-drawn as it is at its stage — a tray of preforms, of bottles, a pack, a
-pallet. Six scenarios: a faster filler, fewer labeller breakdowns, a
-bigger accumulation table, both, and a blow moulder breaking down more
-often. It is built by `apps/kynex/src/demos/beverage.rs`
+capped, inspected, labelled, gathered on the accumulation table,
+shrink-wrapped in packs, palletised sixty packs to a pallet, wrapped, and
+taken by two AMRs to the warehouse; the syrup room's tanks beside it. The
+line is balanced: where one machine would hold it back, two stand side
+by side — two blow moulders, two fillers, two labellers —, the fillers
+the slowest by a little (the line's heart) and the rest 10–15 % faster
+after their breakdowns, so each machine is at work 75–90 % of the time.
+No two pieces of equipment run into each other (a test checks it). Each
+part is drawn as it is at its stage — a tray of preforms, of bottles, a
+pack, a pallet. Six scenarios: fewer labeller breakdowns, a bigger
+accumulation table, faster fillers, blow moulders breaking down more
+often, and one filler alone, to see what the second is worth. It is built by `apps/kynex/src/demos/beverage.rs`
 (`cargo test -p kynex --release -- --ignored make_beverage_plant`), its
 equipment in the library's 음료 공장 group (`library/beverage.rs`).
 

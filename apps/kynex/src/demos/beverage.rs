@@ -232,7 +232,10 @@ fn lay_out() -> Plant {
         0.0,
     );
 
-    // The line, down +X along y = 0, conveyors' tops 1.1 m up.
+    // The line, down +X along y = 0, conveyors' tops 1.1 m up. Where one
+    // machine would hold the line back, two stand side by side, either side
+    // of the main conveyor, short conveyors across to each; the main
+    // conveyor stops short of each machine in line with it.
     let conveyor = |p: &mut Plant, name: &str, from: f64, to: f64| {
         p.place(
             "bottle_conveyor",
@@ -243,10 +246,23 @@ fn lay_out() -> Plant {
             2000.0,
         );
     };
+    // A conveyor across, at `x`, from the main conveyor's side to `to`
+    // (y), its length along Y.
+    let across = |p: &mut Plant, name: &str, x: f64, to: f64| {
+        let from = 0.3 * to.signum();
+        p.place(
+            "bottle_conveyor",
+            name,
+            [x, (from + to) / 2.0, 0.0],
+            half,
+            json!({"length": (to - from).abs(), "height": 1.1}),
+            1000.0,
+        );
+    };
     p.place(
         "pallet_load",
         "프리폼 옥타빈",
-        [-59.0, 2.5, 0.0],
+        [-61.0, 3.0, 0.0],
         0.0,
         json!({}),
         0.0,
@@ -254,65 +270,82 @@ fn lay_out() -> Plant {
     p.place(
         "flow_source",
         "프리폼 공급",
-        [-55.0, 0.0, 0.0],
+        [-58.5, 0.0, 0.0],
         0.0,
-        json!({"feed": 3.0, "look": 11.0}),
-        0.0,
-    );
-    p.place(
-        "blow_molder",
-        "블로 성형기",
-        [-48.0, 0.0, 0.0],
-        0.0,
-        json!({}),
-        150000.0,
-    );
-    conveyor(&mut p, "에어 컨베이어", -44.5, -30.2);
-    p.place(
-        "flow_station",
-        "블로 성형",
-        [-43.8, 0.0, 0.2],
-        0.0,
-        json!({"cycle": 3.2, "look": 12.0}),
+        json!({"feed": 2.8, "look": 11.0}),
         0.0,
     );
+    conveyor(&mut p, "메인 컨베이어 1 (에어)", -57.0, -26.0);
+    conveyor(&mut p, "메인 컨베이어 2", -25.8, 4.8);
+    // Two blow moulders, 15,400 bottles an hour each.
+    for (k, y) in [(1, 3.4), (2, -3.4)] {
+        p.place(
+            "blow_molder",
+            &format!("블로 성형기 {k}"),
+            [-51.0, y, 0.0],
+            0.0,
+            json!({}),
+            90000.0,
+        );
+        p.place(
+            "flow_station",
+            &format!("블로 성형 {k}"),
+            [-51.0, y, 0.0],
+            0.0,
+            json!({"cycle": 5.6, "look": 12.0}),
+            0.0,
+        );
+        across(
+            &mut p,
+            &format!("블로 성형기 {k} 배출"),
+            -47.3,
+            y - 1.75 * y.signum(),
+        );
+    }
     p.place(
         "flow_buffer",
         "에어 컨베이어 축적",
-        [-37.0, 0.0, 0.5],
+        [-40.0, 0.0, 0.5],
         0.0,
         json!({"capacity": 40.0}),
         0.0,
     );
-    p.place(
-        "filler_capper",
-        "세척·충전·캡핑 모노블록",
-        [-27.0, 0.0, 0.0],
-        0.0,
-        json!({}),
-        300000.0,
-    );
-    p.place(
-        "flow_station",
-        "세척·충전·캡핑",
-        [-27.0, 0.0, 0.0],
-        0.0,
-        json!({"cycle": 3.6, "look": 13.0}),
-        0.0,
-    );
-    p.place(
-        "control_panel",
-        "충전기 제어반",
-        [-31.0, -3.2, 0.0],
-        0.0,
-        json!({"width": 1.2}),
-        0.0,
-    );
-    conveyor(&mut p, "충전 후 컨베이어", -24.0, -12.5);
+    // Two fillers, 13,500 bottles an hour each: the line's heart, the
+    // slowest of its machines by a little.
+    for (k, y) in [(1, 3.4), (2, -3.4)] {
+        p.place(
+            "filler_capper",
+            &format!("세척·충전·캡핑 모노블록 {k}"),
+            [-31.0, y, 0.0],
+            0.0,
+            json!({}),
+            180000.0,
+        );
+        p.place(
+            "flow_station",
+            &format!("세척·충전·캡핑 {k}"),
+            [-31.0, y, 0.0],
+            0.0,
+            json!({"cycle": 6.4, "look": 13.0}),
+            0.0,
+        );
+        across(
+            &mut p,
+            &format!("충전기 {k} 투입"),
+            -35.5,
+            y - 2.25 * y.signum(),
+        );
+        across(
+            &mut p,
+            &format!("충전기 {k} 배출"),
+            -27.4,
+            y - 2.25 * y.signum(),
+        );
+    }
     p.place(
         "bottle_inspector",
         "액면·캡 검사기",
-        [-20.0, 0.0, 0.0],
+        [-21.0, 0.0, 0.0],
         0.0,
         json!({}),
         20000.0,
@@ -320,32 +353,46 @@ fn lay_out() -> Plant {
     p.place(
         "flow_station",
         "액면·캡 검사",
-        [-20.0, 0.0, 0.2],
+        [-21.0, 0.0, 0.2],
         0.0,
         json!({"cycle": 3.0, "look": 13.0}),
         0.0,
     );
-    p.place(
-        "labeler",
-        "라벨러",
-        [-11.0, 0.0, 0.0],
-        0.0,
-        json!({}),
-        50000.0,
-    );
-    p.place(
-        "flow_station",
-        "라벨링",
-        [-11.0, 0.0, 0.0],
-        0.0,
-        json!({"cycle": 3.4, "look": 14.0}),
-        0.0,
-    );
-    conveyor(&mut p, "축적 테이블", -9.5, 7.0);
+    // Two labellers.
+    for (k, y) in [(1, 2.6), (2, -2.6)] {
+        p.place(
+            "labeler",
+            &format!("라벨러 {k}"),
+            [-14.0, y, 0.0],
+            0.0,
+            json!({}),
+            30000.0,
+        );
+        p.place(
+            "flow_station",
+            &format!("라벨링 {k}"),
+            [-14.0, y, 0.0],
+            0.0,
+            json!({"cycle": 6.0, "look": 14.0}),
+            0.0,
+        );
+        across(
+            &mut p,
+            &format!("라벨러 {k} 투입"),
+            -16.8,
+            y - 1.55 * y.signum(),
+        );
+        across(
+            &mut p,
+            &format!("라벨러 {k} 배출"),
+            -12.2,
+            y - 1.55 * y.signum(),
+        );
+    }
     p.place(
         "flow_buffer",
         "축적 테이블 축적",
-        [-1.0, 0.0, 0.5],
+        [-4.0, 0.0, 0.5],
         0.0,
         json!({"capacity": 80.0}),
         0.0,
@@ -353,7 +400,7 @@ fn lay_out() -> Plant {
     p.place(
         "shrink_wrapper",
         "수축 포장기",
-        [11.0, 0.0, 0.0],
+        [9.0, 0.0, 0.0],
         0.0,
         json!({"length": 8.0}),
         40000.0,
@@ -361,16 +408,16 @@ fn lay_out() -> Plant {
     p.place(
         "flow_station",
         "수축 포장",
-        [11.0, 0.0, 0.0],
+        [9.0, 0.0, 0.0],
         0.0,
-        json!({"cycle": 3.3, "look": 15.0}),
+        json!({"cycle": 3.0, "look": 15.0}),
         0.0,
     );
-    conveyor(&mut p, "팩 컨베이어", 15.0, 20.6);
+    conveyor(&mut p, "팩 컨베이어", 13.2, 18.2);
     p.place(
         "palletizer",
         "팔레타이저",
-        [23.0, 0.0, 0.0],
+        [21.0, 0.0, 0.0],
         0.0,
         json!({}),
         45000.0,
@@ -378,7 +425,7 @@ fn lay_out() -> Plant {
     p.place(
         "flow_station",
         "팔레타이징",
-        [24.2, 0.0, 0.15],
+        [22.2, 0.0, 0.15],
         0.0,
         json!({"cycle": 60.0, "takes": 60.0, "look": 16.0, "base": 1.0}),
         0.0,
@@ -386,7 +433,7 @@ fn lay_out() -> Plant {
     p.place(
         "stretch_wrapper",
         "팔레트 랩핑기",
-        [31.0, 0.0, 0.0],
+        [27.5, 0.0, 0.0],
         0.0,
         json!({}),
         8000.0,
@@ -394,7 +441,7 @@ fn lay_out() -> Plant {
     p.place(
         "flow_station",
         "팔레트 랩핑",
-        [31.0, 0.0, 0.12],
+        [27.5, 0.0, 0.12],
         0.0,
         json!({"cycle": 60.0, "look": 16.0, "base": 1.0}),
         0.0,
@@ -404,7 +451,7 @@ fn lay_out() -> Plant {
     p.place(
         "amr_stop",
         "랩핑기 정지 위치",
-        [31.0, -3.5, 0.0],
+        [27.5, -3.5, 0.0],
         0.0,
         json!({}),
         0.0,
@@ -489,44 +536,47 @@ fn build() -> (Vec<Value>, Vec<Value>) {
             json!({"op": "role", "object": o(name), "kind": kind, "props": props}),
         );
     };
-    // Each machine's time a tray of 24 takes, seconds: the filler the
-    // slowest, at 3.6 s — 24,000 bottles an hour —, the rest faster, as a
-    // line is laid out (a V); its breakdowns and its scrap.
+    // Each machine's time a tray of 24 takes, seconds, and how many stand
+    // side by side: the line balanced on 1,000 trays an hour (24,000
+    // bottles), after each machine's breakdowns — the two fillers just
+    // above it, the rest 10–15 % more, as a line is laid out (a V).
     role(
         &mut cell,
         "프리폼 공급",
         "source",
-        json!({"feed": 3.0, "look": 11, "speed": 2.0}),
+        json!({"feed": 2.8, "look": 11, "speed": 2.0, "rule": 1}),
     );
-    role(
-        &mut cell,
-        "블로 성형",
-        "station",
-        json!({"cycle": 3.2, "look": 12, "capacity": 6, "speed": 2.0, "mtbf": 7200.0, "mttr": 360.0, "scrap": 0.003}),
-    );
+    for k in [1, 2] {
+        role(
+            &mut cell,
+            &format!("블로 성형 {k}"),
+            "station",
+            json!({"cycle": 5.6, "look": 12, "capacity": 6, "speed": 2.0, "mtbf": 7200.0, "mttr": 360.0, "scrap": 0.003}),
+        );
+        role(
+            &mut cell,
+            &format!("세척·충전·캡핑 {k}"),
+            "station",
+            json!({"cycle": 6.4, "look": 13, "capacity": 6, "speed": 2.0, "mtbf": 5400.0, "mttr": 600.0}),
+        );
+        role(
+            &mut cell,
+            &format!("라벨링 {k}"),
+            "station",
+            json!({"cycle": 6.0, "look": 14, "capacity": 6, "speed": 2.0, "mtbf": 3600.0, "mttr": 300.0}),
+        );
+    }
     role(
         &mut cell,
         "에어 컨베이어 축적",
         "buffer",
-        json!({"capacity": 40, "speed": 2.0}),
-    );
-    role(
-        &mut cell,
-        "세척·충전·캡핑",
-        "station",
-        json!({"cycle": 3.6, "look": 13, "capacity": 6, "speed": 2.0, "mtbf": 5400.0, "mttr": 600.0}),
+        json!({"capacity": 40, "speed": 2.0, "rule": 1}),
     );
     role(
         &mut cell,
         "액면·캡 검사",
         "station",
-        json!({"cycle": 3.0, "look": 13, "capacity": 6, "speed": 2.0, "scrap": 0.005}),
-    );
-    role(
-        &mut cell,
-        "라벨링",
-        "station",
-        json!({"cycle": 3.4, "look": 14, "capacity": 6, "speed": 2.0, "mtbf": 3600.0, "mttr": 300.0}),
+        json!({"cycle": 3.0, "look": 13, "capacity": 6, "speed": 2.0, "scrap": 0.005, "rule": 1}),
     );
     role(
         &mut cell,
@@ -538,7 +588,7 @@ fn build() -> (Vec<Value>, Vec<Value>) {
         &mut cell,
         "수축 포장",
         "station",
-        json!({"cycle": 3.3, "look": 15, "capacity": 6, "speed": 2.0, "mtbf": 7200.0, "mttr": 300.0}),
+        json!({"cycle": 3.0, "look": 15, "capacity": 6, "speed": 2.0, "mtbf": 7200.0, "mttr": 300.0}),
     );
     // Sixty packs to a pallet, five layers of twelve: they wait for it in
     // its queue.
@@ -555,25 +605,30 @@ fn build() -> (Vec<Value>, Vec<Value>) {
         json!({"cycle": 60.0, "look": 16, "capacity": 1, "carrier": 1}),
     );
     role(&mut cell, "AMR 충전소", "amr_stop", json!({"charger": 1}));
-    let chain = [
-        "프리폼 공급",
-        "블로 성형",
-        "에어 컨베이어 축적",
-        "세척·충전·캡핑",
-        "액면·캡 검사",
-        "라벨링",
-        "축적 테이블 축적",
-        "수축 포장",
-        "팔레타이징",
-        "팔레트 랩핑",
-        "완제품 창고",
+    // Each stage to the next: one to both of a pair (the one with fewer
+    // waiting), both of a pair to the one after.
+    let stages: [&[&str]; 11] = [
+        &["프리폼 공급"],
+        &["블로 성형 1", "블로 성형 2"],
+        &["에어 컨베이어 축적"],
+        &["세척·충전·캡핑 1", "세척·충전·캡핑 2"],
+        &["액면·캡 검사"],
+        &["라벨링 1", "라벨링 2"],
+        &["축적 테이블 축적"],
+        &["수축 포장"],
+        &["팔레타이징"],
+        &["팔레트 랩핑"],
+        &["완제품 창고"],
     ];
-    for w in chain.windows(2) {
-        ask(
-            &mut cell,
-            &doc,
-            json!({"op": "flow_next", "object": o(w[0]), "next": [o(w[1])]}),
-        );
+    for w in stages.windows(2) {
+        let next: Vec<String> = w[1].iter().map(|n| o(n)).collect();
+        for from in w[0] {
+            ask(
+                &mut cell,
+                &doc,
+                json!({"op": "flow_next", "object": o(from), "next": next}),
+            );
+        }
     }
     // The AMRs' lanes: the wrapper, the warehouse and the charger, each to
     // each.
@@ -618,34 +673,45 @@ fn make_beverage_plant() {
     let snap = |name: &str, cell: Vec<Value>| {
         crate::scenario::snapshot(name, Vec::new(), cell, library.clone())
     };
+    let both = |name: &str, props: Value| -> Vec<(String, Value)> {
+        vec![
+            (format!("{name} 1"), props.clone()),
+            (format!("{name} 2"), props),
+        ]
+    };
+    let with = |changes: Vec<(String, Value)>| {
+        let refs: Vec<(&str, Value)> = changes
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.clone()))
+            .collect();
+        changed(&cell, &refs)
+    };
+    // The fillers' pair undone: all goes to the first.
+    let mut one_filler = cell.clone();
+    for r in one_filler.iter_mut() {
+        if r["name"] == "에어 컨베이어 축적" {
+            r["next"] = json!([r["next"][0].clone()]);
+        }
+    }
     let scenarios = vec![
-        snap("1. 기준 (설계 24,000병/시)", cell.clone()),
+        snap("1. 기준 (병렬 균형 배치, 24,000병/시)", cell.clone()),
         snap(
-            "2. 충전기 속도 향상 (3.6초→3.2초)",
-            changed(&cell, &[("세척·충전·캡핑", json!({"cycle": 3.2}))]),
+            "2. 라벨러 고장 감소 (MTBF 1시간→4시간)",
+            with(both("라벨링", json!({"mtbf": 14400.0}))),
         ),
         snap(
-            "3. 라벨러 고장 감소 (MTBF 1시간→4시간)",
-            changed(&cell, &[("라벨링", json!({"mtbf": 14400.0}))]),
-        ),
-        snap(
-            "4. 축적 테이블 확대 (80→200 트레이)",
+            "3. 축적 테이블 확대 (80→200 트레이)",
             changed(&cell, &[("축적 테이블 축적", json!({"capacity": 200}))]),
         ),
         snap(
-            "5. 충전기 + 라벨러 개선",
-            changed(
-                &cell,
-                &[
-                    ("세척·충전·캡핑", json!({"cycle": 3.2})),
-                    ("라벨링", json!({"mtbf": 14400.0})),
-                ],
-            ),
+            "4. 충전기 속도 향상 (6.4초→5.8초)",
+            with(both("세척·충전·캡핑", json!({"cycle": 5.8}))),
         ),
         snap(
-            "6. 블로 성형기 고장 증가 (MTBF 2시간→30분)",
-            changed(&cell, &[("블로 성형", json!({"mtbf": 1800.0}))]),
+            "5. 블로 성형기 고장 증가 (MTBF 2시간→30분)",
+            with(both("블로 성형", json!({"mtbf": 1800.0}))),
         ),
+        snap("6. 충전기 1대만 운전 (병렬 효과 확인)", one_filler),
     ];
     // How each does over two hours, to see the plant is as it is meant.
     for s in &scenarios {
@@ -688,5 +754,136 @@ fn compare_beverage_plant() {
             r["per_hour_ci"].as_f64().unwrap(),
             r["bottleneck"]
         );
+        // Each machine's share at work, to see the line balanced.
+        let lanes: Vec<String> = r["machine_lanes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| {
+                format!(
+                    "{} {:.0}%",
+                    l["name"].as_str().unwrap(),
+                    l["utilization"].as_f64().unwrap() * 100.0
+                )
+            })
+            .collect();
+        println!("    {}", lanes.join(", "));
     }
+}
+
+/// Each piece's box in the world, of an item as built.
+type Boxes = Vec<([f64; 3], [f64; 3])>;
+
+/// Each item's pieces' boxes, with its name and template.
+fn boxes(plant: &mut Plant) -> Vec<(String, String, Boxes)> {
+    let mut doc = Document::new();
+    plant.library.apply(&mut doc);
+    let items: Vec<(String, String, u64)> = plant
+        .library
+        .items()
+        .iter()
+        .map(|i| (i.name.clone(), i.template.clone(), i.root_uid()))
+        .collect();
+    items
+        .into_iter()
+        .filter_map(|(name, template, root)| {
+            let root = doc.object_by_uid(kreate_scene::Uid::from_raw(root))?;
+            let mut pieces = Vec::new();
+            for (o, x) in doc.objects() {
+                if o != root && !crate::cell::is_below(&doc, o, root) {
+                    continue;
+                }
+                let Some(mesh) = x.mesh().and_then(|m| doc.mesh(m)) else {
+                    continue;
+                };
+                let world = doc.world_transform(o);
+                let mut lo = [f64::INFINITY; 3];
+                let mut hi = [f64::NEG_INFINITY; 3];
+                for p in mesh.positions() {
+                    let w = world.transform_point3(p.as_dvec3());
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(w[k]);
+                        hi[k] = hi[k].max(w[k]);
+                    }
+                }
+                if lo[0] <= hi[0] {
+                    pieces.push((lo, hi));
+                }
+            }
+            Some((name, template, pieces))
+        })
+        .collect()
+}
+
+/// The pairs of the plant's equipment that run into each other: a piece of
+/// one and a piece of the other overlapping by more than 2 cm every way.
+/// Floor markings lie under everything; a flow's station, buffer, source
+/// or sink stands where its machine does, carrying its work; the
+/// building's walls, columns, doors and lights meet each other — none of
+/// these counts.
+fn clashes(plant: &mut Plant) -> Vec<String> {
+    let skip = |t: &str| {
+        matches!(
+            t,
+            "floor_zone"
+                | "flow_station"
+                | "flow_buffer"
+                | "flow_source"
+                | "flow_sink"
+                | "amr_stop"
+        )
+    };
+    let building = |t: &str| {
+        matches!(
+            t,
+            "factory_wall" | "factory_column" | "roll_door" | "ceiling_light"
+        )
+    };
+    let meet = |a: &([f64; 3], [f64; 3]), b: &([f64; 3], [f64; 3])| {
+        (0..3).all(|k| a.1[k].min(b.1[k]) - a.0[k].max(b.0[k]) > 0.02)
+    };
+    let all = boxes(plant);
+    let mut out = Vec::new();
+    for (i, a) in all.iter().enumerate() {
+        for b in &all[i + 1..] {
+            if skip(&a.1) || skip(&b.1) || (building(&a.1) && building(&b.1)) {
+                continue;
+            }
+            if a.2.iter().any(|x| b.2.iter().any(|y| meet(x, y))) {
+                out.push(format!("{} ↔ {}", a.0, b.0));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_beverage_plant_has_no_clashes() {
+    let found = clashes(&mut lay_out());
+    assert!(
+        found.is_empty(),
+        "{} clashes:\n{}",
+        found.len(),
+        found.join("\n")
+    );
+}
+
+/// The check finds a clash where there is one: a tank stood on a filler.
+#[test]
+fn a_tank_on_a_filler_is_a_clash() {
+    let mut plant = lay_out();
+    plant.place(
+        "process_tank",
+        "잘못 놓은 탱크",
+        [-31.0, 3.4, 0.0],
+        0.0,
+        json!({}),
+        0.0,
+    );
+    let found = clashes(&mut plant);
+    assert_eq!(
+        found,
+        vec!["세척·충전·캡핑 모노블록 1 ↔ 잘못 놓은 탱크"],
+        "{found:?}"
+    );
 }

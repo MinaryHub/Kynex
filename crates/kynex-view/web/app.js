@@ -79,9 +79,9 @@ sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
 
-// Ground: a shadow catcher, and a grid in metres with tenths faintly.
+// Ground: a shadow catcher, and a grid in metres.
 const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(200, 200),
+  new THREE.PlaneGeometry(4000, 4000),
   new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.28 }),
 );
 ground.receiveShadow = true;
@@ -92,24 +92,71 @@ ground.material.depthWrite = false;
 ground.position.z = -0.0005;
 scene.add(ground);
 
-const grid = new THREE.Group();
-function gridLines(size, step, color, opacity) {
-  const g = new THREE.GridHelper(size, Math.round(size / step), color, color);
-  g.rotation.x = Math.PI / 2;
-  g.material.transparent = true;
-  g.material.opacity = opacity;
-  g.material.depthWrite = false;
-  return g;
-}
-grid.add(gridLines(10, 0.1, 0x3a404a, 0.35));
-grid.add(gridLines(40, 1, 0x4a515c, 0.8));
-const axisLine = (to, color) => {
-  const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), to]);
-  return new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 }));
-};
-grid.add(axisLine(new THREE.Vector3(20, 0, 0), 0xd9534f));
-grid.add(axisLine(new THREE.Vector3(0, 20, 0), 0x5cb85c));
+// The grid: the whole floor to the horizon, its lines as far apart as the
+// view needs where they are — tenths of a metre close up, metres, tens,
+// hundreds further off —, each step fading in as the one below grows too
+// fine to see; every tenth line of a step stronger. The X axis red and the
+// Y axis green from the origin.
+const grid = new THREE.Mesh(
+  new THREE.PlaneGeometry(4000, 4000),
+  new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      uMinor: { value: new THREE.Color(0x3a404a) },
+      uMajor: { value: new THREE.Color(0x5a626e) },
+      uCamera: { value: new THREE.Vector3() },
+      uFar: { value: camera.far },
+    },
+    vertexShader: `
+      varying vec3 vWorld;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vWorld = w.xyz;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }`,
+    fragmentShader: `
+      uniform vec3 uMinor;
+      uniform vec3 uMajor;
+      uniform vec3 uCamera;
+      uniform float uFar;
+      varying vec3 vWorld;
+      // How much this point is on a line of a grid \`step\` apart: 1 on it,
+      // 0 a pixel or more off.
+      float lines(vec2 p, float step) {
+        vec2 c = p / step;
+        vec2 d = fwidth(c);
+        vec2 g = abs(fract(c - 0.5) - 0.5) / max(d, vec2(1e-6));
+        return 1.0 - min(min(g.x, g.y), 1.0);
+      }
+      void main() {
+        vec2 p = vWorld.xy;
+        vec2 fw = fwidth(p);
+        float px = max(fw.x, fw.y);
+        // The finest step at least ten pixels apart here, and how far it
+        // is on to the next: it fades out as it nears it.
+        float lg = log(max(px * 10.0, 1e-4)) / log(10.0);
+        float s0 = max(pow(10.0, floor(lg)), 0.1);
+        float t = s0 > 0.1 ? fract(lg) : 0.0;
+        float a0 = lines(p, s0) * 0.45 * (1.0 - t);
+        float a1 = lines(p, s0 * 10.0) * (0.45 + 0.35 * (1.0 - t));
+        float a2 = lines(p, s0 * 100.0) * 0.8;
+        float a = max(a0, max(a1, a2));
+        vec3 colour = mix(uMinor, uMajor, smoothstep(0.45, 0.8, a));
+        // The axes, from the origin out.
+        float ax = p.x >= 0.0 ? 1.0 - min(abs(p.y) / (fw.y * 1.5), 1.0) : 0.0;
+        float ay = p.y >= 0.0 ? 1.0 - min(abs(p.x) / (fw.x * 1.5), 1.0) : 0.0;
+        if (ax > 0.0 && ax >= ay) { colour = mix(colour, vec3(0.85, 0.33, 0.31), ax); a = max(a, ax * 0.9); }
+        if (ay > 0.0 && ay > ax) { colour = mix(colour, vec3(0.36, 0.72, 0.36), ay); a = max(a, ay * 0.9); }
+        // Fading out towards the horizon, so it has no edge.
+        a *= 1.0 - smoothstep(uFar * 0.35, uFar * 0.9, distance(vWorld, uCamera));
+        if (a < 0.01) discard;
+        gl_FragColor = vec4(colour, a);
+      }`,
+  }),
+);
 grid.renderOrder = -1;
+grid.frustumCulled = false;
 scene.add(grid);
 
 const content = new THREE.Group();
@@ -1699,6 +1746,7 @@ const _xm = new THREE.Matrix4();
 
 renderer.setAnimationLoop(() => {
   quietMarkers();
+  grid.material.uniforms.uCamera.value.copy(camera.position);
   updateXray(performance.now());
   if (flight) {
     const t = Math.min((performance.now() - flight.t0) / 420, 1);

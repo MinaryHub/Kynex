@@ -1006,7 +1006,7 @@ impl Item {
         self.roll == 0.0 && self.pitch == 0.0
     }
 
-    fn root_uid(&self) -> u64 {
+    pub(crate) fn root_uid(&self) -> u64 {
         EQUIPMENT + self.id * PER_ITEM
     }
 }

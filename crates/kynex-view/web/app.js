@@ -92,10 +92,10 @@ ground.material.depthWrite = false;
 ground.position.z = -0.0005;
 scene.add(ground);
 
-// The grid: the whole floor to the horizon, its lines as far apart as the
-// view needs where they are — tenths of a metre close up, metres, tens,
-// hundreds further off —, each step fading in as the one below grows too
-// fine to see; every tenth line of a step stronger. The X axis red and the
+// The grid: the whole floor to the horizon, one grid, its lines as far
+// apart as the view needs where they are — tenths of a metre close up,
+// metres, tens, hundreds further off —, the finer fading out as they grow
+// too close to see; every tenth line a little stronger. The X axis red and the
 // Y axis green from the origin.
 const grid = new THREE.Mesh(
   new THREE.PlaneGeometry(4000, 4000),
@@ -103,7 +103,6 @@ const grid = new THREE.Mesh(
     transparent: true,
     depthWrite: false,
     uniforms: {
-      uMinor: { value: new THREE.Color(0x3a404a) },
       uMajor: { value: new THREE.Color(0x5a626e) },
       uCamera: { value: new THREE.Vector3() },
       uFar: { value: camera.far },
@@ -116,7 +115,6 @@ const grid = new THREE.Mesh(
         gl_Position = projectionMatrix * viewMatrix * w;
       }`,
     fragmentShader: `
-      uniform vec3 uMinor;
       uniform vec3 uMajor;
       uniform vec3 uCamera;
       uniform float uFar;
@@ -138,11 +136,12 @@ const grid = new THREE.Mesh(
         float lg = log(max(px * 10.0, 1e-4)) / log(10.0);
         float s0 = max(pow(10.0, floor(lg)), 0.1);
         float t = s0 > 0.1 ? fract(lg) : 0.0;
-        float a0 = lines(p, s0) * 0.45 * (1.0 - t);
-        float a1 = lines(p, s0 * 10.0) * (0.45 + 0.35 * (1.0 - t));
-        float a2 = lines(p, s0 * 100.0) * 0.8;
-        float a = max(a0, max(a1, a2));
-        vec3 colour = mix(uMinor, uMajor, smoothstep(0.45, 0.8, a));
+        // One grid: its lines, every tenth a little stronger; the finer
+        // ones fading out as they close up, the tenths becoming the lines.
+        float a0 = lines(p, s0) * 0.32 * (1.0 - t);
+        float a1 = lines(p, s0 * 10.0) * (0.32 + 0.18 * (1.0 - t));
+        float a = max(a0, a1);
+        vec3 colour = uMajor;
         // The axes, from the origin out.
         float ax = p.x >= 0.0 ? 1.0 - min(abs(p.y) / (fw.y * 1.5), 1.0) : 0.0;
         float ay = p.y >= 0.0 ? 1.0 - min(abs(p.x) / (fw.x * 1.5), 1.0) : 0.0;

@@ -1078,6 +1078,14 @@ not change the session's scene.
     ⚠ 안 닿음, where its robot cannot reach an end. A project saved with
     the old 보내는 방법 on a piece has it given to each of that piece's
     links when it is opened.
+  - **물류 연결 모드** (the toolbar's cart, beside 공정 연결): the
+    links' carriers on their own. A bar over the view offers 로봇 (자동),
+    each robot by name, AMR, 작업자 and 직접; clicking a robot (or the
+    pedestal it stands on) in the view chooses it too. Clicking an arrow
+    gives it the carrier chosen; clicking a sender, then a receiver,
+    links them carried so. Arrows carried otherwise are drawn faint, and
+    those the chosen robot cannot reach say so. **공정 연결 모드** links
+    the pieces of the flow only, as before. Esc ends either.
   - **Link numbers**: each arrow is numbered by its step from the
     sources, 1, 2, 3. Where the way splits, each branch gets its own
     number after the step, 2-1 and 2-2, kept along that branch (3-1,

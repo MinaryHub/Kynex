@@ -1030,6 +1030,29 @@ function markerIn(uid, comps, kinds) {
   }
   return best;
 }
+// The robot among `uids` (an object and those above it): the robot itself,
+// or the one standing on it — a pedestal, a track — as the robot's mount
+// is what a click on the robot's foot often finds.
+function robotOf(uids) {
+  const direct = uids.find((u) => robots.some((r) => r.root === u));
+  if (direct != null) return direct;
+  let item = null;
+  try {
+    item = libraryPanel.itemOf(uids[0]);
+  } catch {}
+  if (!item || item.template.startsWith('flow_')) return null;
+  if (robots.some((r) => underOf(r.root, item.root))) return robots.find((r) => underOf(r.root, item.root)).root;
+  const box = bounds(item.root);
+  if (box.isEmpty()) return null;
+  const on = robots.find((r) => {
+    const rec = records.get(r.root);
+    if (!rec) return false;
+    const p = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(rec.matrix));
+    return p.x >= box.min.x - 0.05 && p.x <= box.max.x + 0.05 && p.y >= box.min.y - 0.05 && p.y <= box.max.y + 0.05 && Math.abs(p.z - box.max.z) < 0.15;
+  });
+  return on?.root ?? null;
+}
+
 // The placed equipment a piece of the flow could stand for: within 15 m of
 // it, the nearest first, and the one it stands for now wherever it is.
 function equipmentNear(uid, host) {
@@ -1059,7 +1082,7 @@ const cellPanel = new CellPanel({
   itemOf: (uid) => libraryPanel.itemOf(uid),
   // The robots, and the one among `uids` (an object and those above it).
   robots: () => robots.map((r) => ({ root: r.root, name: r.name })),
-  robotOf: (uids) => uids.find((u) => robots.some((r) => r.root === u)) ?? null,
+  robotOf: (uids) => robotOf(uids),
   bounds: (uid) => bounds(uid),
   equipmentNear: (uid, host) => equipmentNear(uid, host),
   remove: (uid) => {
@@ -1096,6 +1119,32 @@ cellPanel.onLinking = (on) => {
   canvas.style.cursor = on ? 'crosshair' : '';
   if (!on) previewLink(null);
 };
+// The logistics mode: its button, and the bar of carriers to choose from.
+const carryBar = document.getElementById('carry-bar');
+cellPanel.onCarrying = (on) => {
+  document.querySelector('[data-action="carry"]')?.classList.toggle('on', on);
+  canvas.style.cursor = on ? 'crosshair' : '';
+  if (!on) previewLink(null);
+  carryBar.hidden = !on;
+  if (!on) return;
+  const k = cellPanel.carry;
+  const chip = (by, robot, label) =>
+    `<button data-by="${by}"${robot ? ` data-robot="${escapeHtml(robot)}"` : ''} class="${k.by === by && (k.robot ?? null) === (robot ?? null) ? 'on' : ''}">${escapeHtml(label)}</button>`;
+  carryBar.innerHTML =
+    '<span class="carry-title">물류 연결</span>' +
+    chip(3, null, '로봇 (자동)') +
+    robots.map((r) => chip(3, r.root, `로봇 ${r.name}`)).join('') +
+    chip(1, null, 'AMR') +
+    chip(2, null, '작업자') +
+    chip(0, null, '직접') +
+    '<button class="carry-end" data-end>끝 (Esc)</button>' +
+    `<span class="carry-hint">${escapeHtml(cellPanel.carrierText(k.by, k.robot))}: 화살표를 누르면 그 연결을 나릅니다 · 보내는 설비 → 받는 설비를 누르면 그 운반으로 잇습니다 · 3D에서 로봇을 눌러도 고릅니다</span>`;
+};
+carryBar.addEventListener('click', (e) => {
+  if (e.target.closest('[data-end]')) return cellPanel.stopCarrying();
+  const b = e.target.closest('[data-by]');
+  if (b) cellPanel.carryWith(Number(b.dataset.by), b.dataset.robot ?? null);
+});
 const projectPanel = new ProjectPanel({ toast, escapeHtml });
 // The site's drawing: looked at from above when first laid.
 const floorPanel = new FloorPanel({
@@ -1541,8 +1590,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (e.buttons || linkDrag || view.interact) return;
   const over = markerAt(e.clientX, e.clientY);
   cellPanel.hoverHandle(over?.handle ?? null);
-  canvas.style.cursor = over?.handle ? 'grab' : over?.link ? 'pointer' : cellPanel.linking() ? 'crosshair' : '';
-  const from = cellPanel.linking() ? cellPanel.linkingFrom() : null;
+  canvas.style.cursor = over?.handle ? 'grab' : over?.link ? 'pointer' : cellPanel.linking() || cellPanel.carrying() ? 'crosshair' : '';
+  const from = cellPanel.linking() || cellPanel.carrying() ? cellPanel.linkingFrom() : null;
   if (from) previewLink(from.object, new THREE.Vector3(from.at[0], from.at[1], from.at[2] + 0.45), e.clientX, e.clientY);
   else if (linkLine.visible) previewLink(null);
 });
@@ -1686,6 +1735,19 @@ canvas.addEventListener('pointerup', (e) => {
   const marker = hits.find((h) => !isShape(h) && uidOf(h) != null);
   const shape = shapeHit(hits);
   const hit = marker && (!shape || marker.distance < shape.distance) ? marker : shape;
+  // The logistics mode: an arrow given the carrier chosen; a robot
+  // chosen; equipment, the ends of a link made so.
+  if (cellPanel.carrying()) {
+    const marker = markerAt(e.clientX, e.clientY);
+    if (marker?.link) return cellPanel.carryArrow(marker.link);
+    if (!hit) return;
+    const uids = [];
+    for (let at = uidOf(hit), n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
+    // Not selected: a selection's move handles would be in the way of the
+    // next click.
+    cellPanel.carryClick(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+    return;
+  }
   // An arrow of the flow: chosen, to undo with Delete.
   if (!view.measure && !cellPanel.picking()) {
     const marker = markerAt(e.clientX, e.clientY);
@@ -2016,6 +2078,13 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
     if (cellPanel.linking()) cellPanel.stopLinking();
     else cellPanel.startLinking(selected);
   }
+  if (b.dataset.action === 'carry') {
+    if (cellPanel.carrying()) cellPanel.stopCarrying();
+    else {
+      select(null);
+      cellPanel.startCarrying();
+    }
+  }
   if (b.dataset.action === 'floor') {
     plcPanel.panel.hidden = true;
     projectPanel.panel.hidden = true;
@@ -2214,6 +2283,7 @@ window.addEventListener('keydown', (e) => {
     if (view.measure) setToggle('measure', false);
     if (cellPanel.picking()) return cellPanel.stopPicking();
     if (cellPanel.linking()) return cellPanel.stopLinking();
+    if (cellPanel.carrying()) return cellPanel.stopCarrying();
     select(null);
   }
   else return;

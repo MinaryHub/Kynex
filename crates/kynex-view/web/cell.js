@@ -18,6 +18,8 @@ const FLOW_NAME = { ...Object.fromEntries(FLOW_KINDS), conveyor: '컨베이어' 
 const STRUCTURE = new Set([
   'fence', 'guard_rail', 'factory_wall', 'factory_column', 'floor_zone', 'ceiling_light',
   'crane_rail', 'oht_rail', 'roll_door', 'pipe_rack', 'amr_stop', 'overhead_crane',
+  // What a robot stands on: a click there means the robot.
+  'pedestal',
 ]);
 
 const KINDS = [
@@ -822,7 +824,87 @@ export class CellPanel {
     return this.link != null;
   }
 
+  // ---- Logistics mode: what carries along the links ----------------------
+
+  // Whether the logistics mode is on: a carrier chosen — { by, robot } —
+  // given to each arrow clicked, and to each link made by clicking two
+  // pieces of the flow in turn (`from` the first).
+  carrying() {
+    return this.carry != null;
+  }
+
+  startCarrying() {
+    if (this.link) this.stopLinking();
+    this.carry = { by: 3, robot: null, from: null };
+    this.onCarrying?.(true);
+    this.drawMarkers();
+    this.ctx.toast('물류 연결: 위에서 운반 수단을 고르거나 로봇을 누른 뒤, 화살표를 누르거나 보내는 설비 → 받는 설비를 누르세요 (Esc: 끝)');
+  }
+
+  stopCarrying() {
+    this.carry = null;
+    this.onCarrying?.(false);
+    this.drawMarkers();
+  }
+
+  // The carrier given from now: by (0 직접, 1 AMR, 2 작업자, 3 로봇) and,
+  // by robot, which (none: any that reaches).
+  carryWith(by, robot = null) {
+    if (!this.carry) return;
+    this.carry.by = by;
+    this.carry.robot = by === 3 ? robot : null;
+    this.onCarrying?.(true);
+    this.drawMarkers();
+  }
+
+  carrierText(by, robot) {
+    return by === 3 ? `로봇 ${robot ? this.robotName(robot) : '(자동)'}` : CARRIER_NAMES[by] || '직접';
+  }
+
+  // An arrow clicked in the logistics mode: carried as chosen.
+  carryArrow(link) {
+    if (!this.carry) return;
+    this.setCarrier(link, this.carry.by, this.carry.robot);
+  }
+
+  // A click in the logistics mode on `uids` (an object and those above
+  // it): a robot chosen to carry; else the sender, then the receiver of a
+  // link made carried as chosen. Returns what to select, if anything.
+  carryClick(uids, root = null) {
+    if (!this.carry) return null;
+    const robot = this.ctx.robotOf?.(uids);
+    if (robot != null) {
+      this.carryWith(3, robot);
+      this.ctx.toast(`운반 수단: 로봇 ${this.robotName(robot)} · 화살표나 보내는 설비 → 받는 설비를 누르세요`);
+      return null;
+    }
+    const piece = this.pieceOf(uids, root);
+    if (!piece?.c?.flow) {
+      this.ctx.toast('공정 흐름의 설비(공급·공정·버퍼·컨베이어·배출)를 누르세요');
+      return null;
+    }
+    const object = piece.c.object;
+    const from = this.carry.from;
+    if (from == null || from === object) {
+      if (!this.sends(object)) {
+        this.ctx.toast(`${piece.name}에서는 부품이 나가지 않습니다: 보내는 설비부터 누르세요`);
+        return null;
+      }
+      this.carry.from = object;
+      this.ctx.toast(`${piece.name} → 받을 설비를 누르세요 (${this.carrierText(this.carry.by, this.carry.robot)})`);
+      return object;
+    }
+    if (piece.c.kind === 'source') {
+      this.ctx.toast('소재 공급으로는 보낼 수 없습니다');
+      return null;
+    }
+    this.carry.from = this.sends(object) ? object : null;
+    this.setCarrier({ from, to: object }, this.carry.by, this.carry.robot);
+    return object;
+  }
+
   startLinking(from = null) {
+    if (this.carry) this.stopCarrying();
     this.link = { from: from && this.sends(from) ? from : null };
     this.onLinking?.(true);
     this.drawMarkers();
@@ -1045,6 +1127,7 @@ export class CellPanel {
   // { ok, text, object } — `object` the equipment it would land on.
   dropPreview(from, uids, root = null) {
     const robot = this.ctx.robotOf?.(uids);
+    if (robot != null && this.carry) return { ok: true, text: `운반 수단을 로봇 ${this.robotName(robot)}(으)로`, object: robot };
     if (robot != null) return { ok: true, text: `${this.nameOf(from)} → 로봇 ${this.robotName(robot)} · 놓은 뒤 받을 설비를 누르세요`, object: robot };
     const piece = uids.length ? this.pieceOf(uids, root) : null;
     if (!piece) return { ok: false, text: '다음 공정이 될 설비 위에 놓으세요', object: null };
@@ -1054,6 +1137,7 @@ export class CellPanel {
     if (piece.structure) return { ok: false, text: `${name}: 건물·구조물은 공정에 넣을 수 없습니다`, object };
     if (c?.flow) {
       if (c.kind === 'source') return { ok: false, text: `${name}: 소재 공급으로는 보낼 수 없습니다`, object };
+      if (this.carry) return { ok: true, text: `${fromName} → ${name} · ${this.carrierText(this.carry.by, this.carry.robot)}`, object };
       if ((this.componentOf(from)?.flow?.next ?? []).includes(object)) return { ok: false, text: `이미 이어져 있습니다: ${fromName} → ${name}`, object };
       return { ok: true, text: `${fromName} → ${name}`, object };
     }
@@ -1178,7 +1262,7 @@ export class CellPanel {
   // The piece a link is being drawn from in link mode, and where it
   // stands: { object, at } or null.
   linkingFrom() {
-    const from = this.link?.from;
+    const from = this.link?.from ?? this.carry?.from;
     const at = from != null ? this.componentOf(from)?.flow?.at : null;
     return from != null && at ? { object: from, at } : null;
   }
@@ -1678,6 +1762,8 @@ export class CellPanel {
         if (to.distanceTo(from) < 1e-6) continue;
         const k = this.carrierOf(c.object, n);
         const chosen = this.chosenLink?.from === c.object && this.chosenLink?.to === n;
+        // In the logistics mode, those not carried as chosen are faint.
+        const same = !this.carry || (k.by === this.carry.by && (this.carry.by !== 3 || (k.robot ?? null) === this.carry.robot));
         const color = chosen ? 0xff8a3d : k.reach ? 0xff5f5f : CARRIER_COLOURS[k.by] ?? 0x5aa9ff;
         // By robot: over the robot's base, the way the part goes.
         const via = k.by === 3 && k.via ? new THREE.Vector3(k.via[0], k.via[1], Math.max(a[2], b[2]) + 0.4) : null;
@@ -1696,7 +1782,7 @@ export class CellPanel {
             if (o.material) {
               o.material.depthTest = false;
               o.material.transparent = true;
-              o.material.opacity = 0.85;
+              o.material.opacity = same ? 0.9 : 0.3;
             }
             o.renderOrder = 8;
           });
@@ -1705,7 +1791,10 @@ export class CellPanel {
         // Its number, and by what it goes when not by itself.
         const num = numbers.get(`${c.object}>${n}`);
         const what = k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : CARRIER_NAMES[k.by] ?? '';
-        const text = [num, what, k.reach ? '⚠ 안 닿음' : ''].filter(Boolean).join(' · ');
+        // The chosen robot's reach along it, in the logistics mode.
+        const r = this.carry?.by === 3 && this.carry.robot ? this.reachOf?.get(`${c.object}>${n}`)?.get(this.carry.robot) : null;
+        const can = r ? (r.reach ? '' : `${this.robotName(this.carry.robot)} 안 닿음`) : '';
+        const text = [num, what, k.reach ? '⚠ 안 닿음' : '', can].filter(Boolean).join(' · ');
         if (text) {
           const mid = via ? via.clone() : from.clone().add(to).multiplyScalar(0.5);
           const sign = this.label(text, mid.x, mid.y, mid.z + size * 0.6, k.reach ? 'linkbad' : 'linknum', size * 0.8);

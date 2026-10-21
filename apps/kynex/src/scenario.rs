@@ -100,7 +100,15 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
         }
         cell.tick(&doc, t, now);
         // Robots carrying the flow's parts, as in the viewer.
-        carry.step(&doc, t, &mut cell, &posing, &mut runners, &|_| false);
+        carry.step(
+            &doc,
+            t,
+            &mut cell,
+            &posing,
+            &mut runners,
+            &|_| false,
+            &mut |_, _, _, _, _| 0,
+        );
         delivered += cell.supply(&doc);
         // Warmed up: the figures from here.
         if cell.take_warmed() {

@@ -1474,6 +1474,36 @@ pub fn guess(doc: &Document) -> Vec<(u64, Kind)> {
 }
 
 /// Whether `id` hangs below `parent`, at any depth.
+/// Door `door` of `machine` in `doc` moved `open` of the way open, as its
+/// door role says, or else aside along its machine's X by its own width.
+fn move_door(
+    doc: &mut Document,
+    door: ObjectId,
+    machine: ObjectId,
+    props: Option<&Props>,
+    open: f64,
+) {
+    let world = doc.world_transform(door);
+    let moved = match door_motion(doc, door, machine, props) {
+        Some(DoorMotion::Swing { pivot, axis, angle }) => {
+            DAffine3::from_translation(pivot)
+                * DAffine3::from_axis_angle(axis, angle * open)
+                * DAffine3::from_translation(-pivot)
+                * world
+        }
+        Some(DoorMotion::Slide(by)) => DAffine3::from_translation(by * open) * world,
+        None => return,
+    };
+    // From the world into the door's own transform.
+    let Some(o) = doc.object(door) else { return };
+    let above = world * o.transform.to_affine().inverse();
+    let (scale, rotation, translation) = (above.inverse() * moved).to_scale_rotation_translation();
+    let t = &mut doc.object_mut(door).unwrap().transform;
+    t.translation = translation;
+    t.rotation = rotation;
+    t.scale = scale;
+}
+
 pub fn is_below(doc: &Document, id: ObjectId, parent: ObjectId) -> bool {
     let mut at = doc.object(id).and_then(|o| o.parent);
     for _ in 0..64 {
@@ -4246,6 +4276,20 @@ impl Cell {
     }
 
     /// Machine `machine`'s door, by identity.
+    /// The door of station `object`, if it has one, kept open a while
+    /// longer: a robot that served it is still on its way out.
+    pub fn hold_door(&mut self, object: u64) {
+        let now = self.last_tick.unwrap_or(0.0);
+        if self.station_door_wanted.contains_key(&object)
+            || self
+                .door_stations
+                .as_ref()
+                .is_some_and(|(_, _, d)| d.contains(&object))
+        {
+            self.station_door_wanted.insert(object, now);
+        }
+    }
+
     pub fn door_of(&self, doc: &Document, machine: u64) -> Option<u64> {
         let id = id_of(doc, machine)?;
         let (door, _) = self.door_parts(doc, id).into_iter().next()?;
@@ -4351,28 +4395,25 @@ impl Cell {
             if open <= 0.0 {
                 continue;
             }
-            let world = doc.world_transform(door);
-            let moved = match door_motion(doc, door, machine, props.as_ref()) {
-                Some(DoorMotion::Swing { pivot, axis, angle }) => {
-                    DAffine3::from_translation(pivot)
-                        * DAffine3::from_axis_angle(axis, angle * open)
-                        * DAffine3::from_translation(-pivot)
-                        * world
-                }
-                Some(DoorMotion::Slide(by)) => DAffine3::from_translation(by * open) * world,
-                None => continue,
-            };
-            // From the world into the door's own transform.
-            let Some(o) = doc.object(door) else { continue };
-            let above = world * o.transform.to_affine().inverse();
-            let (scale, rotation, translation) =
-                (above.inverse() * moved).to_scale_rotation_translation();
-            let t = &mut doc.object_mut(door).unwrap().transform;
-            t.translation = translation;
-            t.rotation = rotation;
-            t.scale = scale;
+            move_door(doc, door, machine, props.as_ref(), open);
         }
         uids
+    }
+
+    /// `doc` with the door of every station that has one — a machine made
+    /// a station — wide open: where a robot that reaches into it moves
+    /// with it out of the way, and not out of the way of all else.
+    pub fn with_station_doors_open(&self, doc: &Document) -> Document {
+        let mut opened = doc.clone();
+        for c in self.components.iter().filter(|c| c.kind == Kind::Station) {
+            let Some(machine) = id_of(doc, c.object) else {
+                continue;
+            };
+            for (door, props) in self.door_parts(doc, machine) {
+                move_door(&mut opened, door, machine, props.as_ref(), 1.0);
+            }
+        }
+        opened
     }
 
     /// Adds the parts to `doc`, the scene as shown, and returns what the

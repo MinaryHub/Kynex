@@ -9,6 +9,19 @@ use crate::cell::Cell;
 use crate::pose::Posing;
 use crate::run::Runner;
 
+/// How many of a carrying program's moves would hit something, for robot
+/// `root` in the scene given, but for the doors and the work places given
+/// (where a gripper takes or puts a part): none for a scenario's run, the
+/// viewer's collider in the viewer.
+pub type Check<'a> = dyn FnMut(
+        &Document,
+        u64,
+        &crate::program::Program,
+        &std::collections::HashSet<u64>,
+        &[kreate_math::DVec3],
+    ) -> usize
+    + 'a;
+
 /// How long a part no robot could take waits before it is tried again,
 /// seconds: working out a robot's reach is too slow for every step.
 const RETRY: f64 = 2.0;
@@ -19,6 +32,14 @@ const RETRY: f64 = 2.0;
 pub struct Carry {
     carrying: BTreeMap<u64, u64>,
     tried: BTreeMap<u64, f64>,
+    /// The way chosen for each robot between two places, by robot, the
+    /// places to the centimetre, the scene's version and the pose it sets
+    /// out from: worked out once —
+    /// trying ways against the scene is slow —, then taken again.
+    routes: BTreeMap<(u64, [i64; 6], u64, Vec<i64>), crate::program::Program>,
+    /// The places each robot carrying goes between, by robot: their doors
+    /// kept open until it is done and out, not only until the part is down.
+    serving: BTreeMap<u64, [u64; 2]>,
 }
 
 impl Carry {
@@ -27,6 +48,7 @@ impl Carry {
     /// is and where it goes, a program made for it there and then — above
     /// it, down, grip, up, over, down, let go, up — and run; the part
     /// handed over once it is put down. Returns whether anything changed.
+    #[allow(clippy::too_many_arguments)]
     pub fn step(
         &mut self,
         scene: &Document,
@@ -35,6 +57,7 @@ impl Carry {
         posing: &Posing,
         runners: &mut Vec<Runner>,
         busy: &dyn Fn(u64) -> bool,
+        check: &mut Check<'_>,
     ) -> bool {
         let mut changed = false;
         // Done, or stopped short.
@@ -57,8 +80,14 @@ impl Carry {
         for (root, part, why) in done {
             cell.robot_done(part, why);
             self.carrying.remove(&root);
+            self.serving.remove(&root);
             runners.retain(|r| r.root != root);
             changed = true;
+        }
+        for ends in self.serving.values() {
+            for object in ends {
+                cell.hold_door(*object);
+            }
         }
         let jobs = cell.robot_jobs(scene);
         if jobs.is_empty() {
@@ -66,7 +95,7 @@ impl Carry {
         }
         let grippers = cell.grippers();
         self.tried.retain(|p, _| jobs.iter().any(|j| j.0 == *p));
-        for (part, at, to) in jobs {
+        for (part, at, to, ends) in jobs {
             if self
                 .tried
                 .get(&part)
@@ -101,13 +130,19 @@ impl Carry {
                 continue;
             }
             let mut trouble = None;
+            // Doors of the machines served open as a robot comes: no
+            // obstacle to its moves.
+            // The scene with the doors of machines served open, as they
+            // are while a robot reaches in: moves are looked along in it.
+            let opened = cell.with_station_doors_open(scene);
             for (root, gripper, _) in robots {
-                match self.transfer(scene, posing, root, gripper, at, to) {
+                match self.transfer(scene, &opened, posing, root, gripper, at, to, check) {
                     Ok(program) => match Runner::new(root, program, scene, time) {
                         Ok(runner) => {
                             runners.retain(|r| r.root != root);
                             runners.push(runner);
                             self.carrying.insert(root, part);
+                            self.serving.insert(root, ends);
                             cell.robot_take(part, root);
                             trouble = None;
                             changed = true;
@@ -132,30 +167,81 @@ impl Carry {
 
     /// A program for robot `root` to carry a part from `at` to `to` with
     /// grip point `gripper`, pointing down: or why it cannot reach.
+    #[allow(clippy::too_many_arguments)]
     fn transfer(
-        &self,
+        &mut self,
         scene: &Document,
+        opened: &Document,
         posing: &Posing,
         root: u64,
         gripper: u64,
         at: kreate_math::DVec3,
         to: kreate_math::DVec3,
+        check: &mut Check<'_>,
+    ) -> Result<crate::program::Program, String> {
+        // The same way as last time, between the same two places.
+        let cm = |v: kreate_math::DVec3| {
+            [
+                (v.x * 100.0).round() as i64,
+                (v.y * 100.0).round() as i64,
+                (v.z * 100.0).round() as i64,
+            ]
+        };
+        let [a, b, c] = cm(at);
+        let [d, e, f] = cm(to);
+        // And from where it stands now, to the degree.
+        let standing: Vec<i64> = kynex_kin::Kinematics::of(scene, root)
+            .map(|kin| {
+                posing
+                    .positions(&kin, root)
+                    .iter()
+                    .map(|q| q.to_degrees().round() as i64)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let key = (root, [a, b, c, d, e, f], scene.version(), standing);
+        if let Some(program) = self.routes.get(&key) {
+            return Ok(program.clone());
+        }
+        let found = self.find_route(scene, opened, posing, root, gripper, at, to, check);
+        if let Ok(program) = &found {
+            if self.routes.len() > 256 {
+                self.routes.clear();
+            }
+            self.routes.insert(key, program.clone());
+        }
+        found
+    }
+
+    /// The way for robot `root` to carry a part from `at` to `to`: see
+    /// [`Carry::transfer`].
+    #[allow(clippy::too_many_arguments)]
+    fn find_route(
+        &self,
+        scene: &Document,
+        opened: &Document,
+        posing: &Posing,
+        root: u64,
+        gripper: u64,
+        at: kreate_math::DVec3,
+        to: kreate_math::DVec3,
+        check: &mut Check<'_>,
     ) -> Result<crate::program::Program, String> {
         use crate::program::{Action, Point, Program, Step};
-        use kreate_math::{DAffine3, DVec3};
+        use kreate_math::{DAffine3, DQuat, DVec3};
         use kynex_kin::path::MoveKind;
         let kin = kynex_kin::Kinematics::of(scene, root).ok_or("no such robot")?;
         let tool = kin
             .tool(gripper, DAffine3::IDENTITY)
             .ok_or("no such grip point")?;
-        let mut seed = posing.positions(&kin, root);
+        let stand = posing.positions(&kin, root);
         // The grip point turned as it stands now — a robot waits with its
         // tool down — whatever way it is mounted on the tool.
-        let (_, down, _) = kin.pose(&seed, &tool).to_scale_rotation_translation();
+        let (_, down, _) = kin.pose(&stand, &tool).to_scale_rotation_translation();
         let base = kin
-            .world_of(&seed, root)
+            .world_of(&stand, root)
             .map_or(DVec3::ZERO, |b| b.translation);
-        let solve = |p: DVec3, rotation: kreate_math::DQuat, from: &[f64]| -> Option<Vec<f64>> {
+        let solve = |p: DVec3, rotation: DQuat, from: &[f64]| -> Option<Vec<f64>> {
             let found = kin.solve(
                 &tool,
                 &kynex_kin::Goal {
@@ -170,37 +256,63 @@ impl Carry {
             );
             found.reached.then_some(found.positions)
         };
-        // Each end reached from above, the tool down; or, where that is out
-        // of reach — a chuck deep in a machine, through its door —, from in
-        // front, level, the tool pointing at it from the robot's side.
-        let end = |p: DVec3, seed: &mut Vec<f64>| -> Result<(Vec<f64>, Vec<f64>), String> {
-            let level = (p - base).truncate();
+        // The ways to each end: from above, the tool down; and from in
+        // front, level, the tool pointing at it from the robot's side —
+        // a chuck deep in a machine, through its door.
+        let ways = |p: DVec3| -> Vec<(DVec3, DQuat)> {
             let mut ways = vec![(DVec3::Z * 0.15, down)];
+            let level = (p - base).truncate();
             if level.length() > 1e-6 {
                 let toward = level.normalize().extend(0.0);
-                let turn = kreate_math::DQuat::from_rotation_arc(-DVec3::Z, toward);
+                let turn = DQuat::from_rotation_arc(-DVec3::Z, toward);
+                // Lined up from outside: far enough back to be clear of a
+                // machine's front, then straight in.
+                ways.push((-toward * 0.5, turn * down));
                 ways.push((-toward * 0.15, turn * down));
             }
-            for (back, rotation) in ways {
-                let Some(near) = solve(p + back, rotation, seed) else {
-                    continue;
-                };
-                let Some(at) = solve(p, rotation, &near) else {
-                    continue;
-                };
-                *seed = at.clone();
-                return Ok((near, at));
-            }
-            Err(format!(
-                "{}: 로봇이 닿지 않는 곳입니다 ({:.2}, {:.2}, {:.2} m)",
-                crate::collide::label(scene, root),
-                p.x,
-                p.y,
-                p.z
-            ))
+            ways
         };
-        let (pick_near, pick) = end(at, &mut seed)?;
-        let (put_near, put) = end(to, &mut seed)?;
+        // Poses to start the search from: as it stands, and with its elbow
+        // the other way (a six-axis arm's second and third joints), so the
+        // arm may come over rather than under what is in the way.
+        let mut seeds = vec![stand.clone()];
+        if stand.len() >= 4 {
+            let mut flipped = stand.clone();
+            flipped[1] += stand[2];
+            flipped[2] = -stand[2];
+            flipped[3] += stand[2];
+            seeds.push(flipped);
+        }
+        // And, for a six-axis arm, the base turned toward the part each
+        // way, the shoulder and the elbow at a few bends, the tool kept
+        // down: the arm over the top of a belt or a machine's front rather
+        // than through it.
+        if stand.len() == 6 {
+            let turn = kin.world_of(&stand, root).map_or(DQuat::IDENTITY, |b| {
+                DQuat::from_mat3(&b.matrix3).normalize()
+            });
+            let local = turn.inverse() * (at - base);
+            let pan = local.y.atan2(local.x);
+            for pan in [pan, pan + std::f64::consts::PI] {
+                for (lift, bend) in [(-1.2, 1.2), (-1.9, 1.9), (-0.7, 0.9), (-2.4, 2.2)] {
+                    let wrist = -(lift + bend) - std::f64::consts::FRAC_PI_2;
+                    seeds.push(vec![
+                        pan,
+                        lift,
+                        bend,
+                        wrist,
+                        -std::f64::consts::FRAC_PI_2,
+                        stand[5],
+                    ]);
+                }
+            }
+        }
+        // An end reached a way, near and at, from a seed: or not.
+        let end = |p: DVec3, way: (DVec3, DQuat), from: &[f64]| -> Option<(Vec<f64>, Vec<f64>)> {
+            let near = solve(p + way.0, way.1, from)?;
+            let at = solve(p, way.1, &near)?;
+            Some((near, at))
+        };
         let point = |name: &str, q: &[f64], linear: bool| Point {
             name: name.to_string(),
             kind: if linear {
@@ -225,17 +337,116 @@ impl Carry {
             via: None,
             work: false,
         };
-        let mut program = Program::named("흐름 운반", Some(gripper), DVec3::ZERO);
-        program.steps = vec![
-            Step::Move(point("집기 앞", &pick_near, false)),
-            Step::Move(point("집기", &pick, true)),
-            Step::Do(Action::Grip { gripper }),
-            Step::Move(point("집은 뒤 물러남", &pick_near, true)),
-            Step::Move(point("놓기 앞", &put_near, false)),
-            Step::Move(point("놓기", &put, true)),
-            Step::Do(Action::Release { gripper }),
-            Step::Move(point("놓은 뒤 물러남", &put_near, true)),
-        ];
-        Ok(program)
+        // Where it waits, and goes by between the two ends: as it stands,
+        // if that touches nothing — the doors of machines shut, and open,
+        // as they may be while it waits —; else, for a six-axis arm, drawn
+        // in over its base, or upright.
+        let rest = {
+            let mut clear = |q: &[f64]| {
+                let mut p = Program::named("대기", Some(gripper), DVec3::ZERO);
+                // A move however small: two same poses make no move to look
+                // along.
+                let mut nudged = q.to_vec();
+                if let Some(last) = nudged.last_mut() {
+                    *last += 0.01;
+                }
+                p.steps = vec![
+                    Step::Move(point("대기", q, false)),
+                    Step::Move(point("대기", &nudged, false)),
+                ];
+                check(scene, root, &p, &std::collections::HashSet::new(), &[]) == 0
+                    && check(opened, root, &p, &std::collections::HashSet::new(), &[]) == 0
+            };
+            let mut ways = vec![stand.clone()];
+            if stand.len() == 6 {
+                let h = std::f64::consts::FRAC_PI_2;
+                ways.push(vec![stand[0], -h * 1.35, h * 1.25, -h * 1.4, -h, stand[5]]);
+                ways.push(vec![stand[0], -h, 0.0, -h, -h, stand[5]]);
+            }
+            ways.iter()
+                .find(|q| clear(q))
+                .cloned()
+                .unwrap_or(stand.clone())
+        };
+        let program = |pick: &(Vec<f64>, Vec<f64>), put: &(Vec<f64>, Vec<f64>), via: bool| {
+            let mut p = Program::named("흐름 운반", Some(gripper), DVec3::ZERO);
+            let mut steps = vec![
+                // From where it stands: the first move is looked along too.
+                Step::Move(point("출발", &stand, false)),
+                Step::Move(point("집기 앞", &pick.0, false)),
+                Step::Move(point("집기", &pick.1, true)),
+                Step::Do(Action::Grip { gripper }),
+                Step::Move(point("집은 뒤 물러남", &pick.0, true)),
+            ];
+            // By way of where it waits: around what is between, not
+            // through it.
+            if via {
+                steps.push(Step::Move(point("비켜 감", &rest, false)));
+            }
+            steps.extend([
+                Step::Move(point("놓기 앞", &put.0, false)),
+                Step::Move(point("놓기", &put.1, true)),
+                Step::Do(Action::Release { gripper }),
+                Step::Move(point("놓은 뒤 물러남", &put.0, true)),
+            ]);
+            // Back where it waits, always: not left in a machine whose door
+            // then shuts on it.
+            steps.push(Step::Move(point("대기 자세로", &rest, false)));
+            p.steps = steps;
+            p
+        };
+        // Every way to carry it, each checked for what it would hit on the
+        // way: the first that hits nothing, else the one that hits least.
+        let mut best: Option<(usize, Program)> = None;
+        let mut looked = 0;
+        'search: for seed in &seeds {
+            for &pw in &ways(at) {
+                let Some(pick) = end(at, pw, seed) else {
+                    continue;
+                };
+                for &tw in &ways(to) {
+                    let Some(put) = end(to, tw, &pick.1) else {
+                        continue;
+                    };
+                    for via in [false, true] {
+                        // Each way is slow to look along: a few dozen at most.
+                        if looked >= 24 {
+                            break 'search;
+                        }
+                        looked += 1;
+                        let candidate = program(&pick, &put, via);
+                        let hits = check(
+                            opened,
+                            root,
+                            &candidate,
+                            &std::collections::HashSet::new(),
+                            &[at, to],
+                        );
+                        if best.as_ref().is_none_or(|(h, _)| hits < *h) {
+                            best = Some((hits, candidate));
+                        }
+                        if hits == 0 {
+                            break 'search;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((_, program)) = best {
+            return Ok(program);
+        }
+        // Out of reach: of the end it cannot get to.
+        let far = if ways(at).into_iter().any(|w| end(at, w, &rest).is_some()) {
+            to
+        } else {
+            at
+        };
+        Err(format!(
+            "{}: 로봇이 닿지 않는 곳입니다 ({:.2}, {:.2}, {:.2} m)",
+            crate::collide::label(scene, root),
+            far.x,
+            far.y,
+            far.z
+        ))
     }
 }

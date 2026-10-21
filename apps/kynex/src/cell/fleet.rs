@@ -757,7 +757,7 @@ impl Cell {
     /// The parts waiting for a robot to carry them: each one's identity,
     /// where it is, and where it is to be put (the top of what it goes to,
     /// as it would stand there).
-    pub fn robot_jobs(&self, doc: &Document) -> Vec<(u64, DVec3, DVec3)> {
+    pub fn robot_jobs(&self, doc: &Document) -> Vec<(u64, DVec3, DVec3, [u64; 2])> {
         let belts = self.belts(doc);
         self.jobs
             .iter()
@@ -775,6 +775,7 @@ impl Cell {
                     j.part,
                     p.world.translation,
                     top + DVec3::Z * (p.size().1 / 2.0 + 0.002),
+                    [j.from, j.to],
                 ))
             })
             .collect()

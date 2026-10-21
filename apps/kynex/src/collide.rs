@@ -322,6 +322,58 @@ impl Collider {
 }
 
 impl Collider {
+    /// How many of `plan`'s moves have robot `root` hit something, as
+    /// [`Collider::along`] has it: but a touch within `zone` of a place in
+    /// `work` — where a gripper takes a part or puts it down, on a belt, in
+    /// a chuck — is its work, not a hit.
+    pub fn hits_along(
+        &mut self,
+        doc: &Document,
+        root: u64,
+        plan: &Plan,
+        open: &HashSet<u64>,
+        work: &[DVec3],
+        zone: f64,
+    ) -> usize {
+        let robots = self.robots(doc);
+        let Some(robot) = robots.iter().find(|r| r.root == root) else {
+            return 0;
+        };
+        let samples: Vec<Vec<Posed>> = plan
+            .segments
+            .iter()
+            .map(|seg| {
+                let steps = ((seg.duration / PATH_STEP).ceil() as usize).max(1);
+                (0..=steps)
+                    .map(|k| {
+                        robot.bodies(&plan.at(seg.start + seg.duration * k as f64 / steps as f64))
+                    })
+                    .collect()
+            })
+            .collect();
+        let region = samples
+            .iter()
+            .flatten()
+            .flatten()
+            .fold(Aabb::EMPTY, |b, (part, _)| b.union(part.bounds()));
+        let own: HashSet<u64> = robot.kin.uids().collect();
+        let obstacles = self.obstacles(doc, &robots, region, &HashSet::new());
+        let working = |at: DVec3| work.iter().any(|w| w.distance(at) < zone);
+        samples
+            .iter()
+            .filter(|seg| {
+                seg.iter().any(|parts| {
+                    parts.iter().any(|(part, _)| {
+                        obstacles
+                            .contacts(part, |u| own.contains(&u) || open.contains(&u))
+                            .into_iter()
+                            .any(|(_, at)| !working(at))
+                    }) || !robot.own_contacts(parts, 1).is_empty()
+                })
+            })
+            .count()
+    }
+
     /// Move by move along `plan`, the nearest robot `root` comes to the rest
     /// of `doc` within `within` metres, if it does: but to the doors in
     /// `open` (as [`Collider::along`]), and near the places in `work` —

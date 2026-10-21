@@ -731,6 +731,22 @@ impl Stage {
             let base = self.base.take();
             let scene = base.as_ref().unwrap_or(doc);
             let followers = &self.followers;
+            // A way to carry, checked against the scene: how many of its
+            // moves would hit something, doors served let be.
+            let collider = &mut self.collider;
+            let mut check = |doc: &Document,
+                             root: u64,
+                             program: &crate::program::Program,
+                             open: &std::collections::HashSet<u64>,
+                             work: &[kreate_math::DVec3]| {
+                let Some(kin) = kynex_kin::Kinematics::of(doc, root) else {
+                    return 0;
+                };
+                let Some(plan) = program.plan(&kin) else {
+                    return 0;
+                };
+                collider.hits_along(doc, root, &plan, open, work, 0.15)
+            };
             let carried = self.carrying.step(
                 scene,
                 time,
@@ -738,6 +754,7 @@ impl Stage {
                 &self.posing,
                 &mut self.runners,
                 &|root| followers.contains_key(&root),
+                &mut check,
             );
             let moved = self.follow_on(scene) | carried;
             self.base = base;

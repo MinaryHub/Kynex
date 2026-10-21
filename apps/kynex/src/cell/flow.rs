@@ -692,15 +692,16 @@ impl Cell {
             if coming {
                 self.station_door_wanted.insert(object, now);
             }
-            // Open while one comes, and a second after: shut between two
-            // robots one after the other only to open again would flicker.
+            // Open while one comes, and a little after it has gone — its arm
+            // clear of the door's way —: shut between two robots one after
+            // the other only to open again would flicker.
             let open = self
                 .station_door_wanted
                 .get(&object)
-                .is_some_and(|t| now - t < 1.0);
+                .is_some_and(|t| now - t < 2.5);
             let was = self.station_doors.get(&object).copied().unwrap_or(0.0);
-            // Over at most a second and a half: before the robot is there.
-            let pace = dt / 1.5;
+            // Over less than a second: open before the robot reaches in.
+            let pace = dt / 0.8;
             let now_open = if open {
                 (was + pace).min(1.0)
             } else {

@@ -1241,11 +1241,7 @@ impl Cell {
                     };
                     let open: Vec<usize> = (0..next.len())
                         .map(|k| (turn + k) % next.len())
-                        .filter(|k| {
-                            takes(next[*k])
-                                && self.room(next[*k], &coming) > 0
-                                && !self.cut_off(c.object, next[*k].object)
-                        })
+                        .filter(|k| takes(next[*k]) && self.room(next[*k], &coming) > 0)
                         .collect();
                     let pick = match c.props.rule {
                         // The one with the fewest waiting and coming.

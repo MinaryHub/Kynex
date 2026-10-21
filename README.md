@@ -1098,12 +1098,14 @@ not change the session's scene.
     stands now (a robot waits with its tool down). It runs that as a
     program: down, grip, up, over, down, let go, up. The part goes on
     once put down. The robot's lane in the timeline shows the work.
-    Out of reach, the flow bar says where, and the part waits for a
-    robot that can. Once every robot with a grip point has found the
-    place out of its reach, parts no longer go that way: the part goes
-    to another of its next with room, rather than hold up those behind
-    it, and the place's sign and state say 로봇 안 닿음 and why. Moving
-    the machine or a robot tries it again.
+    The flow is simulated for its efficiency: the robot's way is not
+    checked for collisions or interference, and parts go exactly where
+    the links say. Out of reach, the flow bar says where, and the part
+    waits for a robot that can. Once every robot with a grip point has
+    found the place out of its reach, the part still goes along its link,
+    without a robot, in the time a robot would take (half a metre a
+    second, two seconds to grip and let go); the place's sign and state
+    say 로봇 안 닿음 and why, and its arrow is red.
   - A station's **동시 투입 가능 수**: the most parts it holds at once,
     waiting, at work and done, those on their way counted. 0 leaves it
     as it suits the station: one for a machine with a chuck or mould and

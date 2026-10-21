@@ -4575,22 +4575,6 @@ impl Cell {
         uids
     }
 
-    /// `doc` with the door of every station that has one — a machine made
-    /// a station — wide open: where a robot that reaches into it moves
-    /// with it out of the way, and not out of the way of all else.
-    pub fn with_station_doors_open(&self, doc: &Document) -> Document {
-        let mut opened = doc.clone();
-        for c in self.components.iter().filter(|c| c.kind == Kind::Station) {
-            let Some(machine) = id_of(doc, c.object) else {
-                continue;
-            };
-            for (door, props) in self.door_parts(doc, machine) {
-                move_door(&mut opened, door, machine, props.as_ref(), 1.0);
-            }
-        }
-        opened
-    }
-
     /// Adds the parts to `doc`, the scene as shown, and returns what the
     /// viewers need to look at again. A held part goes where its grip point
     /// now is.

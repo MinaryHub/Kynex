@@ -41,7 +41,8 @@ pub struct Carry {
     /// kept open until it is done and out, not only until the part is down.
     serving: BTreeMap<u64, [u64; 2]>,
     /// The robots that could not take each part where it goes, by part:
-    /// once all have said so, it goes another way (see `Cell::robot_cannot`).
+    /// once all have said so, it goes along its link without a robot, in
+    /// the time a robot would take (see `Cell::robot_skip`).
     failed: BTreeMap<u64, std::collections::BTreeSet<u64>>,
 }
 
@@ -139,11 +140,11 @@ impl Carry {
             // obstacle to its moves.
             // The scene with the doors of machines served open, as they
             // are while a robot reaches in: moves are looked along in it.
-            let opened = cell.with_station_doors_open(scene);
+            let opened = scene;
             let mut tried: Vec<u64> = Vec::new();
             for (root, gripper, _) in robots {
                 tried.push(root);
-                match self.transfer(scene, &opened, posing, root, gripper, at, to, check) {
+                match self.transfer(scene, opened, posing, root, gripper, at, to, check) {
                     Ok(program) => match Runner::new(root, program, scene, time) {
                         Ok(runner) => {
                             runners.retain(|r| r.root != root);
@@ -163,9 +164,9 @@ impl Carry {
             if let Some(why) = trouble {
                 self.tried.insert(part, time);
                 // Out of reach of the robots free now: of those busy too?
-                // Then no robot can take it there: it goes another way,
-                // if its place has another, rather than wait for ever and
-                // hold up all behind it.
+                // Then no robot can take it there: it still goes along the
+                // link the user drew — the flow is theirs — in the time a
+                // robot would take, the link marked out of reach.
                 // Each robot is asked while it is free, as it stands
                 // waiting: once every one with a grip point has said no.
                 let failed = self.failed.entry(part).or_default();
@@ -178,7 +179,7 @@ impl Carry {
                 });
                 if all {
                     self.failed.remove(&part);
-                    cell.robot_cannot(part, why);
+                    cell.robot_skip(part, why);
                     changed = true;
                 } else if self.carrying.is_empty() {
                     cell.flow_trouble(why);

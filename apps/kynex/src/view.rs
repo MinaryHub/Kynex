@@ -745,22 +745,13 @@ impl Stage {
             let base = self.base.take();
             let scene = base.as_ref().unwrap_or(doc);
             let followers = &self.followers;
-            // A way to carry, checked against the scene: how many of its
-            // moves would hit something, doors served let be.
-            let collider = &mut self.collider;
-            let mut check = |doc: &Document,
-                             root: u64,
-                             program: &crate::program::Program,
-                             open: &std::collections::HashSet<u64>,
-                             work: &[kreate_math::DVec3]| {
-                let Some(kin) = kynex_kin::Kinematics::of(doc, root) else {
-                    return 0;
-                };
-                let Some(plan) = program.plan(&kin) else {
-                    return 0;
-                };
-                collider.hits_along(doc, root, &plan, open, work, 0.15)
-            };
+            // The flow is simulated for its efficiency: a robot's way is not
+            // checked for collisions — the first way it reaches is taken.
+            let mut check = |_: &Document,
+                             _: u64,
+                             _: &crate::program::Program,
+                             _: &std::collections::HashSet<u64>,
+                             _: &[kreate_math::DVec3]| 0;
             let carried = self.carrying.step(
                 scene,
                 time,

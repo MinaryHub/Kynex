@@ -837,9 +837,13 @@ impl Cell {
     }
 
     /// Part `part`'s job for a robot that no robot can do — its place out
-    /// of every one's reach —: given up. The part is back where it was, to
-    /// go another way; that way left alone a while (see `cut_off`).
-    pub fn robot_cannot(&mut self, part: u64, why: String) {
+    /// of every one's reach —: done without one. The part goes along the
+    /// link as drawn, in the time a robot would take — half a metre a
+    /// second, two seconds to grip and let go —, and the link is marked out
+    /// of reach (see `unreachable_to`). The flow is the user's: it is never
+    /// sent another way.
+    pub fn robot_skip(&mut self, part: u64, why: String) {
+        let now = self.last_tick.unwrap_or(0.0);
         let version = self.docks_seen.as_ref().map_or(0, |d| d.layout);
         let Some(k) = self
             .jobs
@@ -857,30 +861,25 @@ impl Cell {
             .unwrap_or_default();
         self.unreachable
             .insert((job.from, job.to), (version, why.clone()));
-        let belt = self
-            .components
-            .iter()
-            .any(|c| c.object == job.from && c.kind == Kind::Conveyor);
+        let dest = self
+            .docks_seen
+            .as_ref()
+            .and_then(|d| d.docks.get(&job.to).map(|d| d.0));
         if let Some(i) = self.part_index(part) {
-            if belt {
-                // Back on the belt, at its end: told again as there.
-                self.parts[i].flow = Some(Place::Belt(job.from));
-            } else {
-                self.parts[i].flow = Some(Place::At(job.from));
-                self.stations.entry(job.from).or_default().out.insert(0, part);
-            }
+            let from = self.parts[i].world.translation;
+            let far = dest.map_or(0.0, |d| d.distance(from));
+            self.parts[i].held = None;
+            self.parts[i].flow = Some(Place::Moving {
+                from,
+                to: job.to,
+                start: now,
+                end: now + far / 0.5 + 2.0,
+            });
         }
-        self.flow_problem = Some(format!("{to}(으)로는 보내지 않습니다 — {why}"));
+        self.flow_problem = Some(format!(
+            "{to}: 로봇이 닿지 않아 운반 시간만 셈합니다 — {why}"
+        ));
         self.changed = true;
-    }
-
-    /// Whether the link from `from` to `to` is left alone now: no robot
-    /// could carry along it in the scene as it is.
-    pub(super) fn cut_off(&self, from: u64, to: u64) -> bool {
-        let version = self.docks_seen.as_ref().map_or(0, |d| d.layout);
-        self.unreachable
-            .get(&(from, to))
-            .is_some_and(|(v, _)| *v == version)
     }
 
     /// Why no robot can bring parts to `to`, if none can now.

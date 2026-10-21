@@ -1001,6 +1001,9 @@ const cellPanel = new CellPanel({
 // The signs over the flow as last chosen in this browser.
 view.labels = cellPanel.showLabels;
 document.querySelector('[data-toggle="labels"]')?.classList.toggle('on', view.labels);
+// And the flow's arrows.
+view.arrows = cellPanel.showArrows;
+document.querySelector('[data-toggle="arrows"]')?.classList.toggle('on', view.arrows);
 
 // Where a point on the screen lands in the scene: on the part under it, or
 // on the floor.
@@ -1828,6 +1831,7 @@ function setToggle(name, on) {
   document.querySelector(`[data-toggle="${name}"]`)?.classList.toggle('on', on);
   if (name === 'grid') grid.visible = on;
   if (name === 'labels') cellPanel.setLabels(on);
+  if (name === 'arrows') cellPanel.setArrows(on);
   if (name === 'joints') for (const [uid, g] of gizmos) g.visible = on && records.get(uid)?.visible !== false;
   if (name === 'timeline') {
     timelinePanel.show(on);
@@ -2102,6 +2106,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'w') setToggle('wire', !view.wire);
   else if (k === 'g') setToggle('grid', !view.grid);
   else if (k === 'l') setToggle('labels', !view.labels);
+  else if (k === 'a') setToggle('arrows', !view.arrows);
   else if (k === 'home') resetRun();
   else if (k === 'm') setToggle('measure', !view.measure);
   else if (k === 'i') setToggle('interact', !view.interact);

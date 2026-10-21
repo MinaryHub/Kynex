@@ -738,7 +738,9 @@ bottleneck, a cycle's progress — are as big as they are in the scene from
 afar, but never taller on the screen than a line of text, so that close
 up they do not cover what they name. **이름표** on the toolbar (or **L**)
 hides them, the load discs and the flow's arrows left; the choice is kept
-in the browser.
+in the browser. **흐름 화살표** on the toolbar (or **A**) shows or hides
+the arrows of the process flow on their own. They are shown at first, and
+the choice is kept in the browser too.
 
 **Space** runs the simulation: nothing going, it starts the process flow
 and every robot that has a program; anything going, it stops it all.

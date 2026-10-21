@@ -201,8 +201,10 @@ export class CellPanel {
     // last chosen in this browser.
     try {
       this.showLabels = localStorage.getItem('kynex.labels') !== 'off';
+      this.showArrows = localStorage.getItem('kynex.arrows') !== 'off';
     } catch {
       this.showLabels = true;
+      this.showArrows = true;
     }
     this.namesDrawn = '';
     ctx.scene.add(this.names);
@@ -1219,6 +1221,16 @@ export class CellPanel {
 
   // The signs shown, or hidden: names, loads and progress go; the load
   // discs and the flow's arrows stay.
+  // The flow's arrows shown, or hidden: hidden, none can be chosen either.
+  setArrows(on) {
+    this.showArrows = on;
+    try {
+      localStorage.setItem('kynex.arrows', on ? 'on' : 'off');
+    } catch {}
+    if (!on) this.chosenLink = null;
+    this.drawMarkers();
+  }
+
   setLabels(on) {
     this.showLabels = on;
     try {
@@ -1445,7 +1457,7 @@ export class CellPanel {
         arrows.push(arrow);
       }
     }
-    for (const a of arrows) this.markers.add(a);
+    if (this.showArrows) for (const a of arrows) this.markers.add(a);
     // In link mode, a handle over each piece that sends parts on: dragged
     // onto other equipment, it links the two. Not shown otherwise — the
     // right-click menu links as well, without them over everything.

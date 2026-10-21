@@ -525,7 +525,7 @@ export class CellPanel {
       // the way up.
       const link =
         (c.kind === 'sink' ? '' : '<button class="text-btn" data-link-pick title="3D 화면에서 다음 설비들을 차례로 눌러 잇습니다">＋ 화면에서 잇기</button>') +
-        '<span class="muted insp-hint">➔ 손잡이를 끌어 잇기 · 오른쪽 클릭: 연결 메뉴</span>';
+        '<span class="muted insp-hint">오른쪽 클릭: 연결 메뉴 · 연결 모드에서 ➔ 손잡이를 끌어 잇기</span>';
       actions =
         link +
         (getLevel() >= 2
@@ -697,12 +697,14 @@ export class CellPanel {
   startLinking(from = null) {
     this.link = { from: from && this.sends(from) ? from : null };
     this.onLinking?.(true);
+    this.drawMarkers();
     this.ctx.toast(this.link.from ? '다음 공정이 될 설비를 차례로 누르거나, 끌어다 놓으세요 (Esc: 끝)' : '공급부터 배출까지 설비를 차례로 누르거나, 한 설비에서 다음 설비로 끌어다 놓으세요 (Esc: 끝)');
   }
 
   stopLinking() {
     this.link = null;
     this.onLinking?.(false);
+    this.drawMarkers();
   }
 
   // Whether a part can go on from component `object`.
@@ -1444,9 +1446,11 @@ export class CellPanel {
       }
     }
     for (const a of arrows) this.markers.add(a);
-    // A dot over each piece that sends parts on: dragged onto other
-    // equipment, it links the two.
-    for (const c of this.cell.components) {
+    // In link mode, a handle over each piece that sends parts on: dragged
+    // onto other equipment, it links the two. Not shown otherwise — the
+    // right-click menu links as well, without them over everything.
+    const linking = this.link != null && !this.link.once;
+    for (const c of linking ? this.cell.components : []) {
       const a = at.get(c.object);
       if (!a || !this.sends(c.object)) continue;
       const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dotTexture(), depthTest: false, transparent: true }));

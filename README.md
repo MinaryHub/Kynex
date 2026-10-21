@@ -1076,7 +1076,13 @@ not change the session's scene.
     same, the receiver clicked next. In either link mode each robot has a
     purple sign over it, seen through the machines in front of it: click
     or drop on the sign to mean that robot. Once a robot is chosen, a
-    dashed line runs from the sender to it until the receiver is clicked. An arrow carried by a robot is drawn
+    dashed line runs from the sender to it until the receiver is clicked.
+    A robot, and the pedestal or table it stands on, is never a place in
+    the flow: KYNEX refuses to give it a flow role. A project that made
+    one so is mended when opened, each link into it and each out of it
+    becoming one link that robot carries. Right-click a robot for
+    **이 로봇이 나르게 잇기** (a sender, then the receiver clicked) and
+    **이 로봇이 나르는 연결**. An arrow carried by a robot is drawn
     over that robot, purple; AMR green, 작업자 yellow, 직접 blue; red, with
     ⚠ 안 닿음, where its robot cannot reach an end. A project saved with
     the old 보내는 방법 on a piece has it given to each of that piece's

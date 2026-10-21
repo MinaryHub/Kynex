@@ -1720,8 +1720,14 @@ window.addEventListener('pointerup', (e) => {
 });
 function sceneMenu(x, y) {
   const marker = markerAt(x, y);
+  // A robot's sign, or the robot itself: its menu, before the arrows that
+  // run over it.
+  if (marker?.robot != null) return showMenu(x, y, cellPanel.robotMenu(marker.robot));
+  const under = partAt(x, y);
+  const robot = under ? robotOf(chainOf(under.uid)) : null;
+  if (robot != null) return showMenu(x, y, cellPanel.robotMenu(robot));
   if (marker?.link) return showMenu(x, y, cellPanel.linkMenu(marker.link));
-  const hit = partAt(x, y);
+  const hit = under;
   if (hit) {
     const uids = chainOf(hit.uid);
     const entries = cellPanel.equipmentMenu(uids, libraryPanel.itemOf(uids[0])?.root ?? null);

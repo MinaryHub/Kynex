@@ -1027,6 +1027,10 @@ export class CellPanel {
   }
 
   nameOf(object) {
+    // A role on a part of placed equipment — a conveyor's belt, a table's
+    // pallet —: the equipment's name, which tells two of them apart.
+    const item = this.ctx.itemOf?.(object);
+    if (item && item.root !== object && item.name) return item.name;
     return this.componentOf(object)?.name ?? this.ctx.nameOf?.(object) ?? '';
   }
 
@@ -1148,6 +1152,9 @@ export class CellPanel {
   // The menu for a right click on equipment `uids` (and `root`): linking
   // it on, linking to it, undoing its links, its role; or null for nothing.
   equipmentMenu(uids, root = null) {
+    // A robot: what it carries, not a place in the flow.
+    const robot = this.ctx.robotOf?.(uids);
+    if (robot != null) return this.robotMenu(robot);
     const piece = this.pieceOf(uids, root);
     if (!piece) return null;
     const { object, c, name } = piece;
@@ -1216,6 +1223,53 @@ export class CellPanel {
     entries.push({ sep: true }, { label: '선택', run: () => this.ctx.select?.(object) }, { label: '화면 맞춤', hint: 'F', run: () => this.ctx.frame?.(object) });
     if (this.ctx.remove) entries.push({ label: '삭제', hint: 'Delete', danger: true, run: () => this.ctx.remove(object) });
     return entries;
+  }
+
+  // The menu for a right click on robot `robot`: links for it to carry,
+  // made from a sender to a receiver chosen next; those it carries.
+  robotMenu(robot) {
+    const name = this.robotName(robot);
+    const carried = [];
+    for (const c of this.cell.components) {
+      for (const k of c.flow?.carriers ?? []) {
+        if (k.by === 3 && k.robot === robot) carried.push({ from: c.object, to: k.to });
+      }
+    }
+    const senders = this.cell.components.filter((c) => c.flow && this.sends(c.object));
+    return [
+      { title: `로봇 ${name}` },
+      {
+        label: '이 로봇이 나르게 잇기',
+        hint: '보내는 설비 → 받을 설비',
+        sub: senders.map((s) => ({
+          label: this.nameOf(s.object),
+          hint: FLOW_NAME[s.kind] ?? s.kind,
+          run: () => {
+            if (this.carry) this.stopCarrying();
+            if (!this.link) this.startLinking(s.object);
+            this.link.from = s.object;
+            this.link.via = robot;
+            this.drawMarkers();
+            this.ctx.toast(`${this.nameOf(s.object)} → 로봇 ${name} → 받을 설비를 누르세요`);
+          },
+        })),
+      },
+      {
+        label: '이 로봇이 나르는 연결',
+        sub: carried.length
+          ? carried.map((l) => ({
+              label: `${this.nameOf(l.from)} → ${this.nameOf(l.to)}`,
+              sub: [
+                { label: '직접으로 (운반 없음)', run: () => this.setCarrier(l, 0) },
+                { label: '연결 끊기', danger: true, run: () => this.unlink(l.from, l.to) },
+              ],
+            }))
+          : [{ label: '없음', disabled: true }],
+      },
+      { sep: true },
+      { label: '선택', run: () => this.ctx.select?.(robot) },
+      { label: '화면 맞춤', hint: 'F', run: () => this.ctx.frame?.(robot) },
+    ];
   }
 
   // The menu for a right click on a link's arrow.

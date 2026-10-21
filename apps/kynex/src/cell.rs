@@ -1767,6 +1767,81 @@ impl Cell {
                     .is_some_and(|id| machines.iter().any(|m| is_below(doc, id, *m)))
         });
         self.merge_nested_flow_roles(doc);
+        self.robots_out_of_flow(doc);
+    }
+
+    /// The robot `object` is, or is part of, or holds, or that stands on it
+    /// (a pedestal's top): a robot is what carries along the flow's links,
+    /// never a place in the flow.
+    pub(crate) fn robot_for(doc: &Document, object: u64) -> Option<u64> {
+        let id = id_of(doc, object)?;
+        let robots = kynex_model::robots(doc);
+        for r in &robots {
+            let Some(rid) = id_of(doc, r.root) else { continue };
+            let item_root = doc.object(rid).and_then(|o| o.parent);
+            if rid == id || is_below(doc, id, rid) || item_root == Some(id) {
+                return Some(r.root);
+            }
+        }
+        // A robot standing on it: its base within the object's top.
+        let (lo, hi) = doc
+            .objects()
+            .filter(|(o, _)| *o == id || is_below(doc, *o, id))
+            .filter_map(|(o, _)| bounds(doc, o))
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))?;
+        robots.iter().find_map(|r| {
+            let base = doc.world_transform(id_of(doc, r.root)?).translation;
+            (base.x >= lo.x - 0.05
+                && base.x <= hi.x + 0.05
+                && base.y >= lo.y - 0.05
+                && base.y <= hi.y + 0.05
+                && (base.z - hi.z).abs() < 0.15)
+                .then_some(r.root)
+        })
+    }
+
+    /// A robot, or a robot's pedestal, made a place in the flow — by
+    /// projects saved before this was refused —: taken out of it. Each link
+    /// into it and each out of it become one link carried by that robot,
+    /// from where the parts came to where they went.
+    fn robots_out_of_flow(&mut self, doc: &Document) {
+        let found: Vec<(u64, u64)> = self
+            .components
+            .iter()
+            .filter(|c| c.kind.flow())
+            .filter_map(|c| Some((c.object, Self::robot_for(doc, c.object)?)))
+            .collect();
+        for (object, robot) in found {
+            let ins: Vec<u64> = self
+                .flow_next
+                .iter()
+                .filter(|(from, next)| **from != object && next.contains(&object))
+                .map(|(from, _)| *from)
+                .collect();
+            let outs = self.flow_next.remove(&object).unwrap_or_default();
+            for next in self.flow_next.values_mut() {
+                next.retain(|n| *n != object);
+            }
+            self.carriers.retain(|(a, b), _| *a != object && *b != object);
+            for from in &ins {
+                for to in outs.iter().filter(|t| **t != *from && **t != object) {
+                    let next = self.flow_next.entry(*from).or_default();
+                    if !next.contains(to) {
+                        next.push(*to);
+                    }
+                    self.carriers.insert(
+                        (*from, *to),
+                        Carrier {
+                            by: 3,
+                            robot: Some(robot),
+                        },
+                    );
+                }
+            }
+            self.components.retain(|c| c.object != object);
+            self.roles_changed = true;
+            self.changed = true;
+        }
     }
 
     /// A flow role given to equipment that has the same role on a part of
@@ -2442,6 +2517,12 @@ impl Cell {
                             at = doc.object(up).and_then(|o| o.parent);
                         }
                     }
+                }
+                // A robot carries along the links; it is no place in them.
+                if req["kind"].as_str().and_then(Kind::of).is_some_and(Kind::flow)
+                    && Self::robot_for(doc, object).is_some()
+                {
+                    return Err("로봇(과 로봇이 선 받침대)은 공정 흐름에 넣지 않습니다. 로봇이 나르게 하려면 연결 화살표를 오른쪽 클릭해 '운반'에서 로봇을 고르거나, 연결 모드에서 보내는 설비 → 로봇 → 받는 설비를 누르세요".into());
                 }
                 // Its wiring stays while its kind does.
                 let was = self.components.iter().find(|c| c.object == object).cloned();

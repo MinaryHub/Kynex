@@ -29,11 +29,11 @@ kynex-link    = { path = "crates/kynex-link" }
 kynex-view    = { path = "crates/kynex-view" }
 kynex-kin     = { path = "crates/kynex-kin" }
 kynex-collide = { path = "crates/kynex-collide" }
-kreate-scene  = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
-kreate-io     = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
-kreate-math   = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
-kreate-mesh   = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
-kreate-collab = { git = "https://github.com/knoxxr/Kreate.git", rev = "151137a" }
+kreate-scene  = { git = "https://github.com/MinaryHub/Kreate.git", rev = "151137a" }
+kreate-io     = { git = "https://github.com/MinaryHub/Kreate.git", rev = "151137a" }
+kreate-math   = { git = "https://github.com/MinaryHub/Kreate.git", rev = "151137a" }
+kreate-mesh   = { git = "https://github.com/MinaryHub/Kreate.git", rev = "151137a" }
+kreate-collab = { git = "https://github.com/MinaryHub/Kreate.git", rev = "151137a" }
 
 serde      = { version = "1", features = ["derive"] }
 # Mesh simplification for the viewer's levels of detail. The same version

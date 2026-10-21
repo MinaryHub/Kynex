@@ -829,6 +829,62 @@ impl Cell {
         self.changed = true;
     }
 
+    /// Part `part`'s job for a robot that no robot can do — its place out
+    /// of every one's reach —: given up. The part is back where it was, to
+    /// go another way; that way left alone a while (see `cut_off`).
+    pub fn robot_cannot(&mut self, part: u64, why: String) {
+        let version = self.docks_seen.as_ref().map_or(0, |d| d.layout);
+        let Some(k) = self
+            .jobs
+            .iter()
+            .position(|j| j.part == part && j.amr.is_none())
+        else {
+            return;
+        };
+        let job = self.jobs.remove(k);
+        let to = self
+            .components
+            .iter()
+            .find(|c| c.object == job.to)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        self.unreachable
+            .insert((job.from, job.to), (version, why.clone()));
+        let belt = self
+            .components
+            .iter()
+            .any(|c| c.object == job.from && c.kind == Kind::Conveyor);
+        if let Some(i) = self.part_index(part) {
+            if belt {
+                // Back on the belt, at its end: told again as there.
+                self.parts[i].flow = Some(Place::Belt(job.from));
+            } else {
+                self.parts[i].flow = Some(Place::At(job.from));
+                self.stations.entry(job.from).or_default().out.insert(0, part);
+            }
+        }
+        self.flow_problem = Some(format!("{to}(으)로는 보내지 않습니다 — {why}"));
+        self.changed = true;
+    }
+
+    /// Whether the link from `from` to `to` is left alone now: no robot
+    /// could carry along it in the scene as it is.
+    pub(super) fn cut_off(&self, from: u64, to: u64) -> bool {
+        let version = self.docks_seen.as_ref().map_or(0, |d| d.layout);
+        self.unreachable
+            .get(&(from, to))
+            .is_some_and(|(v, _)| *v == version)
+    }
+
+    /// Why no robot can bring parts to `to`, if none can now.
+    pub(super) fn unreachable_to(&self, to: u64) -> Option<&str> {
+        let version = self.docks_seen.as_ref().map_or(0, |d| d.layout);
+        self.unreachable
+            .iter()
+            .find(|((_, t), (v, _))| *t == to && *v == version)
+            .map(|(_, (_, why))| why.as_str())
+    }
+
     /// Says why the flow cannot go on as it should.
     pub fn flow_trouble(&mut self, why: String) {
         if self.flow_problem.as_ref() != Some(&why) {

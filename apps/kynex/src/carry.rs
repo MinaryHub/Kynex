@@ -40,6 +40,9 @@ pub struct Carry {
     /// The places each robot carrying goes between, by robot: their doors
     /// kept open until it is done and out, not only until the part is down.
     serving: BTreeMap<u64, [u64; 2]>,
+    /// The robots that could not take each part where it goes, by part:
+    /// once all have said so, it goes another way (see `Cell::robot_cannot`).
+    failed: BTreeMap<u64, std::collections::BTreeSet<u64>>,
 }
 
 impl Carry {
@@ -95,6 +98,7 @@ impl Carry {
         }
         let grippers = cell.grippers();
         self.tried.retain(|p, _| jobs.iter().any(|j| j.0 == *p));
+        self.failed.retain(|p, _| jobs.iter().any(|j| j.0 == *p));
         for (part, at, to, ends) in jobs {
             if self
                 .tried
@@ -135,7 +139,9 @@ impl Carry {
             // The scene with the doors of machines served open, as they
             // are while a robot reaches in: moves are looked along in it.
             let opened = cell.with_station_doors_open(scene);
+            let mut tried: Vec<u64> = Vec::new();
             for (root, gripper, _) in robots {
+                tried.push(root);
                 match self.transfer(scene, &opened, posing, root, gripper, at, to, check) {
                     Ok(program) => match Runner::new(root, program, scene, time) {
                         Ok(runner) => {
@@ -155,9 +161,24 @@ impl Carry {
             }
             if let Some(why) = trouble {
                 self.tried.insert(part, time);
-                // Out of reach of the robots free now: said only when no
-                // other is busy carrying, which may take it when done.
-                if self.carrying.is_empty() {
+                // Out of reach of the robots free now: of those busy too?
+                // Then no robot can take it there: it goes another way,
+                // if its place has another, rather than wait for ever and
+                // hold up all behind it.
+                // Each robot is asked while it is free, as it stands
+                // waiting: once every one with a grip point has said no.
+                let failed = self.failed.entry(part).or_default();
+                failed.extend(tried.iter().copied());
+                let all = kynex_model::robots(scene).into_iter().all(|r| {
+                    failed.contains(&r.root)
+                        || kynex_kin::Kinematics::of(scene, r.root)
+                            .is_none_or(|kin| !grippers.iter().any(|g| kin.contains(*g)))
+                });
+                if all {
+                    self.failed.remove(&part);
+                    cell.robot_cannot(part, why);
+                    changed = true;
+                } else if self.carrying.is_empty() {
                     cell.flow_trouble(why);
                 }
             }

@@ -1152,6 +1152,10 @@ pub struct Cell {
     flow_stats: flow::Stats,
     /// What last kept the flow from going on as it should, for the page.
     flow_problem: Option<String>,
+    /// Links no robot can carry along, from one place to the next, by
+    /// the pair: in which layout (see `flow::Docks`), and why. Parts go
+    /// another way until it changes — a machine or a robot moved.
+    unreachable: BTreeMap<(u64, u64), (u64, String)>,
     /// The flow's random numbers: drawn in turn from its seed, the same
     /// run after run for one seed.
     rng: u64,

@@ -211,6 +211,10 @@ pub struct Docks {
     /// Inside the equipment each station stands for, where it has one:
     /// where its work in hand is shown, in the machine, not at its port.
     inside: BTreeMap<u64, DVec3>,
+    /// The layout: where the flow's places and the robots stand, to the
+    /// centimetre, as one number — the same while only doors and arms
+    /// move.
+    pub(super) layout: u64,
 }
 
 /// The flow's calendar and warm-up: work and rest in turn (minutes of
@@ -603,12 +607,27 @@ impl Cell {
                 DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, lo.z + up),
             );
         }
+        let layout = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let cm = |v: DVec3| [(v.x * 100.0).round() as i64, (v.y * 100.0).round() as i64, (v.z * 100.0).round() as i64];
+            for (o, d) in &docks {
+                (o, cm(d.0)).hash(&mut h);
+            }
+            for r in kynex_model::robots(doc) {
+                if let Some(id) = id_of(doc, r.root) {
+                    (r.root, cm(doc.world_transform(id).translation)).hash(&mut h);
+                }
+            }
+            h.finish()
+        };
         self.docks_seen = Some(Docks {
             version: doc.version(),
             objects: key,
             docks: docks.clone(),
             shelves: shelves.clone(),
             inside,
+            layout,
         });
         (docks, shelves)
     }
@@ -1218,7 +1237,11 @@ impl Cell {
                     };
                     let open: Vec<usize> = (0..next.len())
                         .map(|k| (turn + k) % next.len())
-                        .filter(|k| takes(next[*k]) && self.room(next[*k], &coming) > 0)
+                        .filter(|k| {
+                            takes(next[*k])
+                                && self.room(next[*k], &coming) > 0
+                                && !self.cut_off(c.object, next[*k].object)
+                        })
                         .collect();
                     let pick = match c.props.rule {
                         // The one with the fewest waiting and coming.
@@ -1627,6 +1650,8 @@ impl Cell {
             "made": s.made,
             "down": s.down_until.is_some(),
             "maint": s.pm_until.is_some(),
+            // No robot can bring it parts now, and why.
+            "unreachable": self.unreachable_to(c.object),
             "mix": self.mix.get(&c.object),
             "orders": self.orders.get(&c.object).map(Vec::len),
             "cycles": self.cycles.get(&c.object),

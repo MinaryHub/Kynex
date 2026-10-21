@@ -1074,7 +1074,11 @@ not change the session's scene.
     program: down, grip, up, over, down, let go, up. The part goes on
     once put down. The robot's lane in the timeline shows the work.
     Out of reach, the flow bar says where, and the part waits for a
-    robot that can.
+    robot that can. Once every robot with a grip point has found the
+    place out of its reach, parts no longer go that way: the part goes
+    to another of its next with room, rather than hold up those behind
+    it, and the place's sign and state say 로봇 안 닿음 and why. Moving
+    the machine or a robot tries it again.
   - A station's **동시 투입 가능 수**: the most parts it holds at once,
     waiting, at work and done, those on their way counted. 0 leaves it
     as it suits the station: one for a machine with a chuck or mould and

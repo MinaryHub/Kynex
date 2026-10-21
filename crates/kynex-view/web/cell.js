@@ -492,7 +492,7 @@ export class CellPanel {
         c.kind === 'sink'
           ? `배출 ${f.made}개`
           : c.kind === 'station'
-            ? `${f.down ? '고장 · 수리 중' : f.maint ? '보전 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 장비 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}개 · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
+            ? `${f.unreachable ? `⚠ 로봇이 닿지 않아 이 장비로는 보내지 않습니다 (${f.unreachable}) · ` : ''}${f.down ? '고장 · 수리 중' : f.maint ? '보전 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 장비 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}개 · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
             : c.kind === 'conveyor'
               ? `끝에서 기다림 ${f.out}`
               : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
@@ -1175,7 +1175,7 @@ export class CellPanel {
       let state = '';
       let text;
       if (c.kind === 'station') {
-        state = f.down ? 'down' : f.maint ? 'maint' : f.working ? 'run' : f.out ? 'blocked' : 'idle';
+        state = f.down ? 'down' : f.maint ? 'maint' : f.working ? 'run' : f.out ? 'blocked' : f.unreachable ? 'unreach' : 'idle';
         const busy = Math.round((f.oee?.busy ?? 0) * 100);
         text = `가동 ${busy}% · 처리 ${f.made ?? 0} · 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}`;
       } else {
@@ -1356,6 +1356,7 @@ export class CellPanel {
       down: ['DOWN', '#d9534f'],
       maint: ['보전', '#3d7fd9'],
       blocked: ['BLOCKED', '#d99a2b'],
+      unreach: ['로봇 안 닿음', '#b8443c'],
     };
     const chip = STATES[state];
     const canvas = document.createElement('canvas');

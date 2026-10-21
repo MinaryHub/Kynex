@@ -670,3 +670,41 @@ fn operators_work_only_where_they_may_and_on_their_shift() {
     let end = cell.flow_summary()["sunk"].as_u64().unwrap();
     assert!(end <= out_at_half + 2, "{out_at_half} then {end}");
 }
+
+/// A place no robot can reach is left out: the part that was to go there
+/// goes to the other, and the rest after it, not held up behind it.
+#[test]
+fn parts_no_robot_can_take_somewhere_go_another_way() {
+    let (doc, mut cell, u) = floor(&[
+        ("flow_source", 0.0, 0.0, json!({"feed": 2.0, "carrier": 3})),
+        ("flow_station", 2.0, 1.0, json!({"cycle": 3.0})),
+        ("flow_station", 2.0, -1.0, json!({"cycle": 3.0})),
+        ("flow_sink", 4.0, 0.0, json!({})),
+    ]);
+    ask(&mut cell, &doc, json!({"op": "flow_next", "object": u[0].to_string(), "next": [u[1].to_string(), u[2].to_string()]}));
+    for s in [u[1], u[2]] {
+        ask(&mut cell, &doc, json!({"op": "flow_next", "object": s.to_string(), "next": [u[3].to_string()]}));
+    }
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut t, mut refused) = (0.0, 0);
+    while t < 200.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        // A robot, as `carry` is: the far station out of its reach.
+        for (part, _, _, [_, to]) in cell.robot_jobs(&doc) {
+            if to == u[2] {
+                cell.robot_cannot(part, "닿지 않음".into());
+                refused += 1;
+            } else {
+                cell.robot_take(part, 1);
+                cell.robot_done(part, None);
+            }
+        }
+    }
+    let f = |s: u64| cell.components.iter().find(|c| c.object == s).map(|c| cell.flow_json(&doc, c)).unwrap();
+    assert_eq!(refused, 1, "asked once, then left out");
+    assert_eq!(f(u[2])["made"], 0);
+    assert!(f(u[1])["made"].as_u64().unwrap() >= 60, "{}", f(u[1]));
+    assert!(f(u[2])["unreachable"].is_string());
+}

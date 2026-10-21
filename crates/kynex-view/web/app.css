@@ -213,6 +213,68 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .toolbar button.play-btn.on { color: #ff6b6b; background: rgba(255, 95, 95, 0.14); }
 .toolbar .play-speed { font: 11px var(--mono); }
 .toolbar .play-speed:empty { display: none; }
+/* The run's state and the clock's speed, over the view: plain to see. */
+.run-badge {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: rgba(20, 23, 28, 0.88);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  user-select: none;
+}
+.run-badge button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: 600 14px system-ui, sans-serif;
+}
+.run-badge .run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #3a404a;
+}
+.run-badge .run-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #aab2be;
+}
+.run-badge.on .run-state { background: #1f8f55; }
+.run-badge.on .run-dot {
+  border-radius: 50%;
+  background: #b9ffd8;
+  animation: run-pulse 1s ease-in-out infinite;
+}
+@keyframes run-pulse {
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
+.run-badge .run-step {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+}
+.run-badge .run-step:hover { background: rgba(255, 255, 255, 0.08); }
+.run-badge .run-speed {
+  min-width: 52px;
+  text-align: center;
+  font: 700 16px var(--mono);
+  color: #e7eaf0;
+}
+.run-badge .run-speed.fast { color: #ffb347; }
 .measure-readout {
   position: absolute;
   left: 50%;

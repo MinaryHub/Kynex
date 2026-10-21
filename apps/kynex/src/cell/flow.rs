@@ -65,6 +65,11 @@ pub struct Station {
     /// then.
     pub fail_in: Option<f64>,
     pub down_until: Option<f64>,
+    /// Seconds of work left before its next planned maintenance; under
+    /// maintenance until then; seconds under it since the flow started.
+    pub pm_in: Option<f64>,
+    pub pm_until: Option<f64>,
+    pub maint: f64,
     /// Since the flow started: seconds at work, broken down, and the parts
     /// made good and scrapped — its OEE.
     pub busy: f64,
@@ -203,6 +208,9 @@ pub struct Docks {
     objects: Vec<u64>,
     pub(super) docks: BTreeMap<u64, (DVec3, DVec3, DVec3)>,
     shelves: BTreeMap<u64, Vec<DVec3>>,
+    /// Inside the equipment each station stands for, where it has one:
+    /// where its work in hand is shown, in the machine, not at its port.
+    inside: BTreeMap<u64, DVec3>,
 }
 
 /// The flow's calendar and warm-up: work and rest in turn (minutes of
@@ -506,7 +514,11 @@ impl Cell {
         BTreeMap<u64, (DVec3, DVec3, DVec3)>,
         BTreeMap<u64, Vec<DVec3>>,
     ) {
-        let key: Vec<u64> = flow.iter().map(|c| c.object).collect();
+        // The pieces, and the equipment each stands for.
+        let key: Vec<u64> = flow
+            .iter()
+            .flat_map(|c| [c.object, self.hosts.get(&c.object).copied().unwrap_or(0)])
+            .collect();
         if let Some(seen) = &self.docks_seen {
             if seen.version == doc.version() && seen.objects == key {
                 return (seen.docks.clone(), seen.shelves.clone());
@@ -570,11 +582,33 @@ impl Cell {
                 (*object, (held.unwrap_or(top), along, across))
             })
             .collect();
+        // In the middle of each station's equipment, a little off its
+        // floor: a chamber's height, or half the machine's if it is low.
+        let mut inside = BTreeMap::new();
+        for c in flow.iter().filter(|c| c.kind == Kind::Station) {
+            let Some(host) = self.hosts.get(&c.object).and_then(|h| id_of(doc, *h)) else {
+                continue;
+            };
+            let Some((lo, hi)) = doc
+                .objects()
+                .filter(|(o, _)| *o == host || is_below(doc, *o, host))
+                .filter_map(|(o, _)| bounds(doc, o))
+                .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+            else {
+                continue;
+            };
+            let up = ((hi.z - lo.z) * 0.5).min(0.9);
+            inside.insert(
+                c.object,
+                DVec3::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0, lo.z + up),
+            );
+        }
         self.docks_seen = Some(Docks {
             version: doc.version(),
             objects: key,
             docks: docks.clone(),
             shelves: shelves.clone(),
+            inside,
         });
         (docks, shelves)
     }
@@ -749,6 +783,7 @@ impl Cell {
                 for s in self.stations.values_mut() {
                     s.busy = 0.0;
                     s.down = 0.0;
+                    s.maint = 0.0;
                     s.rested = 0.0;
                     s.good = 0;
                     s.bad = 0;
@@ -765,6 +800,9 @@ impl Cell {
                     *end += dt;
                 }
                 if let Some(until) = s.down_until.as_mut() {
+                    *until += dt;
+                }
+                if let Some(until) = s.pm_until.as_mut() {
                     *until += dt;
                 }
             }
@@ -969,6 +1007,9 @@ impl Cell {
                 None => {
                     if s.working.is_some() {
                         s.busy += dt;
+                        if let Some(left) = s.pm_in.as_mut() {
+                            *left -= dt;
+                        }
                         if let Some(left) = s.fail_in.as_mut() {
                             *left -= dt;
                             if *left <= 0.0 {
@@ -1032,9 +1073,33 @@ impl Cell {
                     s.out.extend(made);
                 }
             }
+            // Planned maintenance: due once it has worked so long, begun
+            // when its cycle in hand is done, over after its time.
+            if c.props.pm_every > 0.0 {
+                match s.pm_until {
+                    Some(until) if now < until => s.maint += dt,
+                    Some(_) => {
+                        s.pm_until = None;
+                        s.pm_in = Some(c.props.pm_every);
+                        happened = true;
+                    }
+                    None => {
+                        let due = *s.pm_in.get_or_insert(c.props.pm_every);
+                        if due <= 0.0 && s.working.is_none() && s.down_until.is_none() {
+                            s.pm_in = None;
+                            s.pm_until = Some(now + c.props.pm_time.max(0.0));
+                            happened = true;
+                        }
+                    }
+                }
+            } else {
+                s.pm_in = None;
+                s.pm_until = None;
+            }
             let takes = c.props.takes.max(1) as usize;
             let ready = s.working.is_none()
                 && s.down_until.is_none()
+                && s.pm_until.is_none()
                 && s.out.is_empty()
                 && s.queue.len() >= takes;
             // A station that needs a person works once one is at it: called
@@ -1300,6 +1365,12 @@ impl Cell {
             })
             .collect();
         let mut facing: BTreeMap<u64, f64> = BTreeMap::new();
+        // Where each station's work in hand is shown in its equipment.
+        let inside = self
+            .docks_seen
+            .as_ref()
+            .map(|d| d.inside.clone())
+            .unwrap_or_default();
         // Those waiting at each for a carrier.
         let mut waiting_at: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         // A robot's part not yet in its gripper stays exactly where it is —
@@ -1335,9 +1406,23 @@ impl Cell {
             {
                 continue;
             }
+            // The work in hand inside its equipment, side by side; the
+            // rest at its port as ever.
+            let within = inside.get(object);
+            if let (Some(at), Some((_, work))) = (within, &s.working) {
+                let yaw = along.y.atan2(along.x);
+                let n = work.len() as f64;
+                for (k, uid) in work.iter().enumerate() {
+                    let pitch = cars.get(uid).map_or(PITCH, |c| c.0.max(PITCH));
+                    spots.insert(*uid, *at + along * (k as f64 - (n - 1.0) / 2.0) * pitch);
+                    facing.insert(*uid, yaw);
+                    placed.insert(*uid);
+                }
+            }
             let order = s
                 .working
                 .iter()
+                .filter(|_| within.is_none())
                 .flat_map(|(_, p)| p.iter())
                 .chain(s.out.iter())
                 .chain(s.queue.iter());
@@ -1500,6 +1585,7 @@ impl Cell {
                 let activity = match s {
                     _ if resting => "rest",
                     Some(s) if s.down_until.is_some() => "down",
+                    Some(s) if s.pm_until.is_some() => "maint",
                     Some(s) if s.working.is_some() => "cut",
                     Some(s) if !s.out.is_empty() => "blocked",
                     _ => "idle",
@@ -1540,6 +1626,7 @@ impl Cell {
             }),
             "made": s.made,
             "down": s.down_until.is_some(),
+            "maint": s.pm_until.is_some(),
             "mix": self.mix.get(&c.object),
             "orders": self.orders.get(&c.object).map(Vec::len),
             "cycles": self.cycles.get(&c.object),
@@ -1627,7 +1714,7 @@ impl Cell {
         let s = self.stations.get(&c.object).cloned().unwrap_or_default();
         let now = self.last_tick.unwrap_or(0.0);
         let planned =
-            (self.flow_stats.from.map_or(0.0, |f| (now - f).max(0.0)) - s.rested).max(0.0);
+            (self.flow_stats.from.map_or(0.0, |f| (now - f).max(0.0)) - s.rested - s.maint).max(0.0);
         let run = (planned - s.down).max(0.0);
         let made = s.good + s.bad;
         let a = if planned > 0.0 { run / planned } else { 0.0 };
@@ -1659,6 +1746,7 @@ impl Cell {
             "bad": s.bad,
             "busy": share(s.busy),
             "down": share(s.down),
+            "maint": s.maint,
         })
     }
 
@@ -1669,6 +1757,8 @@ impl Cell {
         let elapsed = st.from.map_or(0.0, |f| (now - f).max(0.0));
         json!({
             "on": self.flow_on,
+            // Run since the last reset: its figures are there to show.
+            "started": st.from.is_some(),
             "elapsed": elapsed,
             "sunk": st.sunk,
             "per_hour": if elapsed > 0.0 { st.sunk as f64 / elapsed * 3600.0 } else { 0.0 },

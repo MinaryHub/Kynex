@@ -1065,3 +1065,31 @@ fn a_station_holds_no_more_than_it_is_set_to() {
     assert!(held <= 4, "{held}");
     assert!(sunk >= 17, "{sunk}");
 }
+
+#[test]
+fn a_station_stops_for_its_planned_maintenance() {
+    let build = |pm: f64| {
+        let (doc, mut cell, u) = line(&[
+            ("flow_source", 0.0, json!({"feed": 1.0})),
+            ("flow_station", 2.0, json!({"cycle": 10.0, "pm_every": pm, "pm_time": 50.0})),
+            ("flow_sink", 4.0, json!({})),
+        ]);
+        link(&mut cell, &doc, u[0], &[u[1]]);
+        link(&mut cell, &doc, u[1], &[u[2]]);
+        ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+        let start = Instant::now();
+        let (mut t, mut seen) = (0.0, false);
+        while t < 1000.0 {
+            t += 0.1;
+            cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+            seen |= cell.flow_activities().iter().any(|a| a.2 == "maint");
+        }
+        (cell.flow_summary()["sunk"].as_u64().unwrap(), seen)
+    };
+    let (free, none) = build(0.0);
+    // Every 100 s of work, 50 s stopped: a third fewer out.
+    let (kept, seen) = build(100.0);
+    assert!(!none && seen);
+    assert!(free >= 95, "{free}");
+    assert!((60..=72).contains(&kept), "{kept}");
+}

@@ -555,6 +555,11 @@ pub struct Props {
     /// in it —, coming ones counted: 0 is as it suits it, one for a
     /// machine with a chuck or mould and a door, else as many as wait.
     pub holds: u32,
+    /// Planned maintenance: after this many seconds of work a station
+    /// stops for it (0: never), for `pm_time` seconds, once its cycle in
+    /// hand is done.
+    pub pm_every: f64,
+    pub pm_time: f64,
 }
 
 /// What a connector takes, by its number: a robot standing on it, a
@@ -606,6 +611,8 @@ impl Default for Props {
             takes: 1,
             makes: 1,
             holds: 0,
+            pm_every: 0.0,
+            pm_time: 0.0,
         }
     }
 }
@@ -734,6 +741,8 @@ impl Props {
             .map_or(self.spread, |x| x.clamp(0.0, 36000.0));
         let hours = |key: &str, now: f64| v[key].as_f64().map_or(now, |x| x.clamp(0.0, 1.0e7));
         self.mtbf = hours("mtbf", self.mtbf);
+        self.pm_every = hours("pm_every", self.pm_every);
+        self.pm_time = hours("pm_time", self.pm_time);
         self.mttr = hours("mttr", self.mttr);
         self.scrap = v["scrap"]
             .as_f64()
@@ -780,7 +789,7 @@ impl Props {
     }
 
     fn to_json(self) -> Value {
-        json!({
+        let mut v = json!({
             "cycle": self.cycle,
             "door": self.door,
             "chuck": self.chuck,
@@ -821,7 +830,11 @@ impl Props {
             "takes": self.takes,
             "makes": self.makes,
             "holds": self.holds,
-        })
+        });
+        // Apart: one map of them all is more than `json!` takes at once.
+        v["pm_every"] = json!(self.pm_every);
+        v["pm_time"] = json!(self.pm_time);
+        v
     }
 }
 

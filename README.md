@@ -1088,6 +1088,19 @@ not change the session's scene.
     load port. Picking that machine shows the piece's role and settings.
     The demos have each process on its machine this way. A flow piece
     set inside a machine with no role of its own is found the same way.
+    While such a station works, its part is shown inside that machine,
+    which is drawn see-through, as a stocker is.
+  - Over each station, once the flow has run, a status sign: its state
+    (RUN, IDLE, DOWN, 보전, BLOCKED) in its colour, the share of the time
+    it worked (가동), the cycles it has done (처리) and the parts in it
+    against its limit (안). A buffer's says how many it keeps.
+  - A station's **보전 간격** and **보전 시간**: planned maintenance. After
+    that many seconds of work it stops, once its cycle in hand is done,
+    for that long. The time is a planned stop, left out of OEE's planned
+    time, and shows as 보전 in the timeline.
+  - Over the view, a badge shows whether the run goes (실행 중, a pulsing
+    green dot) or not (정지) and the clock's speed, with − and + to
+    change it. Opening or reloading the page stops the run and sets 1×.
   - A buffer's **꺼내는 순서**: first in first out, or last in first out.
     Library **랙 창고**: a pallet rack whose parts sit on its shelves,
     ten to a shelf, the lowest first.

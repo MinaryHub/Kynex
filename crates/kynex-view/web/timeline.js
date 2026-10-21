@@ -51,6 +51,7 @@ const ACTIVITIES = {
   drive: ['주행', '#9b7bff'],
   walk: ['보행', '#c08bff'],
   down: ['고장', '#d9534f'],
+  maint: ['보전', '#4f8fd9'],
   rest: ['휴식', '#556070'],
   charge: ['충전', '#d4b83a'],
   off: ['근무 외', '#3a3f48'],

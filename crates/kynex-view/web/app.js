@@ -789,6 +789,7 @@ function connect() {
     timelinePanel.setFlow(cell);
     robotPanel.setCell(cell);
     plcPanel.setCell(cell);
+    freshStart();
   });
   // A page served by one KYNEX that reconnects to a newer one would read
   // its stream wrongly: it reloads instead.
@@ -2137,9 +2138,32 @@ async function resetRun() {
   }
 }
 
+// The page opened or reloaded: the simulation stopped, at 1×, as a fresh
+// start is — not running on at whatever speed it was left at.
+let fresh = false;
+function freshStart() {
+  if (fresh) return;
+  fresh = true;
+  const ask = (body) =>
+    fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+  // A busy KYNEX — running fast — may not answer at once: asked again
+  // until it stands still at 1×, for half a minute at most.
+  let tries = 0;
+  const settle = async () => {
+    const going = !!timelinePanel.flowState?.on || robotPanel.going().length > 0;
+    const speed = robotPanel.clock?.speed ?? 1;
+    if ((!going && speed === 1) || tries++ > 30) return;
+    if (robotPanel.going().length) await ask({ op: 'stop' });
+    if (timelinePanel.flowState?.on) await ask({ op: 'flow', action: 'stop' });
+    if (speed !== 1) await ask({ op: 'speed', speed: 1 });
+    setTimeout(settle, 1000);
+  };
+  ask({ op: 'stop' }).then(() => setTimeout(settle, 500));
+}
+
 // + and −: the simulation's clock a step faster or slower, through the
 // speeds the speed list offers.
-const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200];
+const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 300];
 async function stepSpeed(up) {
   const now = robotPanel.clock?.speed ?? 1;
   // The next of the list past where it is now, either way.
@@ -2495,7 +2519,21 @@ function showPlay() {
   b.classList.toggle('on', on);
   b.title = on ? '정지 (스페이스)' : '실행: 공정 흐름과 프로그램이 있는 로봇을 함께 돌립니다 (스페이스)';
   b.querySelector('.play-speed').textContent = speed !== 1 ? `${speed}×` : '';
+  // And the badge over the view.
+  const badge = document.getElementById('run-badge');
+  if (!badge) return;
+  badge.classList.toggle('on', on);
+  badge.querySelector('.run-word').textContent = on ? '실행 중' : '정지';
+  const sp = badge.querySelector('.run-speed');
+  sp.textContent = `${speed}×`;
+  sp.classList.toggle('fast', speed !== 1);
 }
+document.getElementById('run-badge')?.addEventListener('click', (e) => {
+  const act = e.target.closest('[data-run]')?.dataset.run;
+  if (act === 'toggle') playPause();
+  else if (act === 'faster') stepSpeed(true);
+  else if (act === 'slower') stepSpeed(false);
+});
 
 renderer.setAnimationLoop(() => {
   showPlay();

@@ -137,6 +137,8 @@ export const FIELDS = {
     ['setup', '품종 교체 시간', 's', 1],
     ['mtbf', '고장 간격', 's', 1],
     ['mttr', '수리 시간', 's', 1],
+    ['pm_every', '보전 간격', 's', 1],
+    ['pm_time', '보전 시간', 's', 1],
     ['scrap', '불량률', '%', 100],
     ['crew', '작업자', '', 1, [[0, '필요 없음'], [1, '작업자 필요']]],
     ['holds', '동시 투입 가능 수', '개', 1],
@@ -490,7 +492,7 @@ export class CellPanel {
         c.kind === 'sink'
           ? `배출 ${f.made}개`
           : c.kind === 'station'
-            ? `${f.down ? '고장 · 수리 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 장비 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}개 · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
+            ? `${f.down ? '고장 · 수리 중' : f.maint ? '보전 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 장비 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}개 · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
             : c.kind === 'conveyor'
               ? `끝에서 기다림 ${f.out}`
               : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
@@ -1130,7 +1132,7 @@ export class CellPanel {
       disc.renderOrder = 7;
       this.markers.add(disc);
       // Its name with its load, in one: two labels would cover each other.
-      const text = c === top && stations.length > 1 ? `${c.name} · 병목 ${Math.round(u * 100)}%` : `${c.name} · ${Math.round(u * 100)}%`;
+      const text = c === top && stations.length > 1 ? `${c.name} · 병목` : c.name;
       const size = this.signSize(at);
       if (this.showLabels) {
         this.markers.add(this.label(text, x, y, z + 0.3 + size, c === top && stations.length > 1 ? 'bottleneck' : 'load', size));
@@ -1159,6 +1161,31 @@ export class CellPanel {
     }
   }
 
+  // Over each station once the flow has run, a sign of how it is doing:
+  // its state — RUN, IDLE, DOWN, 보전, BLOCKED — in its colour, the share
+  // of the time it has worked, the cycles it has done and the parts in it
+  // now against the most it may hold. A buffer: the parts in it.
+  drawStatus(at) {
+    if (!this.showLabels || !this.cell.flow?.started) return;
+    const size = this.signSize(at);
+    for (const c of this.cell.components) {
+      const f = c.flow;
+      if (!f || !at.has(c.object) || !['station', 'buffer'].includes(c.kind)) continue;
+      const [x, y, z] = at.get(c.object);
+      let state = '';
+      let text;
+      if (c.kind === 'station') {
+        state = f.down ? 'down' : f.maint ? 'maint' : f.working ? 'run' : f.out ? 'blocked' : 'idle';
+        const busy = Math.round((f.oee?.busy ?? 0) * 100);
+        text = `가동 ${busy}% · 처리 ${f.made ?? 0} · 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}`;
+      } else {
+        text = `보관 ${(f.queue ?? 0) + (f.out ?? 0)}${c.props?.capacity ? `/${c.props.capacity}` : ''}`;
+      }
+      const sign = this.label(text, x, y, z + 0.3 + size * 2.15, `status:${state}`, size);
+      this.markers.add(sign);
+    }
+  }
+
   // How far each station's work in hand has got: a pie over it, filling
   // as the cycle goes, while it works; none while it does not.
   drawProgress(at) {
@@ -1173,7 +1200,7 @@ export class CellPanel {
       pie.scale.set(size * 1.5, size * 1.5, 1);
       pie.userData.sign = { size: size * 1.5, aspect: 1 };
       // Over the station's label, which stands `size` high at z + 0.3 + size.
-      pie.position.set(x, y, z + 0.3 + size * 2.4);
+      pie.position.set(x, y, z + 0.3 + size * (this.cell.flow?.started ? 3.6 : 2.4));
       pie.renderOrder = 9;
       this.markers.add(pie);
     }
@@ -1298,6 +1325,7 @@ export class CellPanel {
 
   // A label's picture, made once for each word.
   paintLabel(text, style) {
+    if (style.startsWith('status:')) return this.paintStatus(text, style.slice(7));
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const font = `600 ${style === 'name' ? 34 : 40}px system-ui, sans-serif`;
@@ -1313,6 +1341,50 @@ export class CellPanel {
     ctx.fillStyle = '#fff';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, 14, 33);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+    return { material, w };
+  }
+
+  // A status sign: a chip of the state's colour with its word, then the
+  // figures.
+  paintStatus(text, state) {
+    const STATES = {
+      run: ['RUN', '#2fbf71'],
+      idle: ['IDLE', '#6b7480'],
+      down: ['DOWN', '#d9534f'],
+      maint: ['보전', '#3d7fd9'],
+      blocked: ['BLOCKED', '#d99a2b'],
+    };
+    const chip = STATES[state];
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const font = '600 34px system-ui, sans-serif';
+    const bold = '800 30px system-ui, sans-serif';
+    ctx.font = bold;
+    const cw = chip ? Math.ceil(ctx.measureText(chip[0]).width) + 24 : 0;
+    ctx.font = font;
+    const w = Math.ceil(ctx.measureText(text).width) + 28 + (chip ? cw + 8 : 0);
+    canvas.width = w;
+    canvas.height = 64;
+    ctx.fillStyle = 'rgba(20, 24, 30, 0.86)';
+    ctx.beginPath();
+    ctx.roundRect(0, 4, w, 56, 12);
+    ctx.fill();
+    ctx.textBaseline = 'middle';
+    if (chip) {
+      ctx.fillStyle = chip[1];
+      ctx.beginPath();
+      ctx.roundRect(8, 10, cw, 44, 9);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = bold;
+      ctx.fillText(chip[0], 20, 33);
+    }
+    ctx.font = font;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, (chip ? cw + 16 : 0) + 14, 33);
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
@@ -1487,6 +1559,7 @@ export class CellPanel {
       this.markers.add(dot);
     }
     this.drawNames(at, this.drawLoads(at));
+    this.drawStatus(at);
     this.drawProgress(at);
     // The AMRs' lanes: a line between each two stops linked.
     const stops = new Map(this.cell.components.filter((c) => c.stop_at).map((c) => [c.object, c.stop_at]));

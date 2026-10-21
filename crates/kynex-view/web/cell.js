@@ -1831,7 +1831,9 @@ export class CellPanel {
             o.material.transparent = true;
             o.material.opacity = same ? 0.9 : 0.3;
           }
-          o.renderOrder = 8;
+          // Over the pieces' names: an arrow into a machine is not hidden
+          // under the machine's own sign.
+          o.renderOrder = 10;
         });
         arrows.push(arrow);
       });

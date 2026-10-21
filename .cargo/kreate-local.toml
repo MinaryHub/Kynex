@@ -6,7 +6,7 @@
 # This rewrites Cargo.lock to the local paths: run a plain `cargo build` before
 # committing so the lock names the pinned commit again. When the Kreate change
 # is pushed, move `rev` in Cargo.toml to it.
-[patch."https://github.com/knoxxr/Kreate.git"]
+[patch."https://github.com/MinaryHub/Kreate.git"]
 kreate-scene  = { path = "../Kreate/crates/kreate-scene" }
 kreate-io     = { path = "../Kreate/crates/kreate-io" }
 kreate-math   = { path = "../Kreate/crates/kreate-math" }

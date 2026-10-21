@@ -35,7 +35,7 @@ const BENCH = new URLSearchParams(location.search).has('bench');
 let benchStarted = false;
 let benchUpdates = 0;
 const collapsed = new Set();
-const view = { joints: true, wire: false, grid: true, labels: true, timeline: false, measure: false, interact: false };
+const view = { joints: false, wire: false, grid: true, labels: true, timeline: false, measure: false, interact: false };
 
 // ---- renderer, camera, lights ----------------------------------------------
 

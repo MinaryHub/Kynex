@@ -975,13 +975,77 @@ function roleObject(uid) {
   const key = `${records.size}|${comps.length}`;
   if (roleOf.uid === uid && roleOf.key === key) return roleOf.object;
   let object = uid;
-  if (!comps.some((c) => c.object === uid)) {
+  // Equipment a piece of the flow stands for: that piece.
+  const hosted = comps.find((c) => c.host != null && c.host === uid);
+  if (hosted && !comps.some((c) => c.object === uid)) object = hosted.object;
+  else if (!comps.some((c) => c.object === uid)) {
     const WHOLE = new Set(['source', 'station', 'buffer', 'sink', 'conveyor', 'cnc', 'molder', 'positioner', 'amr']);
     const inner = comps.find((c) => WHOLE.has(c.kind) && c.object !== uid && underOf(c.object, uid));
     if (inner) object = inner.object;
+    else object = markerIn(uid, comps, WHOLE) ?? uid;
   }
   roleOf = { uid, key, object };
   return object;
+}
+// Equipment with no role of its own — a cluster tool, a paint booth — whose
+// process is a flow piece set in it or at its load port, as the demos have
+// it: that piece's role, the one nearest its middle. Not for what a hall is
+// built of, which stands over or around many.
+const NOT_EQUIPMENT = new Set([
+  'factory_wall', 'factory_column', 'floor_zone', 'overhead_crane', 'ceiling_light', 'roll_door',
+  'guard_rail', 'pipe_rack', 'oht_rail', 'crane_rail', 'fence', 'pallet_rack', 'pedestal', 'forklift',
+  'pallet_load', 'drum_pallet', 'car_body', 'operator', 'amr', 'amr_stop', 'conveyor', 'bottle_conveyor',
+]);
+// Placed item `item` is a machine or a tool, not a robot, a flow piece or
+// what the hall is built of.
+function isEquipment(item) {
+  if (!item || NOT_EQUIPMENT.has(item.template) || item.template.startsWith('flow_')) return false;
+  let group = '';
+  try {
+    group = libraryPanel.library?.templates?.find((t) => t.key === item.template)?.group ?? '';
+  } catch {}
+  return group !== '로봇';
+}
+function markerIn(uid, comps, kinds) {
+  let item = null;
+  try {
+    item = libraryPanel.itemOf(uid);
+  } catch {}
+  if (!item || item.root !== uid || !isEquipment(item)) return null;
+  const box = bounds(uid);
+  box.min.x -= 0.3;
+  box.min.y -= 0.3;
+  box.max.x += 0.3;
+  box.max.y += 0.3;
+  const mid = box.getCenter(new THREE.Vector3());
+  let best = null;
+  let near = Infinity;
+  for (const c of comps) {
+    if (!kinds.has(c.kind) || !records.has(c.object) || underOf(uid, c.object)) continue;
+    const at = bounds(c.object).getCenter(new THREE.Vector3());
+    if (at.x < box.min.x || at.x > box.max.x || at.y < box.min.y || at.y > box.max.y) continue;
+    const d = Math.hypot(at.x - mid.x, at.y - mid.y);
+    if (d < near) [best, near] = [c.object, d];
+  }
+  return best;
+}
+// The placed equipment a piece of the flow could stand for: within 15 m of
+// it, the nearest first, and the one it stands for now wherever it is.
+function equipmentNear(uid, host) {
+  let items = [];
+  try {
+    items = libraryPanel.library?.items ?? [];
+  } catch {}
+  const at = bounds(uid).getCenter(new THREE.Vector3());
+  const out = [];
+  for (const i of items) {
+    if (i.root == null || !records.has(i.root) || !isEquipment(i) || underOf(uid, i.root)) continue;
+    const box = bounds(i.root);
+    const p = box.clampPoint(at, new THREE.Vector3());
+    const d = Math.hypot(p.x - at.x, p.y - at.y);
+    if (d <= 15 || i.root === host) out.push({ root: i.root, name: i.name ?? records.get(i.root)?.name ?? '', d });
+  }
+  return out.sort((a, b) => a.d - b.d).slice(0, 12);
 }
 const cellPanel = new CellPanel({
   scene,
@@ -993,6 +1057,7 @@ const cellPanel = new CellPanel({
   nameOf: (uid) => records.get(uid)?.name ?? '',
   itemOf: (uid) => libraryPanel.itemOf(uid),
   bounds: (uid) => bounds(uid),
+  equipmentNear: (uid, host) => equipmentNear(uid, host),
   remove: (uid) => {
     select(uid);
     if (!libraryPanel.removeSelected()) toast('라이브러리에서 놓은 장비만 지울 수 있습니다');

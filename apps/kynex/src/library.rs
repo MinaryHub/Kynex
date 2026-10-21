@@ -34,7 +34,7 @@ pub const EQUIPMENT: u64 = 0xFFFE << 48;
 
 /// Identities each placed item has room for: its objects, meshes and
 /// materials each count from its own start.
-const PER_ITEM: u64 = 1 << 24;
+pub(crate) const PER_ITEM: u64 = 1 << 24;
 
 /// A size a template is made for.
 pub struct Param {

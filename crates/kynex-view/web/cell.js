@@ -221,6 +221,8 @@ export class CellPanel {
         const values = [...this.box.querySelectorAll(`[data-${key}]`)].map((i) => Number(i.value) || 0);
         this.send({ op: 'flow_products', object: this.ctx.selected(), [key === 'mix' ? 'mix' : 'cycles']: values });
       }
+      // The equipment this piece of the flow stands for.
+      if (e.target.dataset.flowHost !== undefined) this.send({ op: 'flow_host', object: this.ctx.selected(), host: e.target.value });
     });
     this.box.addEventListener('click', (e) => {
       const act = e.target.closest('[data-cell]')?.dataset.cell;
@@ -510,6 +512,14 @@ export class CellPanel {
           .map((n, i) => `<label>${n}<input type="number" class="num" data-cycle="${i}" value="${cycles[i] > 0 ? cycles[i] : ''}" min="0" step="1" placeholder="${c.props.cycle}"></label>`)
           .join('')}</div>`;
       }
+      // The equipment it stands for: picking that shows this role.
+      const near = this.ctx.equipmentNear?.(c.object, c.host) ?? [];
+      const host =
+        c.kind === 'conveyor' || (!near.length && !c.host)
+          ? ''
+          : `<div class="flow-products"><span class="muted" title="이 공정이 어느 장비의 공정인지: 그 장비를 눌러도 이 설정이 보입니다">공정 「${escapeHtml(c.name)}」의 장비</span><select data-flow-host><option value="">없음</option>${near
+              .map((q) => `<option value="${escapeHtml(q.root)}"${q.root === c.host ? ' selected' : ''}>${escapeHtml(q.name)}${q.d != null ? ` (${q.d.toFixed(1)} m)` : ''}</option>`)
+              .join('')}</select></div>`;
       // Each link's products, where there are several.
       let routes = '';
       if (used > 1 && c.kind !== 'sink' && f.next.length) {
@@ -532,7 +542,7 @@ export class CellPanel {
       actions =
         link +
         (getLevel() >= 2
-          ? `${nexts}<span class="muted">${state}</span>${products}${routes}`
+          ? `${nexts}<span class="muted">${state}</span>${host}${products}${routes}`
           : `${nexts}<span class="muted">${state}</span><span class="muted level-hint">시간 분포·고장·불량·제품·반송은 <b>중급</b>에서 정합니다</span>`);
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};

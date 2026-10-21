@@ -476,6 +476,27 @@ fn build() -> (Vec<Value>, Vec<Value>) {
         &doc,
         json!({"op": "flow_settings", "work": 0, "rest": 0, "warmup": 7200, "hours": 8400, "years": 20, "margin": 1500000}),
     );
+    // Each process, the unit it is done in.
+    super::build::hosts(
+        &plant,
+        &mut cell,
+        &doc,
+        &roles,
+        &[
+            ("원유 탱크 저장", "원유 탱크 2"),
+            ("탈염", "탈염기"),
+            ("상압 증류", "상압 증류탑 (CDU)"),
+            ("감압 증류", "감압 증류탑 (VDU)"),
+            ("나프타 수첨·개질", "개질 반응기 2"),
+            ("등유 수첨", "등유 수첨 반응기"),
+            ("경유 수첨", "경유 수첨 반응기"),
+            ("FCC 분해", "FCC 장치"),
+            ("휘발유 출하", "휘발유 탱크 1"),
+            ("항공유 출하", "항공유 탱크"),
+            ("경유 출하", "경유 탱크"),
+            ("벙커C 출하", "벙커C 탱크"),
+        ],
+    );
     (cell.to_saved(), plant.library.to_saved())
 }
 

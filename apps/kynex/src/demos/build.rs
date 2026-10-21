@@ -51,6 +51,25 @@ pub(super) fn ask(cell: &mut Cell, doc: &Document, req: Value) {
     assert_eq!(a["ok"], true, "{req}: {a}");
 }
 
+/// Each flow piece named first stands for the equipment named second:
+/// picking the equipment shows the piece's role.
+pub(super) fn hosts(plant: &Plant, cell: &mut Cell, doc: &Document, roles: &[(u64, String, crate::cell::Kind)], pairs: &[(&str, &str)]) {
+    for (piece, equipment) in pairs {
+        let id = plant
+            .items
+            .iter()
+            .find(|(n, _)| n == equipment)
+            .unwrap_or_else(|| panic!("no item {equipment}"))
+            .1;
+        let host = crate::library::EQUIPMENT + id * crate::library::PER_ITEM;
+        ask(
+            cell,
+            doc,
+            json!({"op": "flow_host", "object": object(roles, piece), "host": host.to_string()}),
+        );
+    }
+}
+
 /// A role's object, by its item's name.
 pub(super) fn object(roles: &[(u64, String, crate::cell::Kind)], name: &str) -> String {
     roles

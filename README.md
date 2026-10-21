@@ -1080,6 +1080,11 @@ not change the session's scene.
     as it suits the station: one for a machine with a chuck or mould and
     a door (a CNC, a moulding machine), else as many as 대기 자리 lets
     wait. It is never fewer than 투입 수.
+  - A flow piece's **장비** (공정 「…」의 장비): the placed machine it
+    stands for, such as a cluster tool whose process is a station at its
+    load port. Picking that machine shows the piece's role and settings.
+    The demos have each process on its machine this way. A flow piece
+    set inside a machine with no role of its own is found the same way.
   - A buffer's **꺼내는 순서**: first in first out, or last in first out.
     Library **랙 창고**: a pallet rack whose parts sit on its shelves,
     ten to a shelf, the lowest first.

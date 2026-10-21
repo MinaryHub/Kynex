@@ -1172,6 +1172,10 @@ pub struct Cell {
     energy: BTreeMap<u64, f64>,
     /// The stations each operator may work at (none: all).
     skills: BTreeMap<u64, Vec<u64>>,
+    /// The equipment each flow piece stands for, by the piece: a cluster
+    /// tool whose process is a station set at its load port. Picking the
+    /// equipment shows the piece's role.
+    hosts: BTreeMap<u64, u64>,
     /// What the equipment placed cost, ten thousand won (the library's).
     investment: f64,
     charging: std::collections::BTreeSet<u64>,
@@ -1617,6 +1621,9 @@ impl Cell {
                 let floats = |v: &Value| -> Option<Vec<f64>> {
                     Some(v.as_array()?.iter().filter_map(Value::as_f64).collect())
                 };
+                if let Some(host) = saved["host"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                    self.hosts.insert(object, host);
+                }
                 if let Some(skills) = saved["skills"].as_array() {
                     let skills = skills
                         .iter()
@@ -1799,6 +1806,7 @@ impl Cell {
                     }),
                     "mix": self.mix.get(&c.object),
                     "skills": self.skills.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()),
+                    "host": self.hosts.get(&c.object).map(u64::to_string),
                     "orders": self.orders.get(&c.object).map(|o| o.iter().map(flow::Order::to_json).collect::<Vec<_>>()),
                     "cycles": self.cycles.get(&c.object),
                     "routes": self
@@ -2629,6 +2637,21 @@ impl Cell {
                     self.orders.remove(&object);
                 } else {
                     self.orders.insert(object, orders);
+                }
+                self.roles_changed = true;
+                self.changed = true;
+            }
+            "flow_host" => {
+                let object = uid("object")?;
+                match req["host"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                    Some(host) if host != object => {
+                        // One piece to a piece of equipment.
+                        self.hosts.retain(|_, h| *h != host);
+                        self.hosts.insert(object, host);
+                    }
+                    _ => {
+                        self.hosts.remove(&object);
+                    }
                 }
                 self.roles_changed = true;
                 self.changed = true;
@@ -4672,6 +4695,7 @@ impl Cell {
                         })
                     }),
                     "flow": c.kind.flow().then(|| self.flow_json(doc, c)),
+                    "host": self.hosts.get(&c.object).map(u64::to_string),
                     "skills": (c.kind == Kind::Operator).then(|| {
                         self.skills.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default()
                     }),
@@ -4840,6 +4864,7 @@ pub fn is_op(op: &str) -> bool {
             | "flow_products"
             | "flow_orders"
             | "operator_skills"
+            | "flow_host"
             | "flow_settings"
     )
 }

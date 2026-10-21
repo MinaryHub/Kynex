@@ -597,6 +597,25 @@ fn build() -> (Vec<Value>, Vec<Value>) {
         &doc,
         json!({"op": "flow_settings", "work": 0, "rest": 0, "warmup": 1800, "hours": 6000, "years": 10, "margin": 216000}),
     );
+    // Each process, the machine it is done on.
+    super::build::hosts(
+        &plant,
+        &mut cell,
+        &doc,
+        &roles,
+        &[
+            ("블로 성형 1", "블로 성형기 1"),
+            ("블로 성형 2", "블로 성형기 2"),
+            ("세척·충전·캡핑 1", "세척·충전·캡핑 모노블록 1"),
+            ("세척·충전·캡핑 2", "세척·충전·캡핑 모노블록 2"),
+            ("액면·캡 검사", "액면·캡 검사기"),
+            ("라벨링 1", "라벨러 1"),
+            ("라벨링 2", "라벨러 2"),
+            ("수축 포장", "수축 포장기"),
+            ("팔레타이징", "팔레타이저"),
+            ("팔레트 랩핑", "팔레트 랩핑기"),
+        ],
+    );
     (cell.to_saved(), plant.library.to_saved())
 }
 

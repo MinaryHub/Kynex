@@ -436,7 +436,11 @@ impl Cell {
                 return Err("다음 공정은 다른 공정·버퍼·배출이어야 합니다".into());
             }
         }
+        // A link gone takes its carrier with it.
+        self.carriers
+            .retain(|(from, to), _| *from != object || next.contains(to));
         self.flow_next.insert(object, next);
+        self.carriers_from_senders();
         self.roles_changed = true;
         self.changed = true;
         Ok(())
@@ -1277,8 +1281,10 @@ impl Cell {
                 }
                 happened = true;
                 *coming.entry(target.object).or_insert(0) += 1;
-                // By AMR, or by hand: it waits here for one.
-                if c.props.carrier > 0 {
+                // By AMR, by hand or by robot, as the link says: it waits
+                // here for one.
+                let carrier = self.carrier(c.object, target.object);
+                if carrier.by > 0 {
                     self.parts[i].flow = Some(Place::Waiting {
                         at: c.object,
                         to: target.object,
@@ -1289,7 +1295,8 @@ impl Cell {
                         to: target.object,
                         amr: None,
                         phase: super::fleet::Phase::Waiting,
-                        by: c.props.carrier,
+                        by: carrier.by,
+                        robot: carrier.robot,
                         gripped: false,
                     });
                     continue;
@@ -1650,6 +1657,23 @@ impl Cell {
             "made": s.made,
             "down": s.down_until.is_some(),
             "maint": s.pm_until.is_some(),
+            // How parts go along each of its links: by what, which robot,
+            // where that robot stands, and whether it reaches.
+            "carriers": self
+                .carriers
+                .iter()
+                .filter(|((from, _), _)| *from == c.object)
+                .map(|((_, to), k)| json!({
+                    "to": to.to_string(),
+                    "by": k.by,
+                    "robot": k.robot.map(|r| r.to_string()),
+                    "via": k.robot.and_then(|r| id_of(doc, r)).map(|id| {
+                        let p = doc.world_transform(id).translation;
+                        [p.x, p.y, p.z]
+                    }),
+                    "reach": self.link_reach.get(&(c.object, *to)).cloned().flatten(),
+                }))
+                .collect::<Vec<_>>(),
             // No robot can bring it parts now, and why.
             "unreachable": self.unreachable_to(c.object),
             "mix": self.mix.get(&c.object),

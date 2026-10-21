@@ -692,7 +692,7 @@ fn parts_no_robot_can_take_somewhere_go_another_way() {
         t += 0.1;
         cell.tick(&doc, t, start + Duration::from_secs_f64(t));
         // A robot, as `carry` is: the far station out of its reach.
-        for (part, _, _, [_, to]) in cell.robot_jobs(&doc) {
+        for (part, _, _, [_, to], _) in cell.robot_jobs(&doc) {
             if to == u[2] {
                 cell.robot_cannot(part, "닿지 않음".into());
                 refused += 1;
@@ -707,4 +707,47 @@ fn parts_no_robot_can_take_somewhere_go_another_way() {
     assert_eq!(f(u[2])["made"], 0);
     assert!(f(u[1])["made"].as_u64().unwrap() >= 60, "{}", f(u[1]));
     assert!(f(u[2])["unreachable"].is_string());
+}
+
+/// Each link says how its parts go and, by robot, which robot: the old
+/// sender-wide 보내는 방법 is given to its links; a link set by robot
+/// makes jobs for that robot alone; and it is all kept in the file.
+#[test]
+fn a_link_says_how_its_parts_go_and_which_robot() {
+    let (doc, mut cell, u) = floor(&[
+        ("flow_source", 0.0, 0.0, json!({"feed": 2.0, "carrier": 1})),
+        ("flow_station", 2.0, 1.0, json!({"cycle": 3.0})),
+        ("flow_station", 2.0, -1.0, json!({"cycle": 3.0})),
+        ("flow_sink", 4.0, 0.0, json!({})),
+    ]);
+    let s = |x: u64| x.to_string();
+    ask(&mut cell, &doc, json!({"op": "flow_next", "object": s(u[0]), "next": [s(u[1])]}));
+    // The source's AMR, onto its link; its own let go.
+    assert_eq!(cell.carrier(u[0], u[1]).by, 1);
+    assert!(cell.components.iter().all(|c| c.props.carrier == 0));
+    // A new link, by robot 7: made, and carried so.
+    ask(&mut cell, &doc, json!({"op": "flow_carrier", "object": s(u[0]), "to": s(u[2]), "by": 3, "robot": "7"}));
+    assert_eq!(cell.carrier(u[0], u[2]), Carrier { by: 3, robot: Some(7) });
+    // Kept, and read back.
+    let saved = cell.to_saved();
+    let mut again = Cell::from_saved(saved);
+    again.adopt(&doc);
+    assert_eq!(again.carrier(u[0], u[2]), Carrier { by: 3, robot: Some(7) });
+    assert_eq!(again.carrier(u[0], u[1]).by, 1);
+    // A job along it is for robot 7.
+    ask(&mut cell, &doc, json!({"op": "flow_carrier", "object": s(u[0]), "to": s(u[1]), "by": 0}));
+    ask(&mut cell, &doc, json!({"op": "flow_next", "object": s(u[0]), "next": [s(u[2])]}));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let mut t = 0.0;
+    while t < 10.0 && cell.robot_jobs(&doc).is_empty() {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+    }
+    let jobs = cell.robot_jobs(&doc);
+    assert!(!jobs.is_empty());
+    assert!(jobs.iter().all(|j| j.4 == Some(7)));
+    // A link undone takes its carrier with it.
+    ask(&mut cell, &doc, json!({"op": "flow_next", "object": s(u[0]), "next": []}));
+    assert_eq!(cell.carrier(u[0], u[2]).by, 0);
 }

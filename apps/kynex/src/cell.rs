@@ -838,6 +838,27 @@ impl Props {
     }
 }
 
+/// How parts go along one link of the flow: by themselves (0), by AMR
+/// (1), by hand (2) or by robot (3) — that robot, or any free one that
+/// reaches both ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Carrier {
+    pub by: u32,
+    pub robot: Option<u64>,
+}
+
+impl Carrier {
+    fn of(v: &Value) -> Option<Self> {
+        let by = v["by"].as_u64()?.min(3) as u32;
+        let robot = v["robot"].as_str().and_then(|s| s.parse().ok());
+        (by > 0).then_some(Self { by, robot: robot.filter(|_| by == 3) })
+    }
+
+    fn to_json(self) -> Value {
+        json!({ "by": self.by, "robot": self.robot.map(|r| r.to_string()) })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Component {
     pub object: u64,
@@ -1193,6 +1214,12 @@ pub struct Cell {
     /// tool whose process is a station set at its load port. Picking the
     /// equipment shows the piece's role.
     hosts: BTreeMap<u64, u64>,
+    /// How parts go along each link, by the link (from, to): by
+    /// themselves unless set.
+    carriers: BTreeMap<(u64, u64), Carrier>,
+    /// Each robot link's reach, worked out by the view: none, or why the
+    /// robot (or every robot, for any) cannot carry along it.
+    link_reach: BTreeMap<(u64, u64), Option<String>>,
     /// What the equipment placed cost, ten thousand won (the library's).
     investment: f64,
     charging: std::collections::BTreeSet<u64>,
@@ -1413,7 +1440,7 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-fn id_of(doc: &Document, uid: u64) -> Option<ObjectId> {
+pub(crate) fn id_of(doc: &Document, uid: u64) -> Option<ObjectId> {
     let is = |id: ObjectId| doc.object_uid(id).map(|u| u.raw()) == Some(uid);
     if let Some(id) = BY_UID
         .with(|m| m.borrow().get(&uid).copied())
@@ -1641,6 +1668,13 @@ impl Cell {
                 if let Some(host) = saved["host"].as_str().and_then(|s| s.parse::<u64>().ok()) {
                     self.hosts.insert(object, host);
                 }
+                if let Some(links) = saved["carriers"].as_object() {
+                    for (to, v) in links {
+                        if let (Ok(to), Some(c)) = (to.parse::<u64>(), Carrier::of(v)) {
+                            self.carriers.insert((object, to), c);
+                        }
+                    }
+                }
                 if let Some(skills) = saved["skills"].as_array() {
                     let skills = skills
                         .iter()
@@ -1711,6 +1745,7 @@ impl Cell {
             }
         }
         self.pending = waiting;
+        self.carriers_from_senders();
         // One machine is one role: a role on a part of a machine, an AMR
         // or a stop that has one already (saved before auto roles, or the
         // library, knew better) is dropped.
@@ -1792,8 +1827,61 @@ impl Cell {
                 }
                 next.dedup();
             }
+            let moved: Vec<((u64, u64), Carrier)> = self
+                .carriers
+                .iter()
+                .filter(|((a, b), _)| *a == outer || *b == outer)
+                .map(|(k, v)| (*k, *v))
+                .collect();
+            for ((a, b), v) in moved {
+                self.carriers.remove(&(a, b));
+                let swap = |x: u64| if x == outer { inner } else { x };
+                self.carriers.entry((swap(a), swap(b))).or_insert(v);
+            }
+            self.carriers_from_senders();
             self.components.retain(|c| c.object != outer);
             self.roles_changed = true;
+            self.changed = true;
+        }
+    }
+
+    /// A sender's 보내는 방법, as projects saved before links had their
+    /// own carriers say it (and as a role may still be given it): given to
+    /// each of its links that has none, and the sender's own let go — once
+    /// it has links to give it to.
+    pub(crate) fn carriers_from_senders(&mut self) {
+        for c in self.components.iter_mut() {
+            if c.props.carrier == 0 || self.flow_next.get(&c.object).is_none_or(|n| n.is_empty()) {
+                continue;
+            }
+            for to in self.flow_next.get(&c.object).into_iter().flatten() {
+                self.carriers.entry((c.object, *to)).or_insert(Carrier {
+                    by: c.props.carrier,
+                    robot: None,
+                });
+            }
+            c.props.carrier = 0;
+        }
+    }
+
+    /// How parts go along the link `from` → `to`.
+    pub fn carrier(&self, from: u64, to: u64) -> Carrier {
+        self.carriers.get(&(from, to)).copied().unwrap_or_default()
+    }
+
+    /// The robot links of the flow: (from, to, robot or any).
+    pub fn robot_links(&self) -> Vec<(u64, u64, Option<u64>)> {
+        self.carriers
+            .iter()
+            .filter(|(_, c)| c.by == 3)
+            .map(|((a, b), c)| (*a, *b, c.robot))
+            .collect()
+    }
+
+    /// Each robot link's reach, as the view has worked it out.
+    pub fn set_link_reach(&mut self, reach: BTreeMap<(u64, u64), Option<String>>) {
+        if reach != self.link_reach {
+            self.link_reach = reach;
             self.changed = true;
         }
     }
@@ -1824,6 +1912,12 @@ impl Cell {
                     "mix": self.mix.get(&c.object),
                     "skills": self.skills.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()),
                     "host": self.hosts.get(&c.object).map(u64::to_string),
+                    "carriers": self
+                        .carriers
+                        .iter()
+                        .filter(|((from, _), _)| *from == c.object)
+                        .map(|((_, to), k)| (to.to_string(), k.to_json()))
+                        .collect::<serde_json::Map<_, _>>(),
                     "orders": self.orders.get(&c.object).map(|o| o.iter().map(flow::Order::to_json).collect::<Vec<_>>()),
                     "cycles": self.cycles.get(&c.object),
                     "routes": self
@@ -2658,6 +2752,34 @@ impl Cell {
                 self.roles_changed = true;
                 self.changed = true;
             }
+            // How parts go along the link `object` → `to`: `by` (0 by
+            // themselves, 1 AMR, 2 by hand, 3 robot) and, by robot, which
+            // (none: any that reaches). The link is made if it is not yet.
+            "flow_carrier" => {
+                let from = uid("object")?;
+                let to = uid("to")?;
+                let by = req["by"].as_u64().unwrap_or(0).min(3) as u32;
+                let robot = req["robot"].as_str().and_then(|s| s.parse::<u64>().ok());
+                let mut next = self.flow_next.get(&from).cloned().unwrap_or_default();
+                if !next.contains(&to) {
+                    next.push(to);
+                    self.set_flow_next(from, next)?;
+                }
+                if by == 0 {
+                    self.carriers.remove(&(from, to));
+                } else {
+                    self.carriers.insert(
+                        (from, to),
+                        Carrier {
+                            by,
+                            robot: robot.filter(|_| by == 3),
+                        },
+                    );
+                }
+                self.link_reach.remove(&(from, to));
+                self.roles_changed = true;
+                self.changed = true;
+            }
             "flow_host" => {
                 let object = uid("object")?;
                 match req["host"].as_str().and_then(|s| s.parse::<u64>().ok()) {
@@ -3386,6 +3508,10 @@ impl Cell {
     /// have anything to look at again: at a change of state at once, and
     /// while running, every [`REPORT`] of real time `now`.
     pub fn tick(&mut self, doc: &Document, sim: f64, now: Instant) -> bool {
+        // A role given a 보내는 방법 the old way: onto its links.
+        if self.components.iter().any(|c| c.props.carrier > 0) {
+            self.carriers_from_senders();
+        }
         // In steps of at most `MOST_STEP`: run fast, the clock goes on
         // seconds between two looks, and the cell worked out over them at
         // once would jump — an AMR past a stop, a part past its station.
@@ -4882,6 +5008,7 @@ pub fn is_op(op: &str) -> bool {
             | "flow_orders"
             | "operator_skills"
             | "flow_host"
+            | "flow_carrier"
             | "flow_settings"
     )
 }

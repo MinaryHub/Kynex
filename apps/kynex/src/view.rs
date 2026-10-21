@@ -316,6 +316,11 @@ struct Stage {
     followed: std::collections::BTreeMap<u64, [f64; 6]>,
     /// The robots carrying a process flow's parts (see `crate::carry`).
     carrying: crate::carry::Carry,
+    /// The robot links' reach as last worked out: what it was worked out
+    /// for (the links, their ends and the robots' places), and when
+    /// last looked at.
+    reach_key: String,
+    reach_at: Option<Instant>,
     /// The robots' poses as the run started, for 처음으로 to put them back.
     before_run: Option<std::collections::BTreeMap<u64, std::collections::BTreeMap<u64, f64>>>,
     follow_grips: std::collections::BTreeMap<u64, bool>,
@@ -429,6 +434,8 @@ impl Stage {
             feeds: Default::default(),
             followed: Default::default(),
             carrying: Default::default(),
+            reach_key: String::new(),
+            reach_at: None,
             before_run: None,
             follow_grips: Default::default(),
             file,
@@ -551,6 +558,13 @@ impl Stage {
                         serde_json::json!({ "ok": true }).to_string()
                     }
                     Err(e) => serde_json::json!({ "ok": false, "error": e }).to_string(),
+                }
+            } else if op == "link_reach" {
+                let req: Value = serde_json::from_str(&request.body).unwrap_or(Value::Null);
+                let id = |k: &str| req[k].as_str().and_then(|s| s.parse::<u64>().ok());
+                match (id("from"), id("to")) {
+                    (Some(from), Some(to)) => self.link_reach_of(doc, from, to).to_string(),
+                    _ => serde_json::json!({ "ok": false, "error": "from and to" }).to_string(),
                 }
             } else if op == "follow" {
                 touched = true;
@@ -760,6 +774,7 @@ impl Stage {
             self.base = base;
             moved
         };
+        self.link_reach(doc, now);
         let scene = self.base.as_ref().unwrap_or(doc);
         // A PLC's commands given, the machines' states handed back.
         let mut starts: Vec<u64> = Vec::new();
@@ -902,6 +917,85 @@ impl Stage {
             || self.comparing.is_some()
             || self.sweeping.is_some()
             || !self.importing.is_empty()
+    }
+
+    /// Each robot link of the flow: whether its robot reaches both ends,
+    /// worked out again, a second apart at most, when the links, their
+    /// ends or the robots have moved — not as doors and arms move.
+    fn link_reach(&mut self, doc: &Document, now: Instant) {
+        if self.reach_at.is_some_and(|t| now.duration_since(t).as_secs_f64() < 1.0) {
+            return;
+        }
+        self.reach_at = Some(now);
+        let base = self.base.take();
+        let scene = base.as_ref().unwrap_or(doc);
+        let links = self.cell.robot_links();
+        let cm = |v: kreate_math::DVec3| format!("{:.0},{:.0},{:.0}", v.x * 100.0, v.y * 100.0, v.z * 100.0);
+        let mut key = String::new();
+        let mut ends = Vec::new();
+        for (a, b, r) in &links {
+            let e = self.cell.link_ends(scene, *a, *b);
+            if let Some((p, q)) = e {
+                key += &format!("{a}>{b}:{r:?}@{}|{};", cm(p), cm(q));
+            }
+            ends.push(e);
+        }
+        if !links.is_empty() {
+            for r in kynex_model::robots(scene) {
+                if let Some(id) = crate::cell::id_of(scene, r.root) {
+                    key += &format!("R{}@{};", r.root, cm(scene.world_transform(id).translation));
+                }
+            }
+        }
+        if key != self.reach_key {
+            self.reach_key = key;
+            let grippers = self.cell.grippers();
+            let mut reach = std::collections::BTreeMap::new();
+            for ((a, b, r), e) in links.iter().zip(ends) {
+                let why = match e {
+                    Some((p, q)) => self
+                        .carrying
+                        .reaches(scene, &self.posing, &grippers, *r, p, q)
+                        .err(),
+                    None => Some("연결의 양 끝 위치를 알 수 없습니다".into()),
+                };
+                reach.insert((*a, *b), why);
+            }
+            self.cell.set_link_reach(reach);
+        }
+        self.base = base;
+    }
+
+    /// Each robot with a grip point and whether it reaches both ends of
+    /// the link `from` → `to`: for the page's menu.
+    fn link_reach_of(&mut self, doc: &Document, from: u64, to: u64) -> Value {
+        let base = self.base.take();
+        let scene = base.as_ref().unwrap_or(doc);
+        let grippers = self.cell.grippers();
+        let ends = self.cell.link_ends(scene, from, to);
+        let mut out = Vec::new();
+        for r in kynex_model::robots(scene) {
+            let has = kynex_kin::Kinematics::of(scene, r.root)
+                .is_some_and(|kin| grippers.iter().any(|g| kin.contains(*g)));
+            if !has {
+                continue;
+            }
+            let why = match ends {
+                Some((p, q)) => self
+                    .carrying
+                    .reaches(scene, &self.posing, &grippers, Some(r.root), p, q)
+                    .err(),
+                None => Some("연결의 양 끝 위치를 알 수 없습니다".into()),
+            };
+            out.push(serde_json::json!({
+                "robot": r.root.to_string(),
+                "name": crate::collide::label(scene, r.root),
+                "reach": why.is_none(),
+                "why": why,
+            }));
+        }
+        self.base = base;
+        serde_json::json!({ "ok": true, "robots": out })
     }
 
     /// Starts robot `root`'s program, from its start. The other robots'

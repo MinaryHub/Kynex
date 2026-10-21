@@ -1066,9 +1066,26 @@ not change the session's scene.
   - An AMR's **적재량** and an operator's **한 번에 드는 수**: parts
     waiting to go from one place to the same place are carried together,
     up to that many, side by side.
-  - **보내는 방법: 로봇**: an idle robot with a grip point carries the
-    part, with no program written. It is the nearest such robot that
-    reaches both places. KYNEX solves the arm for above the part, at it,
+  - **How parts go along each link (운반)**: each arrow of the flow has
+    its own carrier, not the piece it starts from. Right-click an arrow,
+    **운반**: 직접 (by themselves), AMR, 작업자, 로봇 (any robot that
+    reaches both ends) or one robot by name. The menu says, for each
+    robot, whether it reaches both ends (닿음 / 안 닿음). In link mode,
+    click the sender, then a robot, then the receiver: the link is made,
+    carried by that robot. Dropping a link handle on a robot does the
+    same, the receiver clicked next. An arrow carried by a robot is drawn
+    over that robot, purple; AMR green, 작업자 yellow, 직접 blue; red, with
+    ⚠ 안 닿음, where its robot cannot reach an end. A project saved with
+    the old 보내는 방법 on a piece has it given to each of that piece's
+    links when it is opened.
+  - **Link numbers**: each arrow is numbered by its step from the
+    sources, 1, 2, 3. Where the way splits, each branch gets its own
+    number after the step, 2-1 and 2-2, kept along that branch (3-1,
+    3-2) until the branches meet again (4). Several sources are told
+    apart the same way.
+  - **운반: 로봇**: an idle robot with a grip point carries the
+    part, with no program written. It is the robot the link names, or,
+    for any, the nearest such robot that reaches both places. KYNEX solves the arm for above the part, at it,
     above where it goes and there, with the grip point turned as it
     stands now (a robot waits with its tool down). It runs that as a
     program: down, grip, up, over, down, let go, up. The part goes on
@@ -1135,7 +1152,7 @@ not change the session's scene.
     waits before driving to a stop that is held, and goes on once it is
     let go. Two AMRs driving at each other along one lane would wait for
     ever, so lay lanes one way round or give them a passing place.
-  - A flow piece with **보내는 방법: AMR** has each part fetched by an
+  - A link with **운반: AMR** has each part fetched by an
     AMR, as a fleet manager gives the work out: of the AMRs free and the
     parts waiting, the nearest pair along the lanes first, then the next.
     It drives to the stop nearest the sender (within 4 m),
@@ -1222,7 +1239,7 @@ not change the session's scene.
     operator is at it. When a part is ready, the nearest free operator
     walks to the front of the station, works there for the cycle, and is
     free again where they stand.
-  - **보내는 방법: 작업자** has the nearest free operator who may carry it
+  - A link with **운반: 작업자** has the nearest free operator who may carry it
     fetch the part,
     pick it up (2 s), carry it at waist height to the front of where it
     goes, and put it down (2 s).

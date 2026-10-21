@@ -99,7 +99,7 @@ impl Carry {
         let grippers = cell.grippers();
         self.tried.retain(|p, _| jobs.iter().any(|j| j.0 == *p));
         self.failed.retain(|p, _| jobs.iter().any(|j| j.0 == *p));
-        for (part, at, to, ends) in jobs {
+        for (part, at, to, ends, want) in jobs {
             if self
                 .tried
                 .get(&part)
@@ -110,6 +110,7 @@ impl Carry {
             // Idle robots with a grip point, nearest first.
             let mut robots: Vec<(u64, u64, f64)> = kynex_model::robots(scene)
                 .into_iter()
+                .filter(|r| want.is_none_or(|w| w == r.root))
                 .filter(|r| !self.carrying.contains_key(&r.root))
                 .filter(|r| !busy(r.root))
                 .filter(|r| !runners.iter().any(|x| x.root == r.root && !x.stopped()))
@@ -170,7 +171,8 @@ impl Carry {
                 let failed = self.failed.entry(part).or_default();
                 failed.extend(tried.iter().copied());
                 let all = kynex_model::robots(scene).into_iter().all(|r| {
-                    failed.contains(&r.root)
+                    want.is_some_and(|w| w != r.root)
+                        || failed.contains(&r.root)
                         || kynex_kin::Kinematics::of(scene, r.root)
                             .is_none_or(|kin| !grippers.iter().any(|g| kin.contains(*g)))
                 });
@@ -184,6 +186,43 @@ impl Carry {
             }
         }
         changed
+    }
+
+    /// Whether robot `root` (none: any robot with a grip point) can carry
+    /// a part from `at` to `to`: or why not. Worked out as a carry would
+    /// be, against nothing in the way — its reach, not its path.
+    pub fn reaches(
+        &mut self,
+        scene: &Document,
+        posing: &Posing,
+        grippers: &[u64],
+        root: Option<u64>,
+        at: kreate_math::DVec3,
+        to: kreate_math::DVec3,
+    ) -> Result<(), String> {
+        let robots: Vec<(u64, u64)> = kynex_model::robots(scene)
+            .into_iter()
+            .filter(|r| root.is_none_or(|w| w == r.root))
+            .filter_map(|r| {
+                let kin = kynex_kin::Kinematics::of(scene, r.root)?;
+                let g = grippers.iter().copied().find(|g| kin.contains(*g))?;
+                Some((r.root, g))
+            })
+            .collect();
+        if robots.is_empty() {
+            return Err(match root {
+                Some(_) => "이 로봇에 그리퍼(잡는 점)가 없습니다".into(),
+                None => "그리퍼가 있는 로봇이 없습니다".into(),
+            });
+        }
+        let mut why = String::new();
+        for (r, g) in robots {
+            match self.transfer(scene, scene, posing, r, g, at, to, &mut |_, _, _, _, _| 0) {
+                Ok(_) => return Ok(()),
+                Err(e) => why = e,
+            }
+        }
+        Err(why)
     }
 
     /// A program for robot `root` to carry a part from `at` to `to` with

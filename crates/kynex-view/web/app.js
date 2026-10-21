@@ -1057,6 +1057,9 @@ const cellPanel = new CellPanel({
   frame: (uid) => frame(uid),
   nameOf: (uid) => records.get(uid)?.name ?? '',
   itemOf: (uid) => libraryPanel.itemOf(uid),
+  // The robots, and the one among `uids` (an object and those above it).
+  robots: () => robots.map((r) => ({ root: r.root, name: r.name })),
+  robotOf: (uids) => uids.find((u) => robots.some((r) => r.root === u)) ?? null,
   bounds: (uid) => bounds(uid),
   equipmentNear: (uid, host) => equipmentNear(uid, host),
   remove: (uid) => {

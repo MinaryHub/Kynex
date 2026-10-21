@@ -38,6 +38,10 @@ const NEAR: f64 = 4.0;
 const LOW: f64 = 0.2;
 
 /// A part to carry, and how far it has got.
+/// A part for a robot to carry: the part, where it is, where it goes, the
+/// link's two ends, and the robot the link names (none: any).
+pub type RobotJob = (u64, DVec3, DVec3, [u64; 2], Option<u64>);
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Job {
     pub part: u64,
@@ -48,6 +52,8 @@ pub struct Job {
     pub phase: Phase,
     /// How: by AMR (1) or by hand (2), as the sender says.
     pub by: u32,
+    /// By a robot: the one the link names, or any (none).
+    pub robot: Option<u64>,
     /// By a robot (3): whether its gripper has taken the part yet. Until
     /// then the part keeps its place where it waits; after, it goes with
     /// the gripper, and once let go, on to where it goes.
@@ -757,7 +763,7 @@ impl Cell {
     /// The parts waiting for a robot to carry them: each one's identity,
     /// where it is, and where it is to be put (the top of what it goes to,
     /// as it would stand there).
-    pub fn robot_jobs(&self, doc: &Document) -> Vec<(u64, DVec3, DVec3, [u64; 2])> {
+    pub fn robot_jobs(&self, doc: &Document) -> Vec<RobotJob> {
         let belts = self.belts(doc);
         self.jobs
             .iter()
@@ -776,6 +782,7 @@ impl Cell {
                     p.world.translation,
                     top + DVec3::Z * (p.size().1 / 2.0 + 0.002),
                     [j.from, j.to],
+                    j.robot,
                 ))
             })
             .collect()
@@ -883,6 +890,24 @@ impl Cell {
             .iter()
             .find(|((_, t), (v, _))| *t == to && *v == version)
             .map(|(_, (_, why))| why.as_str())
+    }
+
+    /// Where a robot takes a part from on link `from` → `to` and where it
+    /// puts it: off a belt's end, onto a belt's start, else each place's
+    /// dock — for its reach to be worked out before any part goes.
+    pub fn link_ends(&self, doc: &Document, from: u64, to: u64) -> Option<(DVec3, DVec3)> {
+        let belts = self.belts(doc);
+        let comp = |o: u64| self.components.iter().find(|c| c.object == o);
+        let at = match belts.iter().find(|b| b.object == from) {
+            Some(b) => b.centre + b.along * (b.length / 2.0 - super::RAW.0),
+            None => Self::dock(doc, comp(from)?)?.0,
+        };
+        let put = match belts.iter().find(|b| b.object == to) {
+            Some(b) => b.centre + b.along * (-b.length / 2.0 + super::RAW.0),
+            None => Self::dock(doc, comp(to)?)?.0,
+        };
+        let up = DVec3::Z * (super::RAW.1 / 2.0 + 0.002);
+        Some((at + up, put + up))
     }
 
     /// Says why the flow cannot go on as it should.

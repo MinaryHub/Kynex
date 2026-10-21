@@ -1308,6 +1308,8 @@ export class CellPanel {
       return null;
     } else if (note) {
       this.ctx.toast(`${name}: ${note}`);
+    } else if (!from) {
+      this.ctx.toast(`${name}에서 시작 · 다음 설비를 누르세요 (로봇이 나르게 하려면 로봇을 먼저)`);
     }
     if (this.link?.once) this.link = null;
     else if (done) this.stopLinking();
@@ -1796,7 +1798,8 @@ export class CellPanel {
         const can = r ? (r.reach ? '' : `${this.robotName(this.carry.robot)} 안 닿음`) : '';
         const text = [num, what, k.reach ? '⚠ 안 닿음' : '', can].filter(Boolean).join(' · ');
         if (text) {
-          const mid = via ? via.clone() : from.clone().add(to).multiplyScalar(0.5);
+          // Not over the robot, which stays to be clicked: along the way on.
+          const mid = via ? via.clone().add(to).multiplyScalar(0.5) : from.clone().add(to).multiplyScalar(0.5);
           const sign = this.label(text, mid.x, mid.y, mid.z + size * 0.6, k.reach ? 'linkbad' : 'linknum', size * 0.8);
           sign.userData.link = { from: c.object, to: n };
           arrows.push(sign);

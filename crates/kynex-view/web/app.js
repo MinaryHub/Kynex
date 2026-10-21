@@ -1608,7 +1608,15 @@ window.addEventListener('pointerup', (e) => {
   linkDrag = null;
   controls.enabled = true;
   previewLink(null);
-  if (!drag.moved) return;
+  // A handle pressed, not dragged: its piece clicked, in either mode.
+  if (!drag.moved) {
+    if (cellPanel.carrying()) cellPanel.carryClick(drag.uids, null);
+    else if (cellPanel.linking()) {
+      const to = cellPanel.linkTo(drag.uids, null);
+      if (to != null) select(to);
+    }
+    return;
+  }
   const hit = partAt(e.clientX, e.clientY);
   if (!hit) return toast('다음 공정이 될 설비 위에 놓으세요');
   const uids = chainOf(hit.uid);
@@ -1735,14 +1743,25 @@ canvas.addEventListener('pointerup', (e) => {
   const marker = hits.find((h) => !isShape(h) && uidOf(h) != null);
   const shape = shapeHit(hits);
   const hit = marker && (!shape || marker.distance < shape.distance) ? marker : shape;
-  // The logistics mode: an arrow given the carrier chosen; a robot
-  // chosen; equipment, the ends of a link made so.
-  if (cellPanel.carrying()) {
-    const marker = markerAt(e.clientX, e.clientY);
-    if (marker?.link) return cellPanel.carryArrow(marker.link);
-    if (!hit) return;
+  // Process link mode: the equipment or the robot clicked, linked from
+  // the one before — before the arrows, which may run over a robot.
+  if (cellPanel.linking() && hit) {
     const uids = [];
     for (let at = uidOf(hit), n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
+    const to = cellPanel.linkTo(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+    if (to != null) select(to);
+    return;
+  }
+  // The logistics mode: a robot clicked chosen to carry — before the
+  // arrows, which run over it —; an arrow given the carrier chosen;
+  // equipment, the ends of a link made so.
+  if (cellPanel.carrying()) {
+    const uids = [];
+    for (let at = hit ? uidOf(hit) : null, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
+    const robot = uids.length ? robotOf(uids) : null;
+    const marker = robot == null ? markerAt(e.clientX, e.clientY) : null;
+    if (marker?.link) return cellPanel.carryArrow(marker.link);
+    if (!hit) return;
     // Not selected: a selection's move handles would be in the way of the
     // next click.
     cellPanel.carryClick(uids, libraryPanel.itemOf(uids[0])?.root ?? null);

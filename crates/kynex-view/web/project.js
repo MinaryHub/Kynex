@@ -196,11 +196,10 @@ export class ProjectPanel {
     this.demos.innerHTML = (answer.demos ?? [])
       .map((d) => `<li data-demo="${esc(d.name)}" title="눌러서 사본을 만들어 열기"><span>${esc(d.name)}</span><span class="muted">${esc(d.about)}</span></li>`)
       .join('');
-    const level = { 1: '초급', 2: '중급', 3: '전문가' };
     this.samples.innerHTML = (answer.samples ?? [])
       .map(
         (d) =>
-          `<li data-demo="${esc(d.name)}" title="눌러서 사본을 만들어 열기"><span><span class="sample-level l${d.level}">${level[d.level] ?? ''}</span>${esc(d.name.replace(/^샘플 /, ''))}</span><span class="muted">${esc(d.about)}</span></li>`,
+          `<li data-demo="${esc(d.name)}" title="눌러서 사본을 만들어 열기"><span>${esc(d.name.replace(/^샘플 /, ''))}</span><span class="muted">${esc(d.about)}</span></li>`,
       )
       .join('');
   }

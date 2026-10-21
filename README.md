@@ -557,7 +557,7 @@ is built by `apps/kynex/src/demos/refinery.rs`; both plants are checked
 for equipment running into each other.
 
 **기능별 샘플.** Below the demos, eleven small samples, each showing one
-thing KYNEX does and marked 초급, 중급 or 전문가: a line on a site plan, a
+thing KYNEX does: a line on a site plan, a
 CNC machine as a station, conveyors and racks, variation and repeated
 runs, products, orders, an operator, AMRs, a robot carrying parts, a
 robot program, sensors and axes (`apps/kynex/demos/samples`, `SAMPLES` in
@@ -677,20 +677,13 @@ by `Offs`. Names and comments are kept to ASCII; other letters become
 - The controller times moves in its own way, so a cycle on the robot is
   close to the planned cycle, but not equal to it.
 
-### Levels: beginner to expert
+### Everything shown
 
-**초급 / 중급 / 전문가** in the header sets how much the page shows; it is
-kept in the browser (`crates/kynex-view/web/level.js`). Nothing set at a
-higher level is lost at a lower one: it is only not shown.
-
-- **초급**: lay equipment out (on the site's drawing), link each to the
-  next, give each machine its one time — a station's 처리 시간, a source's
-  공급 간격, a buffer's 용량 — and run. The roles offered are the flow's.
-- **중급**: the factory's detail — time distributions, breakdowns, scrap,
-  products and orders, carrying by AMR, operator or robot, shifts and
-  warm-up, cost, repeated runs and sweeps.
-- **전문가**: everything — robot programs and their wiring, PLCs, and
-  following real equipment (MTConnect, umati, MQTT, RTDE).
+The page shows every setting and role at once. It once had a 초급 / 중급 /
+전문가 switch in the header that hid the factory's detail and the robots'
+programs and wiring until asked for; it is gone, as sorting by it said
+little. `crates/kynex-view/web/level.js` keeps the levels for what may
+use them again, set to show all.
 
 ### The process flow chart
 

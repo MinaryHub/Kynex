@@ -1004,17 +1004,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 body[data-level="1"] [data-min="2"],
 body[data-level="1"] [data-min="3"],
 body[data-level="2"] [data-min="3"] { display: none !important; }
-.level-switch { display: flex; gap: 2px; padding: 2px; margin-left: 12px; border: 1px solid var(--line-2); border-radius: 7px; }
-.level-switch button { padding: 3px 10px; border: 0; border-radius: 5px; background: none; color: var(--muted, #9aa3ad); font-size: 12px; cursor: pointer; }
-.level-switch button:hover { color: var(--text); }
-.level-switch button.on { background: var(--accent); color: #fff; }
 .level-hint { display: block; margin-top: 4px; font-size: 11px; }
 
 /* A sample's level, in the project panel. */
-.sample-level { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 4px; font-size: 10px; line-height: 16px; vertical-align: 1px; background: var(--panel-2); }
-.sample-level.l1 { color: #3ddc84; }
-.sample-level.l2 { color: #f2b53c; }
-.sample-level.l3 { color: #ff7a59; }
 
 /* A question over the page. */
 .modal { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); }

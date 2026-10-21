@@ -12,7 +12,6 @@ import { CellPanel } from '/cell.js';
 import { PlcPanel } from '/plc.js';
 import { ProjectPanel } from '/project.js';
 import { FloorPanel } from '/floor.js';
-import { mountLevelSwitch } from '/level.js';
 import { LibraryPanel } from '/library.js';
 import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
@@ -1016,7 +1015,6 @@ function pick(x, y) {
 }
 
 const plcPanel = new PlcPanel({ toast, escapeHtml, robots: () => robotPanel.robots });
-mountLevelSwitch(document.getElementById('level-switch'));
 // A ? beside each setting, for what it is.
 mountHelp();
 // Linking mode shown on its button.

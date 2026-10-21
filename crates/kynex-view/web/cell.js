@@ -490,7 +490,7 @@ export class CellPanel {
         c.kind === 'sink'
           ? `배출 ${f.made}개`
           : c.kind === 'station'
-            ? `${f.down ? '고장 · 수리 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
+            ? `${f.down ? '고장 · 수리 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 장비 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}개 · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
             : c.kind === 'conveyor'
               ? `끝에서 기다림 ${f.out}`
               : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;

@@ -1079,7 +1079,10 @@ not change the session's scene.
     waiting, at work and done, those on their way counted. 0 leaves it
     as it suits the station: one for a machine with a chuck or mould and
     a door (a CNC, a moulding machine), else as many as 대기 자리 lets
-    wait. It is never fewer than 투입 수.
+    wait. It is never fewer than 투입 수. It counts the flow's parts: a
+    glass cassette or a FOUP of many sheets or wafers is one. The
+    station's state line shows how many are in it against the limit
+    (장비 안 n/한도).
   - A flow piece's **장비** (공정 「…」의 장비): the placed machine it
     stands for, such as a cluster tool whose process is a station at its
     load port. Picking that machine shows the piece's role and settings.

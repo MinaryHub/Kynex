@@ -594,6 +594,27 @@ impl Cell {
         coming
     }
 
+    /// Whether `object` is a machine with a door made a station.
+    fn door_station(&self, object: u64) -> bool {
+        self.door_stations
+            .as_ref()
+            .is_some_and(|(_, _, d)| d.contains(&object))
+    }
+
+    /// How many parts station `t` may hold at once, as set: for a machine
+    /// with a door, one unless set; never fewer than it takes for a cycle;
+    /// none, if it has no such limit (only as many as may wait).
+    fn holds_of(&self, t: &Component) -> Option<u32> {
+        if t.kind != Kind::Station {
+            return None;
+        }
+        match (t.props.holds, self.door_station(t.object)) {
+            (0, false) => None,
+            (0, true) => Some(t.props.takes.max(1)),
+            (n, _) => Some(n.max(t.props.takes)),
+        }
+    }
+
     /// Room for more at component `t`: what may still come to it, with
     /// `coming` on their way to each.
     fn room(&self, t: &Component, coming: &BTreeMap<u64, u32>) -> u32 {
@@ -606,17 +627,8 @@ impl Cell {
         // A machine — a CNC, a molder, made a station — takes one part at a
         // time into its chuck or mould: none more while one is waiting, at
         // work or done there.
-        let machine = self
-            .door_stations
-            .as_ref()
-            .is_some_and(|(_, _, d)| d.contains(&t.object));
-        // How many it may hold at once, as set: for a machine, one unless
-        // set, and never fewer than it takes for a cycle.
-        let holds = match (t.props.holds, machine) {
-            (0, false) => None,
-            (0, true) => Some(t.props.takes.max(1)),
-            (n, _) => Some(n.max(t.props.takes)),
-        };
+        let machine = self.door_station(t.object);
+        let holds = self.holds_of(t);
         if t.kind == Kind::Station {
             if let Some(holds) = holds {
                 // And those done, waiting there for the robot to take out.
@@ -1513,6 +1525,10 @@ impl Cell {
             "queue": s.queue.len(),
             "out": s.out.len(),
             "working": s.working.is_some(),
+            // In it now — waiting, at work and done —, and the most it may
+            // hold at once.
+            "inside": s.queue.len() + s.working.as_ref().map_or(0, |(_, p)| p.len()) + s.out.len(),
+            "holds": self.holds_of(c),
             "left": s.working.as_ref().map(|(end, _)| (end - now).max(0.0)),
             // How far the work in hand has got, 0 to 1.
             "progress": s.working.as_ref().map(|(end, _)| {

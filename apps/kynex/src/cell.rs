@@ -859,6 +859,46 @@ impl Carrier {
     }
 }
 
+/// A robot drawn as a place in the flow's picture: the pieces whose parts
+/// it takes (`ins`) and those it puts parts into (`outs`). Parts do not stop
+/// at it; the links it carries are worked out from these (see
+/// [`Hub::pairs`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Hub {
+    pub ins: Vec<u64>,
+    pub outs: Vec<u64>,
+}
+
+impl Hub {
+    /// The links the robot carries, as a robot tending machines does: the
+    /// pieces it both puts parts into and takes them from are the machines
+    /// it serves. A part from a piece that only feeds it goes into those
+    /// machines; a part out of one of them goes on to the pieces it only
+    /// puts parts into. Serving no machine, from each piece to each other.
+    pub fn pairs(&self) -> Vec<(u64, u64)> {
+        let served: Vec<u64> = self
+            .outs
+            .iter()
+            .copied()
+            .filter(|o| self.ins.contains(o))
+            .collect();
+        let mut out = Vec::new();
+        for a in &self.ins {
+            let to: Vec<u64> = if served.is_empty() {
+                self.outs.clone()
+            } else if served.contains(a) {
+                self.outs.iter().copied().filter(|o| !served.contains(o)).collect()
+            } else {
+                served.clone()
+            };
+            for b in to.into_iter().filter(|b| b != a) {
+                out.push((*a, b));
+            }
+        }
+        out
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Component {
     pub object: u64,
@@ -1220,6 +1260,11 @@ pub struct Cell {
     /// Each robot link's reach, worked out by the view: none, or why the
     /// robot (or every robot, for any) cannot carry along it.
     link_reach: BTreeMap<(u64, u64), Option<String>>,
+    /// The robots drawn as places in the flow, by robot; and the links
+    /// worked out from them — in `flow_next` and `carriers` with the
+    /// links drawn, but neither drawn nor saved.
+    hubs: BTreeMap<u64, Hub>,
+    derived: std::collections::BTreeSet<(u64, u64)>,
     /// What the equipment placed cost, ten thousand won (the library's).
     investment: f64,
     charging: std::collections::BTreeSet<u64>,
@@ -1631,6 +1676,18 @@ impl Cell {
                 self.flow_cfg = flow::Settings::of(&saved["flow_settings"]);
                 continue;
             }
+            if let Some(robot) = saved["robot_hub"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                let list = |key: &str| -> Vec<u64> {
+                    saved[key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|x| x.as_str().and_then(|s| s.parse().ok()))
+                        .collect()
+                };
+                self.hubs.insert(robot, Hub { ins: list("ins"), outs: list("outs") });
+                continue;
+            }
             let name = saved["name"].as_str().unwrap_or_default();
             let kind = saved["kind"].as_str().and_then(Kind::of);
             let by_uid = saved["object"]
@@ -1768,6 +1825,105 @@ impl Cell {
         });
         self.merge_nested_flow_roles(doc);
         self.robots_out_of_flow(doc);
+        self.robot_links_to_hubs();
+        self.rederive_hubs();
+    }
+
+    /// Links a named robot carries, as projects before the robot was a
+    /// place in the picture had them: drawn through the robot instead.
+    fn robot_links_to_hubs(&mut self) {
+        let named: Vec<((u64, u64), u64)> = self
+            .carriers
+            .iter()
+            .filter(|(k, c)| c.by == 3 && !self.derived.contains(k))
+            .filter_map(|(k, c)| Some((*k, c.robot?)))
+            .collect();
+        for ((a, b), robot) in named {
+            self.carriers.remove(&(a, b));
+            if let Some(next) = self.flow_next.get_mut(&a) {
+                next.retain(|n| *n != b);
+            }
+            let hub = self.hubs.entry(robot).or_default();
+            if !hub.ins.contains(&a) {
+                hub.ins.push(a);
+            }
+            if !hub.outs.contains(&b) {
+                hub.outs.push(b);
+            }
+        }
+    }
+
+    /// The links the robots in the picture carry, worked out again: those
+    /// of before taken away, each hub's pairs added — where the pieces are
+    /// still the flow's and no link is drawn between them already.
+    pub(crate) fn rederive_hubs(&mut self) {
+        for (a, b) in std::mem::take(&mut self.derived) {
+            if let Some(next) = self.flow_next.get_mut(&a) {
+                next.retain(|n| *n != b);
+            }
+            self.carriers.remove(&(a, b));
+        }
+        let pieces: std::collections::BTreeSet<u64> = self
+            .components
+            .iter()
+            .filter(|c| c.kind.flow())
+            .map(|c| c.object)
+            .collect();
+        let sinks: std::collections::BTreeSet<u64> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Sink)
+            .map(|c| c.object)
+            .collect();
+        let sources: std::collections::BTreeSet<u64> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Source)
+            .map(|c| c.object)
+            .collect();
+        for (robot, hub) in &mut self.hubs {
+            // Gone pieces let go.
+            hub.ins.retain(|p| pieces.contains(p) && !sinks.contains(p));
+            hub.outs.retain(|p| pieces.contains(p) && !sources.contains(p));
+            for (a, b) in hub.pairs() {
+                let next = self.flow_next.entry(a).or_default();
+                if next.contains(&b) {
+                    continue;
+                }
+                next.push(b);
+                self.carriers.insert(
+                    (a, b),
+                    Carrier {
+                        by: 3,
+                        robot: Some(*robot),
+                    },
+                );
+                self.derived.insert((a, b));
+            }
+        }
+        self.roles_changed = true;
+        self.changed = true;
+    }
+
+    /// The robots drawn as places in the flow, for the page: each with the
+    /// pieces it takes from and puts into.
+    pub fn hubs_json(&self) -> Value {
+        json!(self
+            .hubs
+            .iter()
+            .filter(|(_, h)| !h.ins.is_empty() || !h.outs.is_empty())
+            .map(|(r, h)| json!({
+                "robot": r.to_string(),
+                "ins": h.ins.iter().map(u64::to_string).collect::<Vec<_>>(),
+                "outs": h.outs.iter().map(u64::to_string).collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>())
+    }
+
+    /// Whether the link `from` → `to` is worked out from a robot in the
+    /// picture, not drawn.
+    pub fn is_derived(&self, from: u64, to: u64) -> bool {
+        self.derived.contains(&(from, to))
     }
 
     /// The robot `object` is, or is part of, or holds, or that stands on it
@@ -1823,19 +1979,16 @@ impl Cell {
                 next.retain(|n| *n != object);
             }
             self.carriers.retain(|(a, b), _| *a != object && *b != object);
-            for from in &ins {
-                for to in outs.iter().filter(|t| **t != *from && **t != object) {
-                    let next = self.flow_next.entry(*from).or_default();
-                    if !next.contains(to) {
-                        next.push(*to);
-                    }
-                    self.carriers.insert(
-                        (*from, *to),
-                        Carrier {
-                            by: 3,
-                            robot: Some(robot),
-                        },
-                    );
+            // The robot in the picture where the station was.
+            let hub = self.hubs.entry(robot).or_default();
+            for from in ins.into_iter().filter(|f| *f != object) {
+                if !hub.ins.contains(&from) {
+                    hub.ins.push(from);
+                }
+            }
+            for to in outs.into_iter().filter(|t| *t != object) {
+                if !hub.outs.contains(&to) {
+                    hub.outs.push(to);
                 }
             }
             self.components.retain(|c| c.object != object);
@@ -1976,7 +2129,10 @@ impl Cell {
                     "plc": c.plc,
                     "mirror": c.mirror.as_ref().map(crate::mtconnect::Source::to_json),
                     "next": self.flow_next.get(&c.object).map(|n| {
-                        n.iter().map(u64::to_string).collect::<Vec<_>>()
+                        n.iter()
+                            .filter(|t| !self.derived.contains(&(c.object, **t)))
+                            .map(u64::to_string)
+                            .collect::<Vec<_>>()
                     }),
                     "recipe": self.recipes.get(&c.object).map(|n| {
                         n.iter().map(u64::to_string).collect::<Vec<_>>()
@@ -1990,7 +2146,7 @@ impl Cell {
                     "carriers": self
                         .carriers
                         .iter()
-                        .filter(|((from, _), _)| *from == c.object)
+                        .filter(|((from, to), _)| *from == c.object && !self.derived.contains(&(*from, *to)))
                         .map(|((_, to), k)| (to.to_string(), k.to_json()))
                         .collect::<serde_json::Map<_, _>>(),
                     "orders": self.orders.get(&c.object).map(|o| o.iter().map(flow::Order::to_json).collect::<Vec<_>>()),
@@ -2005,6 +2161,14 @@ impl Cell {
             })
             // The flow's calendar and warm-up, with the roles.
             .chain((!self.flow_cfg.is_default()).then(|| json!({ "flow_settings": self.flow_cfg.to_json() })))
+            // The robots drawn as places in the flow.
+            .chain(self.hubs.iter().filter(|(_, h)| !h.ins.is_empty() || !h.outs.is_empty()).map(|(r, h)| {
+                json!({
+                    "robot_hub": r.to_string(),
+                    "ins": h.ins.iter().map(u64::to_string).collect::<Vec<_>>(),
+                    "outs": h.outs.iter().map(u64::to_string).collect::<Vec<_>>(),
+                })
+            }))
             .chain(self.pending.iter().cloned())
             .collect()
     }
@@ -2860,6 +3024,42 @@ impl Cell {
                 self.link_reach.remove(&(from, to));
                 self.roles_changed = true;
                 self.changed = true;
+            }
+            // A robot in the flow's picture: piece `from` sends it parts, or
+            // it puts parts into piece `to`; `remove` takes that away.
+            "hub_link" => {
+                let robot = uid("robot")?;
+                if !kynex_model::robots(doc).iter().any(|r| r.root == robot) {
+                    return Err("로봇이 아닙니다".into());
+                }
+                let piece = |o: u64| self.components.iter().find(|c| c.object == o && c.kind.flow()).map(|c| c.kind);
+                let remove = req["remove"] == true;
+                if let Some(from) = req["from"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                    match piece(from) {
+                        Some(Kind::Sink) => return Err("배출에서는 부품이 나가지 않습니다".into()),
+                        None => return Err("공정 흐름의 설비가 아닙니다".into()),
+                        _ => {}
+                    }
+                    let hub = self.hubs.entry(robot).or_default();
+                    hub.ins.retain(|p| *p != from);
+                    if !remove {
+                        hub.ins.push(from);
+                    }
+                } else if let Some(to) = req["to"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                    match piece(to) {
+                        Some(Kind::Source) => return Err("소재 공급으로는 보낼 수 없습니다".into()),
+                        None => return Err("공정 흐름의 설비가 아닙니다".into()),
+                        _ => {}
+                    }
+                    let hub = self.hubs.entry(robot).or_default();
+                    hub.outs.retain(|p| *p != to);
+                    if !remove {
+                        hub.outs.push(to);
+                    }
+                } else {
+                    return Err("from 또는 to".into());
+                }
+                self.rederive_hubs();
             }
             "flow_host" => {
                 let object = uid("object")?;
@@ -4974,6 +5174,7 @@ impl Cell {
             .collect();
         json!({
             "flow": self.flow_summary(),
+            "hubs": self.hubs_json(),
             "components": components,
             "signals": self.signals.iter().map(|s| {
                 let mut v = s.to_json();
@@ -5074,6 +5275,7 @@ pub fn is_op(op: &str) -> bool {
             | "operator_skills"
             | "flow_host"
             | "flow_carrier"
+            | "hub_link"
             | "flow_settings"
     )
 }

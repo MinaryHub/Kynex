@@ -441,6 +441,7 @@ impl Cell {
             .retain(|(from, to), _| *from != object || next.contains(to));
         self.flow_next.insert(object, next);
         self.carriers_from_senders();
+        self.rederive_hubs();
         self.roles_changed = true;
         self.changed = true;
         Ok(())
@@ -1626,7 +1627,9 @@ impl Cell {
         let s = self.stations.get(&c.object).cloned().unwrap_or_default();
         let now = self.last_tick.unwrap_or(0.0);
         json!({
-            "next": self.flow_next.get(&c.object).map(|n| n.iter().map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default(),
+            // The links drawn; and those a robot in the picture carries.
+            "next": self.flow_next.get(&c.object).map(|n| n.iter().filter(|t| !self.is_derived(c.object, **t)).map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default(),
+            "derived": self.flow_next.get(&c.object).map(|n| n.iter().filter(|t| self.is_derived(c.object, **t)).map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default(),
             "at": self
                 .docks_seen
                 .as_ref()

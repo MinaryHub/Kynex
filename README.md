@@ -1066,35 +1066,32 @@ not change the session's scene.
   - An AMR's **적재량** and an operator's **한 번에 드는 수**: parts
     waiting to go from one place to the same place are carried together,
     up to that many, side by side.
-  - **How parts go along each link (운반)**: each arrow of the flow has
-    its own carrier, not the piece it starts from. Right-click an arrow,
-    **운반**: 직접 (by themselves), AMR, 작업자, 로봇 (any robot that
-    reaches both ends) or one robot by name. The menu says, for each
-    robot, whether it reaches both ends (닿음 / 안 닿음). In link mode,
-    click the sender, then a robot, then the receiver: the link is made,
-    carried by that robot. Dropping a link handle on a robot does the
-    same, the receiver clicked next. In either link mode each robot has a
-    purple sign over it, seen through the machines in front of it: click
-    or drop on the sign to mean that robot. Once a robot is chosen, a
-    dashed line runs from the sender to it until the receiver is clicked.
-    A robot, and the pedestal or table it stands on, is never a place in
-    the flow: KYNEX refuses to give it a flow role. A project that made
-    one so is mended when opened, each link into it and each out of it
-    becoming one link that robot carries. Right-click a robot for
-    **이 로봇이 나르게 잇기** (a sender, then the receiver clicked) and
-    **이 로봇이 나르는 연결**. An arrow carried by a robot is drawn
-    over that robot, purple; AMR green, 작업자 yellow, 직접 blue; red, with
-    ⚠ 안 닿음, where its robot cannot reach an end. A project saved with
-    the old 보내는 방법 on a piece has it given to each of that piece's
-    links when it is opened.
-  - **물류 연결 모드** (the toolbar's cart, beside 공정 연결): the
-    links' carriers on their own. A bar over the view offers 로봇 (자동),
-    each robot by name, AMR, 작업자 and 직접; clicking a robot (or the
-    pedestal it stands on) in the view chooses it too. Clicking an arrow
-    gives it the carrier chosen; clicking a sender, then a receiver,
-    links them carried so. Arrows carried otherwise are drawn faint, and
-    those the chosen robot cannot reach say so. **공정 연결 모드** links
-    the pieces of the flow only, as before. Esc ends either.
+  - **Robots in the flow's picture**: a robot is drawn as a place in the
+    flow that parts pass through, not stop at. Link a piece to the robot
+    (the robot takes its parts) and the robot to pieces (it puts parts
+    into them): belt → robot, robot → CNC 1 and CNC 2, CNC 1 and CNC 2 →
+    robot, robot → out belt. Many arrows into a robot come out of it as
+    one, so two machines' parts leave by one arrow. The links the robot
+    carries are worked out as a robot tending machines works: the pieces
+    it both puts parts into and takes them from are the machines it
+    serves; a part from a piece that only feeds it goes into those
+    machines, and a part out of one of them goes to the pieces it only
+    puts parts into. Serving no machine, it carries from each piece to
+    each other. In link mode each robot has a purple sign over it, seen
+    through the machines in front of it: click it, drop a handle on it,
+    or drag from it like a handle. Right-click a robot for **가져올 곳**
+    and **넣을 곳**, ticked as they are. A robot, or the pedestal or
+    table it stands on, never takes a flow role; a project that gave it
+    one, or that named a robot on a link, is redrawn through the robot
+    when opened.
+  - **How parts go along a link drawn between two pieces (운반)**:
+    right-click its arrow, **운반**: 직접 (by themselves), AMR, 작업자,
+    로봇 (any robot that reaches both ends), or **로봇 …을 거쳐**, which
+    redraws the link through that robot; the menu says whether each robot
+    reaches both ends. Arrows are blue for 직접, green for AMR, yellow for
+    작업자 and purple for robots; red, with ⚠ 안 닿음, where the robot
+    cannot reach. A project saved with the old 보내는 방법 on a piece has
+    it given to each of that piece's links when it is opened.
   - **Link numbers**: each arrow is numbered by its step from the
     sources, 1, 2, 3. Where the way splits, each branch gets its own
     number after the step, 2-1 and 2-2, kept along that branch (3-1,

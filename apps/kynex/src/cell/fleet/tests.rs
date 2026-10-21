@@ -753,3 +753,18 @@ fn a_link_says_how_its_parts_go_and_which_robot() {
     ask(&mut cell, &doc, json!({"op": "flow_next", "object": s(u[0]), "next": []}));
     assert_eq!(cell.carrier(u[0], u[2]).by, 0);
 }
+
+/// A robot in the flow's picture, tending two machines: the belt feeds it,
+/// it serves both machines, and puts their parts onto the out belt. The
+/// links it carries are worked out from that: feeder to machines, machines
+/// to the out belt — none from the feeder straight out.
+#[test]
+fn a_robot_drawn_in_the_flow_feeds_its_machines_and_unloads_them() {
+    let hub = Hub { ins: vec![1, 2, 3], outs: vec![2, 3, 4] };
+    let mut pairs = hub.pairs();
+    pairs.sort();
+    assert_eq!(pairs, vec![(1, 2), (1, 3), (2, 4), (3, 4)]);
+    // Serving no machine: from each piece to each other.
+    let hub = Hub { ins: vec![1], outs: vec![4] };
+    assert_eq!(hub.pairs(), vec![(1, 4)]);
+}

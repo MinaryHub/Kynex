@@ -213,46 +213,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .toolbar button.play-btn.on { color: #ff6b6b; background: rgba(255, 95, 95, 0.14); }
 .toolbar .play-speed { font: 11px var(--mono); }
 .toolbar .play-speed:empty { display: none; }
-/* The logistics mode's carriers, under the run badge. */
-.carry-bar {
-  position: absolute;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 6;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  max-width: calc(100% - 32px);
-  padding: 6px 8px;
-  border: 1px solid #6b4fa8;
-  border-radius: 10px;
-  background: rgba(20, 23, 28, 0.92);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  font: 13px system-ui, sans-serif;
-  color: var(--text);
-}
-.carry-bar[hidden] { display: none; }
-.carry-bar .carry-title { font-weight: 700; color: #c9b2ff; margin-right: 4px; }
-.carry-bar button {
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text);
-  padding: 4px 10px;
-  cursor: pointer;
-  font: inherit;
-}
-.carry-bar button:hover { background: rgba(255, 255, 255, 0.06); }
-.carry-bar button.on { border-color: transparent; color: #fff; }
-.carry-bar button.on[data-by="0"] { background: #2f6fb3; }
-.carry-bar button.on[data-by="1"] { background: #23955f; }
-.carry-bar button.on[data-by="2"] { background: #b0861f; }
-.carry-bar button.on[data-by="3"] { background: #7b55c9; }
-.carry-bar .carry-end { margin-left: 6px; border-color: #6b7480; }
-.carry-bar .carry-hint { width: 100%; text-align: center; color: #9aa3b0; font-size: 12px; }
 /* The run's state and the clock's speed, over the view: plain to see. */
 .run-badge {
   position: absolute;

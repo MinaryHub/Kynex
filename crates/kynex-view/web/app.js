@@ -1131,32 +1131,6 @@ cellPanel.onLinking = (on) => {
   canvas.style.cursor = on ? 'crosshair' : '';
   if (!on) previewLink(null);
 };
-// The logistics mode: its button, and the bar of carriers to choose from.
-const carryBar = document.getElementById('carry-bar');
-cellPanel.onCarrying = (on) => {
-  document.querySelector('[data-action="carry"]')?.classList.toggle('on', on);
-  canvas.style.cursor = on ? 'crosshair' : '';
-  if (!on) previewLink(null);
-  carryBar.hidden = !on;
-  if (!on) return;
-  const k = cellPanel.carry;
-  const chip = (by, robot, label) =>
-    `<button data-by="${by}"${robot ? ` data-robot="${escapeHtml(robot)}"` : ''} class="${k.by === by && (k.robot ?? null) === (robot ?? null) ? 'on' : ''}">${escapeHtml(label)}</button>`;
-  carryBar.innerHTML =
-    '<span class="carry-title">물류 연결</span>' +
-    chip(3, null, '로봇 (자동)') +
-    robots.map((r) => chip(3, r.root, `로봇 ${r.name}`)).join('') +
-    chip(1, null, 'AMR') +
-    chip(2, null, '작업자') +
-    chip(0, null, '직접') +
-    '<button class="carry-end" data-end>끝 (Esc)</button>' +
-    `<span class="carry-hint">${escapeHtml(cellPanel.carrierText(k.by, k.robot))}: 화살표를 누르면 그 연결을 나릅니다 · 보내는 설비 → 받는 설비를 누르면 그 운반으로 잇습니다 · 3D에서 로봇을 눌러도 고릅니다</span>`;
-};
-carryBar.addEventListener('click', (e) => {
-  if (e.target.closest('[data-end]')) return cellPanel.stopCarrying();
-  const b = e.target.closest('[data-by]');
-  if (b) cellPanel.carryWith(Number(b.dataset.by), b.dataset.robot ?? null);
-});
 const projectPanel = new ProjectPanel({ toast, escapeHtml });
 // The site's drawing: looked at from above when first laid.
 const floorPanel = new FloorPanel({
@@ -1570,8 +1544,15 @@ canvas.addEventListener(
     if (e.button !== 0) return;
     // A dot over a piece that sends parts on: always a link's start.
     const marker = markerAt(e.clientX, e.clientY);
-    // A robot's sign: a click, below.
-    if (marker?.robot != null) return;
+    // A robot's sign: a link from the robot, dragged; pressed, a click.
+    if (marker?.robot != null) {
+      const top = cellPanel.ctx.robotTop(marker.robot);
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      controls.enabled = false;
+      linkDrag = { uids: [marker.robot], x: e.clientX, y: e.clientY, from: new THREE.Vector3(top[0], top[1], top[2]), moved: false };
+      return;
+    }
     if (marker?.handle) {
       const c = cellPanel.componentOf(marker.handle);
       const at = c?.flow?.at;
@@ -1604,8 +1585,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (e.buttons || linkDrag || view.interact) return;
   const over = markerAt(e.clientX, e.clientY);
   cellPanel.hoverHandle(over?.handle ?? null);
-  canvas.style.cursor = over?.handle ? 'grab' : over?.link ? 'pointer' : cellPanel.linking() || cellPanel.carrying() ? 'crosshair' : '';
-  const from = cellPanel.linking() || cellPanel.carrying() ? cellPanel.linkingFrom() : null;
+  canvas.style.cursor = over?.handle || over?.robot != null ? 'grab' : over?.link ? 'pointer' : cellPanel.linking() ? 'crosshair' : '';
+  const from = cellPanel.linking() ? cellPanel.linkingFrom() : null;
   if (from) previewLink(from.object, new THREE.Vector3(from.at[0], from.at[1], from.at[2] + 0.45), e.clientX, e.clientY);
   else if (linkLine.visible) previewLink(null);
 });
@@ -1624,8 +1605,7 @@ window.addEventListener('pointerup', (e) => {
   previewLink(null);
   // A handle pressed, not dragged: its piece clicked, in either mode.
   if (!drag.moved) {
-    if (cellPanel.carrying()) cellPanel.carryClick(drag.uids, null);
-    else if (cellPanel.linking()) {
+    if (cellPanel.linking()) {
       const to = cellPanel.linkTo(drag.uids, null);
       if (to != null) select(to);
     }
@@ -1772,10 +1752,9 @@ canvas.addEventListener('pointerup', (e) => {
   const hit = marker && (!shape || marker.distance < shape.distance) ? marker : shape;
   // Process link mode: the equipment or the robot clicked, linked from
   // the one before — before the arrows, which may run over a robot.
-  const robotSign = cellPanel.linking() || cellPanel.carrying() ? markerAt(e.clientX, e.clientY)?.robot : null;
+  const robotSign = cellPanel.linking() ? markerAt(e.clientX, e.clientY)?.robot : null;
   if (robotSign != null) {
-    if (cellPanel.carrying()) cellPanel.carryClick([robotSign], null);
-    else cellPanel.linkTo([robotSign], null);
+    cellPanel.linkTo([robotSign], null);
     return;
   }
   if (cellPanel.linking() && hit) {
@@ -1783,21 +1762,6 @@ canvas.addEventListener('pointerup', (e) => {
     for (let at = uidOf(hit), n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
     const to = cellPanel.linkTo(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
     if (to != null) select(to);
-    return;
-  }
-  // The logistics mode: a robot clicked chosen to carry — before the
-  // arrows, which run over it —; an arrow given the carrier chosen;
-  // equipment, the ends of a link made so.
-  if (cellPanel.carrying()) {
-    const uids = [];
-    for (let at = hit ? uidOf(hit) : null, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
-    const robot = uids.length ? robotOf(uids) : null;
-    const marker = robot == null ? markerAt(e.clientX, e.clientY) : null;
-    if (marker?.link) return cellPanel.carryArrow(marker.link);
-    if (!hit) return;
-    // Not selected: a selection's move handles would be in the way of the
-    // next click.
-    cellPanel.carryClick(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
     return;
   }
   // An arrow of the flow: chosen, to undo with Delete.
@@ -2130,13 +2094,6 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
     if (cellPanel.linking()) cellPanel.stopLinking();
     else cellPanel.startLinking(selected);
   }
-  if (b.dataset.action === 'carry') {
-    if (cellPanel.carrying()) cellPanel.stopCarrying();
-    else {
-      select(null);
-      cellPanel.startCarrying();
-    }
-  }
   if (b.dataset.action === 'floor') {
     plcPanel.panel.hidden = true;
     projectPanel.panel.hidden = true;
@@ -2335,7 +2292,6 @@ window.addEventListener('keydown', (e) => {
     if (view.measure) setToggle('measure', false);
     if (cellPanel.picking()) return cellPanel.stopPicking();
     if (cellPanel.linking()) return cellPanel.stopLinking();
-    if (cellPanel.carrying()) return cellPanel.stopCarrying();
     select(null);
   }
   else return;

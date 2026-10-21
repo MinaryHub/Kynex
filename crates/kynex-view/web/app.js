@@ -471,6 +471,10 @@ function removeObject(uid) {
 
 function setRobots(list) {
   robots = list;
+  // The flow's signs name robots: drawn again with their names.
+  try {
+    cellPanel.drawMarkers();
+  } catch {}
   jointKinds.clear();
   for (const r of list) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
   // A joint whose kind changed draws a different gizmo.

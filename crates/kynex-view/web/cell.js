@@ -711,7 +711,7 @@ export class CellPanel {
   }
 
   robotName(root) {
-    return this.ctx.robots?.().find((r) => r.root === root)?.name ?? this.ctx.nameOf?.(root) ?? '로봇';
+    return this.ctx.robots?.().find((r) => r.root === root)?.name || this.ctx.nameOf?.(root) || '';
   }
 
   // Each link's number in the flow, by "from>to": its step from the
@@ -1774,6 +1774,13 @@ export class CellPanel {
     const numbers = this.linkNumbers();
     this.prefetchReach(at);
     const size = this.signSize(at);
+    // Each link's legs — straight, or through its robot —, first all of
+    // them: legs two links share (into a robot from one belt, out of it to
+    // one belt) are drawn side by side, and each link's number stands on a
+    // leg of its own.
+    const drawn = [];
+    const uses = new Map();
+    const legKey = (p, q) => [p.x, p.y, q.x, q.y].map((v) => Math.round(v * 10)).join(',');
     for (const c of this.cell.components) {
       for (const n of c.flow?.next ?? []) {
         const a = at.get(c.object);
@@ -1783,55 +1790,68 @@ export class CellPanel {
         const to = new THREE.Vector3(b[0], b[1], b[2] + 0.05);
         if (to.distanceTo(from) < 1e-6) continue;
         const k = this.carrierOf(c.object, n);
-        const chosen = this.chosenLink?.from === c.object && this.chosenLink?.to === n;
-        // In the logistics mode, those not carried as chosen are faint.
-        const same = !this.carry || (k.by === this.carry.by && (this.carry.by !== 3 || (k.robot ?? null) === this.carry.robot));
-        const color = chosen ? 0xff8a3d : k.reach ? 0xff5f5f : CARRIER_COLOURS[k.by] ?? 0x5aa9ff;
         // By robot: over the robot's base, the way the part goes.
         const via = k.by === 3 && k.via ? new THREE.Vector3(k.via[0], k.via[1], Math.max(a[2], b[2]) + 0.4) : null;
-        const legs = via ? [[from, via], [via, to]] : [[from, to]];
-        legs.forEach(([p0, q0], i) => {
-          const last = i === legs.length - 1;
-          // Kept a little to the right of the way it goes: a way back
-          // along the same leg — to a robot and back from it — is seen
-          // beside it, not on top of it.
-          const side = new THREE.Vector3().crossVectors(q0.clone().sub(p0), new THREE.Vector3(0, 0, 1));
-          if (side.lengthSq() > 1e-9) side.normalize().multiplyScalar(0.07);
-          const p = p0.clone().add(side);
-          const q = q0.clone().add(side);
-          const way = q.clone().sub(p);
-          const length = way.length();
-          if (length < 1e-6) return;
-          // The leg to a robot with a smaller head: the way it goes.
-          const head = Math.min(last ? (chosen ? 0.4 : 0.25) : 0.15, length * 0.3);
-          const arrow = new THREE.ArrowHelper(way.normalize(), p, length, color, head, last ? (chosen ? 0.2 : 0.12) : 0.08);
-          arrow.userData.link = { from: c.object, to: n };
-          arrow.userData.a = p.clone();
-          arrow.userData.b = q.clone();
-          arrow.traverse((o) => {
-            if (o.material) {
-              o.material.depthTest = false;
-              o.material.transparent = true;
-              o.material.opacity = same ? 0.9 : 0.3;
-            }
-            o.renderOrder = 8;
-          });
-          arrows.push(arrow);
+        const legs = (via ? [[from, via], [via, to]] : [[from, to]]).map(([p, q]) => ({ p, q, key: legKey(p, q) }));
+        for (const leg of legs) uses.set(leg.key, (uses.get(leg.key) ?? 0) + 1);
+        drawn.push({ c, n, k, legs, from, to });
+      }
+    }
+    const taken = new Map();
+    for (const { c, n, k, legs } of drawn) {
+      const chosen = this.chosenLink?.from === c.object && this.chosenLink?.to === n;
+      // In the logistics mode, those not carried as chosen are faint.
+      const same = !this.carry || (k.by === this.carry.by && (this.carry.by !== 3 || (k.robot ?? null) === this.carry.robot));
+      const color = chosen ? 0xff8a3d : k.reach ? 0xff5f5f : CARRIER_COLOURS[k.by] ?? 0x5aa9ff;
+      const placed = [];
+      legs.forEach(({ p: p0, q: q0, key }, i) => {
+        const last = i === legs.length - 1;
+        // Kept to the right of the way it goes: a way back along the same
+        // leg is seen beside it; a leg two links share, the second further
+        // out.
+        const nth = taken.get(key) ?? 0;
+        taken.set(key, nth + 1);
+        const side = new THREE.Vector3().crossVectors(q0.clone().sub(p0), new THREE.Vector3(0, 0, 1));
+        if (side.lengthSq() > 1e-9) side.normalize().multiplyScalar(0.07 + 0.12 * nth);
+        const p = p0.clone().add(side);
+        const q = q0.clone().add(side);
+        placed.push({ p, q, key });
+        const way = q.clone().sub(p);
+        const length = way.length();
+        if (length < 1e-6) return;
+        // The leg to a robot with a smaller head: the way it goes.
+        const head = Math.min(last ? (chosen ? 0.4 : 0.25) : 0.15, length * 0.3);
+        const arrow = new THREE.ArrowHelper(way.normalize(), p, length, color, head, last ? (chosen ? 0.2 : 0.12) : 0.08);
+        arrow.userData.link = { from: c.object, to: n };
+        arrow.userData.a = p.clone();
+        arrow.userData.b = q.clone();
+        arrow.traverse((o) => {
+          if (o.material) {
+            o.material.depthTest = false;
+            o.material.transparent = true;
+            o.material.opacity = same ? 0.9 : 0.3;
+          }
+          o.renderOrder = 8;
         });
-        // Its number, and by what it goes when not by itself.
-        const num = numbers.get(`${c.object}>${n}`);
-        const what = k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : CARRIER_NAMES[k.by] ?? '';
-        // The chosen robot's reach along it, in the logistics mode.
-        const r = this.carry?.by === 3 && this.carry.robot ? this.reachOf?.get(`${c.object}>${n}`)?.get(this.carry.robot) : null;
-        const can = r ? (r.reach ? '' : `${this.robotName(this.carry.robot)} 안 닿음`) : '';
-        const text = [num, what, k.reach ? '⚠ 안 닿음' : '', can].filter(Boolean).join(' · ');
-        if (text) {
-          // Not over the robot, which stays to be clicked: along the way on.
-          const mid = via ? via.clone().add(to).multiplyScalar(0.5) : from.clone().add(to).multiplyScalar(0.5);
-          const sign = this.label(text, mid.x, mid.y, mid.z + size * 0.6, k.reach ? 'linkbad' : 'linknum', size * 0.8);
-          sign.userData.link = { from: c.object, to: n };
-          arrows.push(sign);
-        }
+        arrows.push(arrow);
+      });
+      // Its number, and by what it goes when not by itself.
+      const num = numbers.get(`${c.object}>${n}`);
+      const what = k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : CARRIER_NAMES[k.by] ?? '';
+      // The chosen robot's reach along it, in the logistics mode.
+      const r = this.carry?.by === 3 && this.carry.robot ? this.reachOf?.get(`${c.object}>${n}`)?.get(this.carry.robot) : null;
+      const can = r ? (r.reach ? '' : `${this.robotName(this.carry.robot)} 안 닿음`) : '';
+      const text = [num, what, k.reach ? '⚠ 안 닿음' : '', can].filter(Boolean).join(' · ');
+      if (text && placed.length) {
+        // On the leg fewest links share — its own —, the last on a tie:
+        // never over the robot, which stays to be clicked.
+        const own = placed.reduce((best, leg) => ((uses.get(leg.key) ?? 0) <= (uses.get(best.key) ?? 0) ? leg : best), placed[0]);
+        // Three quarters along it: the numbers of two links going either
+        // way along one leg stand apart.
+        const mid = own.p.clone().lerp(own.q, 0.75);
+        const sign = this.label(text, mid.x, mid.y, mid.z + size * 0.6, k.reach ? 'linkbad' : 'linknum', size * 0.8);
+        sign.userData.link = { from: c.object, to: n };
+        arrows.push(sign);
       }
     }
     if (this.showArrows) for (const a of arrows) this.markers.add(a);

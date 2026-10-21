@@ -1677,12 +1677,7 @@ export class CellPanel {
   // near or far.
   pickMarker(x, y, project) {
     let best = null;
-    // A robot's sign: its middle within 40 pixels across, 14 up and down.
-    for (const o of this.markers.children) {
-      if (o.userData.robotPick == null) continue;
-      const [px, py] = project(o.position);
-      if (Math.abs(px - x) < 40 && Math.abs(py - y) < 14) return { robot: o.userData.robotPick };
-    }
+    // A piece's handle first: small, and where a link starts.
     for (const o of this.markers.children) {
       if (!o.userData.handle) continue;
       const [px, py] = project(o.position);
@@ -1690,6 +1685,17 @@ export class CellPanel {
       if (d < 16 && (!best || d < best.d)) best = { d, handle: o.userData.handle };
     }
     if (best) return { handle: best.handle };
+    // Then a robot's sign: within its width across, 12 pixels up and down
+    // of its middle — the nearest, where they overlap.
+    let sign = null;
+    for (const o of this.markers.children) {
+      if (o.userData.robotPick == null) continue;
+      const [px, py] = project(o.position);
+      const half = Math.min(60, 10 * (o.scale.x / Math.max(o.scale.y, 1e-6)));
+      const d = Math.hypot(px - x, py - y);
+      if (Math.abs(px - x) < half && Math.abs(py - y) < 12 && (!sign || d < sign.d)) sign = { d, robot: o.userData.robotPick };
+    }
+    if (sign) return { robot: sign.robot };
     for (const o of this.markers.children) {
       const l = o.userData.link;
       if (!l || !o.userData.a) continue;
@@ -1784,13 +1790,21 @@ export class CellPanel {
         // By robot: over the robot's base, the way the part goes.
         const via = k.by === 3 && k.via ? new THREE.Vector3(k.via[0], k.via[1], Math.max(a[2], b[2]) + 0.4) : null;
         const legs = via ? [[from, via], [via, to]] : [[from, to]];
-        legs.forEach(([p, q], i) => {
+        legs.forEach(([p0, q0], i) => {
           const last = i === legs.length - 1;
+          // Kept a little to the right of the way it goes: a way back
+          // along the same leg — to a robot and back from it — is seen
+          // beside it, not on top of it.
+          const side = new THREE.Vector3().crossVectors(q0.clone().sub(p0), new THREE.Vector3(0, 0, 1));
+          if (side.lengthSq() > 1e-9) side.normalize().multiplyScalar(0.07);
+          const p = p0.clone().add(side);
+          const q = q0.clone().add(side);
           const way = q.clone().sub(p);
           const length = way.length();
           if (length < 1e-6) return;
-          const head = last ? Math.min(chosen ? 0.4 : 0.25, length * 0.3) : 1e-4;
-          const arrow = new THREE.ArrowHelper(way.normalize(), p, length, color, head, last ? (chosen ? 0.2 : 0.12) : 1e-4);
+          // The leg to a robot with a smaller head: the way it goes.
+          const head = Math.min(last ? (chosen ? 0.4 : 0.25) : 0.15, length * 0.3);
+          const arrow = new THREE.ArrowHelper(way.normalize(), p, length, color, head, last ? (chosen ? 0.2 : 0.12) : 0.08);
           arrow.userData.link = { from: c.object, to: n };
           arrow.userData.a = p.clone();
           arrow.userData.b = q.clone();
@@ -1829,7 +1843,7 @@ export class CellPanel {
         const top = this.ctx.robotTop?.(r.root);
         if (!top) continue;
         const chosen = this.link?.via === r.root || (this.carry?.by === 3 && this.carry.robot === r.root);
-        const sign = this.label(`로봇 ${r.name}`, top[0], top[1], top[2] + 0.25, chosen ? 'robotchosen' : 'robotpick', 0.3);
+        const sign = this.label(`로봇 ${r.name}`, top[0], top[1], top[2] + 0.6, chosen ? 'robotchosen' : 'robotpick', 0.3);
         sign.userData.robotPick = r.root;
         sign.renderOrder = 12;
         this.markers.add(sign);

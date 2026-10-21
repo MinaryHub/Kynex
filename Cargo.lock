@@ -1411,7 +1411,7 @@ dependencies = [
 [[package]]
 name = "kreate-collab"
 version = "0.3.0"
-source = "git+https://github.com/knoxxr/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
+source = "git+https://github.com/MinaryHub/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
 dependencies = [
  "kreate-io",
  "kreate-math",
@@ -1425,7 +1425,7 @@ dependencies = [
 [[package]]
 name = "kreate-io"
 version = "0.3.0"
-source = "git+https://github.com/knoxxr/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
+source = "git+https://github.com/MinaryHub/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1446,7 +1446,7 @@ dependencies = [
 [[package]]
 name = "kreate-math"
 version = "0.3.0"
-source = "git+https://github.com/knoxxr/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
+source = "git+https://github.com/MinaryHub/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1455,7 +1455,7 @@ dependencies = [
 [[package]]
 name = "kreate-mesh"
 version = "0.3.0"
-source = "git+https://github.com/knoxxr/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
+source = "git+https://github.com/MinaryHub/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1469,12 +1469,12 @@ dependencies = [
 [[package]]
 name = "kreate-reflect"
 version = "0.3.0"
-source = "git+https://github.com/knoxxr/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
+source = "git+https://github.com/MinaryHub/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
 
 [[package]]
 name = "kreate-scene"
 version = "0.3.0"
-source = "git+https://github.com/knoxxr/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
+source = "git+https://github.com/MinaryHub/Kreate.git?rev=151137a#151137a9c8e9718d70bdfa24403d93a29cdcc9ff"
 dependencies = [
  "glam",
  "kreate-math",

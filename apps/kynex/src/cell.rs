@@ -551,6 +551,10 @@ pub struct Props {
     pub capacity: u32,
     pub takes: u32,
     pub makes: u32,
+    /// How many parts a station holds at once — waiting, at work and done
+    /// in it —, coming ones counted: 0 is as it suits it, one for a
+    /// machine with a chuck or mould and a door, else as many as wait.
+    pub holds: u32,
 }
 
 /// What a connector takes, by its number: a robot standing on it, a
@@ -601,6 +605,7 @@ impl Default for Props {
             capacity: 1,
             takes: 1,
             makes: 1,
+            holds: 0,
         }
     }
 }
@@ -718,6 +723,9 @@ impl Props {
             .map_or(self.crew, |x| if x > 0.5 { 1 } else { 0 });
         self.takes = few("takes", self.takes, 100);
         self.makes = few("makes", self.makes, 20);
+        self.holds = v["holds"]
+            .as_f64()
+            .map_or(self.holds, |x| x.round().clamp(0.0, 100.0) as u32);
         self.dist = v["dist"]
             .as_f64()
             .map_or(self.dist, |x| x.round().clamp(0.0, 4.0) as u32);
@@ -812,6 +820,7 @@ impl Props {
             "rule": self.rule,
             "takes": self.takes,
             "makes": self.makes,
+            "holds": self.holds,
         })
     }
 }

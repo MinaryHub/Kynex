@@ -1075,6 +1075,11 @@ not change the session's scene.
     once put down. The robot's lane in the timeline shows the work.
     Out of reach, the flow bar says where, and the part waits for a
     robot that can.
+  - A station's **동시 투입 가능 수**: the most parts it holds at once,
+    waiting, at work and done, those on their way counted. 0 leaves it
+    as it suits the station: one for a machine with a chuck or mould and
+    a door (a CNC, a moulding machine), else as many as 대기 자리 lets
+    wait. It is never fewer than 투입 수.
   - A buffer's **꺼내는 순서**: first in first out, or last in first out.
     Library **랙 창고**: a pallet rack whose parts sit on its shelves,
     ten to a shelf, the lowest first.

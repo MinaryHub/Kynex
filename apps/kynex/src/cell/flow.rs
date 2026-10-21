@@ -610,18 +610,31 @@ impl Cell {
             .door_stations
             .as_ref()
             .is_some_and(|(_, _, d)| d.contains(&t.object));
-        if t.kind == Kind::Station && machine {
-            // And one done, waiting there for the robot to take it out.
-            let taking = self
-                .jobs
-                .iter()
-                .filter(|j| j.from == t.object && !j.gripped)
-                .count();
-            let inside = s.queue.len()
-                + s.working.iter().map(|(_, p)| p.len()).sum::<usize>()
-                + s.out.len()
-                + taking;
-            return 1u32.saturating_sub((inside + coming) as u32);
+        // How many it may hold at once, as set: for a machine, one unless
+        // set, and never fewer than it takes for a cycle.
+        let holds = match (t.props.holds, machine) {
+            (0, false) => None,
+            (0, true) => Some(t.props.takes.max(1)),
+            (n, _) => Some(n.max(t.props.takes)),
+        };
+        if t.kind == Kind::Station {
+            if let Some(holds) = holds {
+                // And those done, waiting there for the robot to take out.
+                let taking = self
+                    .jobs
+                    .iter()
+                    .filter(|j| j.from == t.object && !j.gripped)
+                    .count();
+                let inside = s.queue.len()
+                    + s.working.iter().map(|(_, p)| p.len()).sum::<usize>()
+                    + s.out.len()
+                    + taking;
+                let left = holds.saturating_sub((inside + coming) as u32);
+                if machine {
+                    return left;
+                }
+                return left.min(t.props.capacity.saturating_sub((s.queue.len() + coming) as u32));
+            }
         }
         let held = match t.kind {
             Kind::Station => s.queue.len(),

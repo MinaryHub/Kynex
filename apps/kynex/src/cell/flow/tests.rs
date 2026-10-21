@@ -1036,3 +1036,32 @@ fn an_overhead_hoist_lifts_a_foup_to_its_rail() {
     assert!(highest > HOIST_RIDE - 0.5, "up to the rail: {highest}");
     assert!(cell.flow_summary()["sunk"].as_u64().unwrap() > 0);
 }
+
+#[test]
+fn a_station_holds_no_more_than_it_is_set_to() {
+    let build = |holds: u32| {
+        let (doc, mut cell, u) = line(&[
+            ("flow_source", 0.0, json!({"feed": 1.0})),
+            ("flow_station", 2.0, json!({"cycle": 10.0, "capacity": 10, "holds": holds})),
+            ("flow_sink", 4.0, json!({})),
+        ]);
+        link(&mut cell, &doc, u[0], &[u[1]]);
+        link(&mut cell, &doc, u[1], &[u[2]]);
+        ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+        let start = Instant::now();
+        let (mut t, mut most) = (0.0, 0);
+        while t < 200.0 {
+            t += 0.1;
+            cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+            most = most.max(cell.parts().len());
+        }
+        (most, cell.flow_summary()["sunk"].as_u64().unwrap())
+    };
+    // As it suits it: ten wait before it, one at work.
+    let (free, _) = build(0);
+    assert!(free >= 11, "{free}");
+    // Two at most in it, one more at the source waiting to go.
+    let (held, sunk) = build(2);
+    assert!(held <= 4, "{held}");
+    assert!(sunk >= 17, "{sunk}");
+}

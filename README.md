@@ -1073,7 +1073,10 @@ not change the session's scene.
     robot, whether it reaches both ends (닿음 / 안 닿음). In link mode,
     click the sender, then a robot, then the receiver: the link is made,
     carried by that robot. Dropping a link handle on a robot does the
-    same, the receiver clicked next. An arrow carried by a robot is drawn
+    same, the receiver clicked next. In either link mode each robot has a
+    purple sign over it, seen through the machines in front of it: click
+    or drop on the sign to mean that robot. Once a robot is chosen, a
+    dashed line runs from the sender to it until the receiver is clicked. An arrow carried by a robot is drawn
     over that robot, purple; AMR green, 작업자 yellow, 직접 blue; red, with
     ⚠ 안 닿음, where its robot cannot reach an end. A project saved with
     the old 보내는 방법 on a piece has it given to each of that piece's

@@ -937,6 +937,7 @@ export class CellPanel {
         return null;
       }
       this.link.via = robot;
+      this.drawMarkers();
       this.ctx.toast(`${this.nameOf(this.link.from)} → 로봇 ${this.robotName(robot)} → 받을 설비를 누르세요`);
       return null;
     }
@@ -1574,7 +1575,14 @@ export class CellPanel {
     canvas.height = 64;
     ctx.font = font;
     ctx.fillStyle =
-      { bottleneck: 'rgba(200, 40, 40, 0.92)', name: 'rgba(38, 66, 104, 0.88)', linknum: 'rgba(30, 90, 160, 0.9)', linkbad: 'rgba(190, 50, 50, 0.92)' }[style] ??
+      {
+        bottleneck: 'rgba(200, 40, 40, 0.92)',
+        name: 'rgba(38, 66, 104, 0.88)',
+        linknum: 'rgba(30, 90, 160, 0.9)',
+        linkbad: 'rgba(190, 50, 50, 0.92)',
+        robotpick: 'rgba(110, 70, 190, 0.92)',
+        robotchosen: 'rgba(170, 90, 255, 0.98)',
+      }[style] ??
       'rgba(20, 24, 30, 0.82)';
     ctx.beginPath();
     ctx.roundRect(0, 4, w, 56, 12);
@@ -1669,6 +1677,12 @@ export class CellPanel {
   // near or far.
   pickMarker(x, y, project) {
     let best = null;
+    // A robot's sign: its middle within 40 pixels across, 14 up and down.
+    for (const o of this.markers.children) {
+      if (o.userData.robotPick == null) continue;
+      const [px, py] = project(o.position);
+      if (Math.abs(px - x) < 40 && Math.abs(py - y) < 14) return { robot: o.userData.robotPick };
+    }
     for (const o of this.markers.children) {
       if (!o.userData.handle) continue;
       const [px, py] = project(o.position);
@@ -1807,6 +1821,36 @@ export class CellPanel {
       }
     }
     if (this.showArrows) for (const a of arrows) this.markers.add(a);
+    // In either link mode, a sign over each robot, seen through whatever
+    // stands in front of it — a machine hides the robot that tends it —:
+    // clicked or dropped on, that robot.
+    if ((this.link && !this.link.once) || this.carry || this.link?.via != null) {
+      for (const r of this.ctx.robots?.() ?? []) {
+        const top = this.ctx.robotTop?.(r.root);
+        if (!top) continue;
+        const chosen = this.link?.via === r.root || (this.carry?.by === 3 && this.carry.robot === r.root);
+        const sign = this.label(`로봇 ${r.name}`, top[0], top[1], top[2] + 0.25, chosen ? 'robotchosen' : 'robotpick', 0.3);
+        sign.userData.robotPick = r.root;
+        sign.renderOrder = 12;
+        this.markers.add(sign);
+      }
+    }
+    // A link on its way through a robot: from the sender to the robot,
+    // dashed, until the receiver is clicked.
+    if (this.link?.via != null && this.link.from != null) {
+      const a = at.get(this.link.from);
+      const top = this.ctx.robotTop?.(this.link.via);
+      if (a && top) {
+        const geometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(a[0], a[1], a[2] + 0.05),
+          new THREE.Vector3(top[0], top[1], top[2]),
+        ]);
+        const line = new THREE.Line(geometry, new THREE.LineDashedMaterial({ color: 0xb57bff, dashSize: 0.08, gapSize: 0.05, depthTest: false, transparent: true }));
+        line.computeLineDistances();
+        line.renderOrder = 9;
+        this.markers.add(line);
+      }
+    }
     // In link mode, a handle over each piece that sends parts on: dragged
     // onto other equipment, it links the two. Not shown otherwise — the
     // right-click menu links as well, without them over everything.

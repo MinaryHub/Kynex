@@ -1083,6 +1083,14 @@ const cellPanel = new CellPanel({
   // The robots, and the one among `uids` (an object and those above it).
   robots: () => robots.map((r) => ({ root: r.root, name: r.name })),
   robotOf: (uids) => robotOf(uids),
+  // Over the top of robot `root`, where its sign stands: [x, y, z].
+  robotTop: (root) => {
+    if (!records.has(root)) return null;
+    const box = bounds(root);
+    if (box.isEmpty()) return null;
+    const c = box.getCenter(new THREE.Vector3());
+    return [c.x, c.y, box.max.z];
+  },
   bounds: (uid) => bounds(uid),
   equipmentNear: (uid, host) => equipmentNear(uid, host),
   remove: (uid) => {
@@ -1558,6 +1566,8 @@ canvas.addEventListener(
     if (e.button !== 0) return;
     // A dot over a piece that sends parts on: always a link's start.
     const marker = markerAt(e.clientX, e.clientY);
+    // A robot's sign: a click, below.
+    if (marker?.robot != null) return;
     if (marker?.handle) {
       const c = cellPanel.componentOf(marker.handle);
       const at = c?.flow?.at;
@@ -1617,6 +1627,11 @@ window.addEventListener('pointerup', (e) => {
     }
     return;
   }
+  const onRobot = markerAt(e.clientX, e.clientY)?.robot;
+  if (onRobot != null) {
+    cellPanel.dragLink(drag.uids, [onRobot], null);
+    return;
+  }
   const hit = partAt(e.clientX, e.clientY);
   if (!hit) return toast('다음 공정이 될 설비 위에 놓으세요');
   const uids = chainOf(hit.uid);
@@ -1644,10 +1659,12 @@ function previewLink(from, point = null, x = 0, y = 0) {
     setDropTarget(null);
     return;
   }
-  const hit = partAt(x, y);
-  const uids = hit ? chainOf(hit.uid) : [];
-  const to = hit?.point ?? ray.ray.intersectPlane(_floor, new THREE.Vector3());
-  const preview = cellPanel.dropPreview(from, uids, uids.length ? (libraryPanel.itemOf(uids[0])?.root ?? null) : null);
+  const sign = markerAt(x, y)?.robot;
+  const hit = sign != null ? null : partAt(x, y);
+  const uids = sign != null ? [sign] : hit ? chainOf(hit.uid) : [];
+  const top = sign != null ? cellPanel.ctx.robotTop(sign) : null;
+  const to = top ? new THREE.Vector3(top[0], top[1], top[2]) : hit?.point ?? ray.ray.intersectPlane(_floor, new THREE.Vector3());
+  const preview = cellPanel.dropPreview(from, uids, uids.length && sign == null ? (libraryPanel.itemOf(uids[0])?.root ?? null) : null);
   if (to) {
     linkLine.geometry.setFromPoints([point, to]);
     linkLine.computeLineDistances();
@@ -1745,6 +1762,12 @@ canvas.addEventListener('pointerup', (e) => {
   const hit = marker && (!shape || marker.distance < shape.distance) ? marker : shape;
   // Process link mode: the equipment or the robot clicked, linked from
   // the one before — before the arrows, which may run over a robot.
+  const robotSign = cellPanel.linking() || cellPanel.carrying() ? markerAt(e.clientX, e.clientY)?.robot : null;
+  if (robotSign != null) {
+    if (cellPanel.carrying()) cellPanel.carryClick([robotSign], null);
+    else cellPanel.linkTo([robotSign], null);
+    return;
+  }
   if (cellPanel.linking() && hit) {
     const uids = [];
     for (let at = uidOf(hit), n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);

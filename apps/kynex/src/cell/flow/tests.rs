@@ -1042,7 +1042,11 @@ fn a_station_holds_no_more_than_it_is_set_to() {
     let build = |holds: u32| {
         let (doc, mut cell, u) = line(&[
             ("flow_source", 0.0, json!({"feed": 1.0})),
-            ("flow_station", 2.0, json!({"cycle": 10.0, "capacity": 10, "holds": holds})),
+            (
+                "flow_station",
+                2.0,
+                json!({"cycle": 10.0, "capacity": 10, "holds": holds}),
+            ),
             ("flow_sink", 4.0, json!({})),
         ]);
         link(&mut cell, &doc, u[0], &[u[1]]);
@@ -1071,7 +1075,11 @@ fn a_station_stops_for_its_planned_maintenance() {
     let build = |pm: f64| {
         let (doc, mut cell, u) = line(&[
             ("flow_source", 0.0, json!({"feed": 1.0})),
-            ("flow_station", 2.0, json!({"cycle": 10.0, "pm_every": pm, "pm_time": 50.0})),
+            (
+                "flow_station",
+                2.0,
+                json!({"cycle": 10.0, "pm_every": pm, "pm_time": 50.0}),
+            ),
             ("flow_sink", 4.0, json!({})),
         ]);
         link(&mut cell, &doc, u[0], &[u[1]]);
@@ -1092,4 +1100,83 @@ fn a_station_stops_for_its_planned_maintenance() {
     assert!(!none && seen);
     assert!(free >= 95, "{free}");
     assert!((60..=72).contains(&kept), "{kept}");
+}
+
+#[test]
+fn a_split_by_share_sends_each_way_its_share_and_the_ways_meet_again() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 2.0, "rule": 3})),
+        ("flow_station", 2.0, json!({"cycle": 1.0, "capacity": 5})),
+        ("flow_station", 2.0, json!({"cycle": 1.0, "capacity": 5})),
+        ("flow_station", 4.0, json!({"cycle": 1.0, "capacity": 5})),
+        ("flow_sink", 6.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1], u[2]]);
+    link(&mut cell, &doc, u[1], &[u[3]]);
+    link(&mut cell, &doc, u[2], &[u[3]]);
+    link(&mut cell, &doc, u[3], &[u[4]]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_share", "object": u[0].to_string(), "to": u[1].to_string(), "share": 3.0}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 400.0);
+    let a = cell.stations[&u[1]].made;
+    let b = cell.stations[&u[2]].made;
+    assert!(a + b >= 190, "{a} + {b}");
+    assert!((a as f64 / b as f64 - 3.0).abs() < 0.1, "{a} vs {b}");
+    // Both ways meet at the last station: all of them through it.
+    assert!(
+        cell.stations[&u[3]].made + 2 >= a + b,
+        "{:?}",
+        cell.stations[&u[3]].made
+    );
+    // The share is the project's, and goes with its link.
+    let source = cell
+        .components
+        .iter()
+        .find(|c| c.object == u[0])
+        .unwrap()
+        .clone();
+    assert_eq!(
+        cell.flow_json(&doc, &source)["shares"][u[1].to_string()],
+        3.0
+    );
+    link(&mut cell, &doc, u[0], &[u[2]]);
+    assert!(cell.shares.is_empty());
+}
+
+#[test]
+fn a_station_that_assembles_takes_one_from_each_way_into_it() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 2.0})),
+        ("flow_source", 0.0, json!({"feed": 10.0})),
+        (
+            "flow_station",
+            2.0,
+            json!({"cycle": 1.0, "capacity": 2, "join": 1}),
+        ),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[2]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    link(&mut cell, &doc, u[2], &[u[3]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 200.0);
+    let made = cell.stations[&u[2]].made;
+    let quick = cell.stations[&u[0]].made;
+    let slow = cell.stations[&u[1]].made;
+    // At the slow way's pace, one of each a cycle: the quick way held up,
+    // not filling the station with its own.
+    assert!(made + 1 >= slow && made <= slow, "made {made}, slow {slow}");
+    assert!(quick <= slow + 4, "quick {quick}, slow {slow}");
+    let waiting = &cell.stations[&u[2]].queue;
+    let from = |w: u64| {
+        waiting
+            .iter()
+            .filter(|p| cell.parts.iter().any(|x| x.uid == **p && x.came == w))
+            .count()
+    };
+    assert!(from(u[0]) <= 2 && from(u[1]) <= 2, "{waiting:?}");
 }

@@ -682,9 +682,17 @@ fn parts_no_robot_can_take_still_go_where_the_link_says() {
         ("flow_station", 2.0, -1.0, json!({"cycle": 3.0})),
         ("flow_sink", 4.0, 0.0, json!({})),
     ]);
-    ask(&mut cell, &doc, json!({"op": "flow_next", "object": u[0].to_string(), "next": [u[1].to_string(), u[2].to_string()]}));
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": u[0].to_string(), "next": [u[1].to_string(), u[2].to_string()]}),
+    );
     for s in [u[1], u[2]] {
-        ask(&mut cell, &doc, json!({"op": "flow_next", "object": s.to_string(), "next": [u[3].to_string()]}));
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "flow_next", "object": s.to_string(), "next": [u[3].to_string()]}),
+        );
     }
     ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
     let start = Instant::now();
@@ -703,7 +711,13 @@ fn parts_no_robot_can_take_still_go_where_the_link_says() {
             }
         }
     }
-    let f = |s: u64| cell.components.iter().find(|c| c.object == s).map(|c| cell.flow_json(&doc, c)).unwrap();
+    let f = |s: u64| {
+        cell.components
+            .iter()
+            .find(|c| c.object == s)
+            .map(|c| cell.flow_json(&doc, c))
+            .unwrap()
+    };
     // Both stations worked, as the links say; none sent elsewhere.
     assert!(skipped >= 20, "{skipped}");
     assert!(f(u[1])["made"].as_u64().unwrap() >= 20, "{}", f(u[1]));
@@ -723,22 +737,52 @@ fn a_link_says_how_its_parts_go_and_which_robot() {
         ("flow_sink", 4.0, 0.0, json!({})),
     ]);
     let s = |x: u64| x.to_string();
-    ask(&mut cell, &doc, json!({"op": "flow_next", "object": s(u[0]), "next": [s(u[1])]}));
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": s(u[0]), "next": [s(u[1])]}),
+    );
     // The source's AMR, onto its link; its own let go.
     assert_eq!(cell.carrier(u[0], u[1]).by, 1);
     assert!(cell.components.iter().all(|c| c.props.carrier == 0));
     // A new link, by robot 7: made, and carried so.
-    ask(&mut cell, &doc, json!({"op": "flow_carrier", "object": s(u[0]), "to": s(u[2]), "by": 3, "robot": "7"}));
-    assert_eq!(cell.carrier(u[0], u[2]), Carrier { by: 3, robot: Some(7) });
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_carrier", "object": s(u[0]), "to": s(u[2]), "by": 3, "robot": "7"}),
+    );
+    assert_eq!(
+        cell.carrier(u[0], u[2]),
+        Carrier {
+            by: 3,
+            robot: Some(7),
+            then: None
+        }
+    );
     // Kept, and read back.
     let saved = cell.to_saved();
     let mut again = Cell::from_saved(saved);
     again.adopt(&doc);
-    assert_eq!(again.carrier(u[0], u[2]), Carrier { by: 3, robot: Some(7) });
+    assert_eq!(
+        again.carrier(u[0], u[2]),
+        Carrier {
+            by: 3,
+            robot: Some(7),
+            then: None
+        }
+    );
     assert_eq!(again.carrier(u[0], u[1]).by, 1);
     // A job along it is for robot 7.
-    ask(&mut cell, &doc, json!({"op": "flow_carrier", "object": s(u[0]), "to": s(u[1]), "by": 0}));
-    ask(&mut cell, &doc, json!({"op": "flow_next", "object": s(u[0]), "next": [s(u[2])]}));
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_carrier", "object": s(u[0]), "to": s(u[1]), "by": 0}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": s(u[0]), "next": [s(u[2])]}),
+    );
     ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
     let start = Instant::now();
     let mut t = 0.0;
@@ -750,7 +794,11 @@ fn a_link_says_how_its_parts_go_and_which_robot() {
     assert!(!jobs.is_empty());
     assert!(jobs.iter().all(|j| j.4 == Some(7)));
     // A link undone takes its carrier with it.
-    ask(&mut cell, &doc, json!({"op": "flow_next", "object": s(u[0]), "next": []}));
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": s(u[0]), "next": []}),
+    );
     assert_eq!(cell.carrier(u[0], u[2]).by, 0);
 }
 
@@ -760,11 +808,360 @@ fn a_link_says_how_its_parts_go_and_which_robot() {
 /// to the out belt — none from the feeder straight out.
 #[test]
 fn a_robot_drawn_in_the_flow_feeds_its_machines_and_unloads_them() {
-    let hub = Hub { ins: vec![1, 2, 3], outs: vec![2, 3, 4] };
+    let hub = Hub {
+        ins: vec![1, 2, 3],
+        outs: vec![2, 3, 4],
+    };
     let mut pairs = hub.pairs();
     pairs.sort();
     assert_eq!(pairs, vec![(1, 2), (1, 3), (2, 4), (3, 4)]);
     // Serving no machine: from each piece to each other.
-    let hub = Hub { ins: vec![1], outs: vec![4] };
+    let hub = Hub {
+        ins: vec![1],
+        outs: vec![4],
+    };
     assert_eq!(hub.pairs(), vec![(1, 4)]);
+}
+
+#[test]
+fn a_link_that_names_its_amr_is_carried_by_that_one() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.5, Value::Null),
+        ("amr", 6.0, -1.5, Value::Null),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 30.0})),
+        ("flow_station", 6.0, 0.0, json!({"cycle": 10.0})),
+        ("flow_sink", 8.0, 0.0, Value::Null),
+    ]);
+    let (near, far, s1, s2, source, station, sink) = (u[0], u[1], u[2], u[3], u[4], u[5], u[6]);
+    lanes(&mut cell, &doc, s1, &[s2]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": station.to_string(), "next": [sink.to_string()]}),
+    );
+    // The far one named: the near one, though free beside the part, stays.
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_carrier", "object": source.to_string(), "to": station.to_string(), "by": 1, "robot": far.to_string()}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let mut rode = None;
+    let mut t = 0.0;
+    while t < 40.0 && rode.is_none() {
+        t = run(&mut cell, &doc, t, 1.0);
+        rode = cell.parts().iter().find_map(|p| match p.flow {
+            Some(Place::Riding { amr, .. }) => Some(amr),
+            _ => None,
+        });
+    }
+    assert_eq!(rode, Some(far), "near {near}, far {far}");
+    let k = cell.carrier(source, station);
+    assert_eq!((k.by, k.robot), (1, Some(far)));
+}
+
+#[test]
+fn an_amr_in_the_picture_carries_from_what_links_to_it_to_where_it_links() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.5, Value::Null),
+        ("amr", 6.0, -1.5, Value::Null),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 30.0})),
+        ("flow_station", 6.0, 0.0, json!({"cycle": 10.0})),
+        ("flow_sink", 8.0, 0.0, Value::Null),
+    ]);
+    let (far, s1, s2, source, station, sink) = (u[1], u[2], u[3], u[4], u[5], u[6]);
+    lanes(&mut cell, &doc, s1, &[s2]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_next", "object": station.to_string(), "next": [sink.to_string()]}),
+    );
+    // Supply → AMR, AMR → station: the AMR's link, carried by it alone.
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "hub_link", "robot": far.to_string(), "from": source.to_string()}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "hub_link", "robot": far.to_string(), "to": station.to_string()}),
+    );
+    let k = cell.carrier(source, station);
+    assert_eq!((k.by, k.robot), (1, Some(far)));
+    assert!(cell.is_derived(source, station));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let mut rode = None;
+    let mut t = 0.0;
+    while t < 40.0 && rode.is_none() {
+        t = run(&mut cell, &doc, t, 1.0);
+        rode = cell.parts().iter().find_map(|p| match p.flow {
+            Some(Place::Riding { amr, .. }) => Some(amr),
+            _ => None,
+        });
+    }
+    // Drawn through one AMR, carried by the fleet: any AMR free.
+    assert!(rode.is_some());
+}
+
+/// An AMR linked to a robot in the flow's picture: what the AMR takes goes
+/// where the robot puts what it takes from the AMR. The AMR carries it to
+/// the robot and stands there with it on its top plate, the robot's to
+/// take; it is free again only once the robot has gripped it.
+#[test]
+fn an_amr_hands_its_part_to_a_robot_off_its_top_plate() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.5, Value::Null),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 30.0})),
+        ("flow_station", 6.0, 0.0, json!({"cycle": 10.0})),
+    ]);
+    let (amr, s1, s2, source, station) = (u[0], u[1], u[2], u[3], u[4]);
+    lanes(&mut cell, &doc, s1, &[s2]);
+    // A robot by its object: the AMR puts into it, it takes from the AMR
+    // and puts into the station.
+    let robot = 999;
+    cell.hubs.insert(
+        amr,
+        Hub {
+            ins: vec![source],
+            outs: vec![robot],
+        },
+    );
+    cell.hubs.insert(
+        robot,
+        Hub {
+            ins: vec![amr],
+            outs: vec![station],
+        },
+    );
+    cell.rederive_hubs();
+    let k = cell.carrier(source, station);
+    assert_eq!((k.by, k.robot, k.then), (1, Some(amr), Some(robot)));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let mut t = 0.0;
+    let mut docked = None;
+    while t < 60.0 && docked.is_none() {
+        t = run(&mut cell, &doc, t, 1.0);
+        docked = cell.jobs.iter().find(|j| j.docked.is_some()).cloned();
+    }
+    let j = docked.expect("the AMR stood by for the robot");
+    assert_eq!(
+        (j.by, j.robot, j.docked, j.amr),
+        (3, Some(robot), Some(amr), None)
+    );
+    // Still on the AMR's top plate, and the AMR not free for other work.
+    let p = cell.parts().iter().find(|p| p.uid == j.part).unwrap();
+    assert!(
+        matches!(p.flow, Some(Place::Riding { amr: a, .. }) if a == amr),
+        "{:?}",
+        p.flow
+    );
+    let c = cell
+        .components
+        .iter()
+        .find(|c| c.object == amr)
+        .unwrap()
+        .clone();
+    assert!(!cell.free(&c));
+    // Gripped: free again.
+    cell.jobs.iter_mut().for_each(|j| {
+        if j.docked.is_some() {
+            j.gripped = true;
+            j.docked = None;
+        }
+    });
+    assert!(cell.free(&c));
+}
+
+/// A robot linked to an AMR: the robot puts what it takes onto the AMR,
+/// called to stand beside it, which carries it on to where the AMR's
+/// arrow goes.
+#[test]
+fn a_robot_puts_its_part_onto_an_amr_that_carries_it_on() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 6.0, -1.5, Value::Null),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        // Where the robot stands, for the stop beside it.
+        ("amr_stop", 0.3, -1.6, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 30.0})),
+        ("flow_sink", 6.0, 0.0, Value::Null),
+    ]);
+    let (amr, s1, s2, robot, source, sink) = (u[0], u[1], u[2], u[3], u[4], u[5]);
+    lanes(&mut cell, &doc, s1, &[s2, robot]);
+    cell.hubs.insert(
+        robot,
+        Hub {
+            ins: vec![source],
+            outs: vec![amr],
+        },
+    );
+    cell.hubs.insert(
+        amr,
+        Hub {
+            ins: vec![robot],
+            outs: vec![sink],
+        },
+    );
+    cell.rederive_hubs();
+    let k = cell.carrier(source, sink);
+    assert_eq!((k.by, k.robot, k.then), (3, Some(robot), Some(amr)));
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    // The AMR called to the robot; the robot's job offered once it is there.
+    let mut t = 0.0;
+    let mut offered = Vec::new();
+    while t < 60.0 && offered.is_empty() {
+        t = run(&mut cell, &doc, t, 1.0);
+        offered = cell.robot_jobs(&doc);
+    }
+    let (part, _, onto, _, want) = offered[0];
+    assert_eq!(want, Some(robot));
+    assert!(
+        onto.truncate().distance(at(&cell, amr).truncate()) < 1.0,
+        "onto the AMR: {onto}"
+    );
+    // The robot takes it and puts it down on the AMR: the AMR carries it.
+    cell.robot_take(part, robot);
+    cell.robot_done(part, None);
+    let j = cell.jobs.iter().find(|j| j.part == part).unwrap();
+    assert_eq!((j.by, j.amr, j.docked), (1, Some(amr), None));
+    run(&mut cell, &doc, t, 60.0);
+    assert!(
+        cell.flow_summary()["sunk"].as_u64().unwrap() >= 1,
+        "{}",
+        cell.flow_summary()
+    );
+}
+
+/// A piece an AMR (or robot) puts into, given another role than the flow's
+/// — a robot cell's outfeed pallet —: its link goes, as the flow could not
+/// send along it; given a flow role again, it comes back.
+#[test]
+fn a_link_to_a_piece_out_of_the_flow_goes_and_comes_back_with_its_role() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.5, Value::Null),
+        ("flow_source", 0.0, 0.0, json!({"feed": 30.0})),
+        ("flow_sink", 6.0, 0.0, Value::Null),
+    ]);
+    let (amr, source, sink) = (u[0], u[1], u[2]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "hub_link", "robot": amr.to_string(), "from": source.to_string()}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "hub_link", "robot": amr.to_string(), "to": sink.to_string()}),
+    );
+    assert!(cell.is_derived(source, sink));
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": sink.to_string(), "kind": "outfeed"}),
+    );
+    assert!(!cell.is_derived(source, sink));
+    assert!(!cell
+        .flow_next
+        .get(&source)
+        .is_some_and(|n| n.contains(&sink)));
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": sink.to_string(), "kind": "sink"}),
+    );
+    assert!(cell.is_derived(source, sink));
+}
+
+/// Two AMRs, one drawn in the picture: the fleet carries, both of them; and
+/// each sets out with a full load (its 적재량), not with each part.
+#[test]
+fn the_fleet_carries_full_loads_through_an_amr_in_the_picture() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr", 0.0, -1.5, json!({"capacity": 3})),
+        ("amr", 6.0, -1.5, json!({"capacity": 3})),
+        ("amr_stop", 0.0, -1.0, Value::Null),
+        ("amr_stop", 6.0, -1.0, Value::Null),
+        ("amr_stop", 3.0, -4.0, Value::Null),
+        (
+            "flow_source",
+            0.0,
+            0.0,
+            json!({"feed": 1.0, "capacity": 20}),
+        ),
+        ("flow_sink", 6.0, 0.0, Value::Null),
+    ]);
+    let (a1, a2, s1, s2, s3, source, sink) = (u[0], u[1], u[2], u[3], u[4], u[5], u[6]);
+    // One way round, where two AMRs never meet head on.
+    for (from, to) in [(s1, s2), (s2, s3), (s3, s1)] {
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "amr_lanes", "object": from.to_string(), "next": [to.to_string()], "oneway": true}),
+        );
+    }
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "hub_link", "robot": a1.to_string(), "from": source.to_string()}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "hub_link", "robot": a1.to_string(), "to": sink.to_string()}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let mut t = 0.0;
+    let mut most = 0;
+    let mut worked = std::collections::BTreeSet::new();
+    while t < 200.0 {
+        t = run(&mut cell, &doc, t, 0.5);
+        let mut on: BTreeMap<u64, usize> = BTreeMap::new();
+        for p in cell.parts() {
+            if let Some(Place::Riding { amr, .. }) = p.flow {
+                *on.entry(amr).or_insert(0) += 1;
+                worked.insert(amr);
+            }
+        }
+        most = most.max(on.values().copied().max().unwrap_or(0));
+    }
+    assert_eq!(most, 3, "a full load at once");
+    assert_eq!(worked, [a1, a2].into_iter().collect(), "both AMRs");
+}
+
+/// A lane between two stops set on its own — one way, both ways, none —,
+/// the others as they were.
+#[test]
+fn a_lane_is_set_one_way_both_ways_or_none_alone() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr_stop", 0.0, 0.0, Value::Null),
+        ("amr_stop", 4.0, 0.0, Value::Null),
+        ("amr_stop", 4.0, 4.0, Value::Null),
+    ]);
+    let (a, b, c) = (u[0], u[1], u[2]);
+    let lane = |cell: &mut Cell, x: u64, y: u64, way: &str| {
+        ask(
+            cell,
+            &doc,
+            json!({"op": "amr_lane", "from": x.to_string(), "to": y.to_string(), "way": way}),
+        );
+    };
+    let has = |cell: &Cell, x: u64, y: u64| cell.lanes.get(&x).is_some_and(|n| n.contains(&y));
+    lane(&mut cell, c, a, "to");
+    lane(&mut cell, a, b, "to");
+    assert!(has(&cell, a, b) && !has(&cell, b, a));
+    lane(&mut cell, a, b, "both");
+    assert!(has(&cell, a, b) && has(&cell, b, a));
+    lane(&mut cell, a, b, "from");
+    assert!(!has(&cell, a, b) && has(&cell, b, a));
+    lane(&mut cell, a, b, "none");
+    assert!(!has(&cell, a, b) && !has(&cell, b, a));
+    // The one way from c into a kept throughout.
+    assert!(has(&cell, c, a) && !has(&cell, a, c));
 }

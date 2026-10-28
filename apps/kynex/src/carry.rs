@@ -88,6 +88,21 @@ impl Carry {
             runners.retain(|r| r.root != root);
             changed = true;
         }
+        // Its program stopped from outside — the run stopped, the page
+        // opened anew —: the robot free again, and its part not left with
+        // it for ever (see `Cell::robot_dropped`).
+        let gone: Vec<(u64, u64)> = self
+            .carrying
+            .iter()
+            .filter(|(root, _)| !runners.iter().any(|r| r.root == **root))
+            .map(|(root, part)| (*root, *part))
+            .collect();
+        for (root, part) in gone {
+            cell.robot_dropped(part);
+            self.carrying.remove(&root);
+            self.serving.remove(&root);
+            changed = true;
+        }
         for ends in self.serving.values() {
             for object in ends {
                 cell.hold_door(*object);

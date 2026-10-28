@@ -4,7 +4,6 @@
 // parts, which arrive in the scene like any other object.
 
 import * as THREE from 'three';
-import { fieldsFor, getLevel, onLevel, roleShown } from './level.js';
 
 // The flow's roles, as a menu offers them.
 const FLOW_KINDS = [
@@ -14,6 +13,24 @@ const FLOW_KINDS = [
   ['sink', '배출'],
 ];
 const FLOW_NAME = { ...Object.fromEntries(FLOW_KINDS), conveyor: '컨베이어' };
+// What carries parts, or where it stops: never a place in the flow, and
+// why a link let go on it is not made there.
+const NOT_PLACES = {
+  amr_stop: 'AMR 정지 위치는 공정에 넣지 않습니다 — AMR이 서는 곳입니다',
+  operator: '작업자는 운반 수단입니다 — 화살표를 오른쪽 클릭해 운반: 작업자로 정하세요',
+};
+// Where the way splits, how parts are shared out (`rule`); where ways meet
+// at a station, how it takes them (`join`).
+const RULES = [
+  [0, '번갈아', '갈래마다 차례로, 자리 있는 곳으로'],
+  [1, '대기 적은 곳', '기다리는 부품이 적은 쪽으로'],
+  [2, '무작위', '자리 있는 곳 중 아무 데나'],
+  [3, '비율', '정한 비율대로 (자리가 날 때까지 기다림)'],
+];
+const JOINS = [
+  [0, '도착 순', '먼저 온 부품부터, 투입 수만큼씩'],
+  [1, '조립', '들어오는 경로마다 1개씩 모아 하나로'],
+];
 // Templates that are the building, not equipment of the flow.
 const STRUCTURE = new Set([
   'fence', 'guard_rail', 'factory_wall', 'factory_column', 'floor_zone', 'ceiling_light',
@@ -22,26 +39,29 @@ const STRUCTURE = new Set([
   'pedestal',
 ]);
 
+// The roles, the process flow's first; those of a robot cell (a robot
+// program's machines and pallets, not the flow's) said so — a robot cell's
+// 배출 팔레트 is no 배출 of the flow.
 const KINDS = [
   ['', '없음'],
-  ['cnc', 'CNC 장비'],
-  ['infeed', '투입 팔레트'],
-  ['outfeed', '배출 팔레트'],
-  ['gripper', '그리퍼'],
-  ['fence', '안전 펜스'],
-  ['molder', '사출 성형기'],
-  ['conveyor', '컨베이어'],
-  ['amr', 'AMR'],
-  ['amr_stop', 'AMR 정지 위치'],
-  ['positioner', '포지셔너'],
-  ['door', '문 (장비의 움직이는 부분)'],
-  ['connector', '연결점'],
-  ['sensor', '포토센서'],
   ['source', '공정 흐름: 소재 공급'],
   ['station', '공정 흐름: 공정 스테이션'],
   ['buffer', '공정 흐름: 버퍼'],
   ['sink', '공정 흐름: 배출'],
+  ['conveyor', '컨베이어'],
+  ['amr', 'AMR'],
+  ['amr_stop', 'AMR 정지 위치'],
   ['operator', '작업자 (사람)'],
+  ['cnc', '로봇 셀: CNC 장비'],
+  ['molder', '로봇 셀: 사출 성형기'],
+  ['infeed', '로봇 셀: 투입 팔레트'],
+  ['outfeed', '로봇 셀: 배출 팔레트'],
+  ['gripper', '그리퍼'],
+  ['positioner', '포지셔너'],
+  ['fence', '안전 펜스'],
+  ['door', '문 (장비의 움직이는 부분)'],
+  ['connector', '연결점'],
+  ['sensor', '포토센서'],
   ['actuator', '동작축 (스토퍼·리프터·직선·회전)'],
 ];
 
@@ -99,7 +119,7 @@ export const FIELDS = {
     ['door', '가드 개폐', 's', 1],
   ],
   conveyor: [
-    ['rule', '다음 공정', '', 1, [[0, '번갈아'], [1, '대기 적은 곳'], [2, '무작위']]],
+    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
     ['speed', '속도', 'mm/s', 1000],
     ['feed', '공급 간격', 's', 1],
     ['drain', '끝에서 치움', '', 1, [[0, '아니오'], [1, '예']]],
@@ -107,6 +127,7 @@ export const FIELDS = {
   amr: [
     ['speed', '주행 속도', 'mm/s', 1000],
     ['capacity', '적재량', '개', 1],
+    ['gather', '모아 싣기 최대 대기', 's', 1],
     ['battery', '배터리', '분', 1],
     ['charge', '충전 시간', '분', 1],
   ],
@@ -120,7 +141,7 @@ export const FIELDS = {
     ['angle', '각도', '°', 180 / Math.PI],
   ],
   source: [
-    ['rule', '다음 공정', '', 1, [[0, '번갈아'], [1, '대기 적은 곳'], [2, '무작위']]],
+    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
     ['feed', '공급 간격', 's', 1],
     ['kanban', '칸반 한도', '개', 1],
     ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
@@ -129,7 +150,7 @@ export const FIELDS = {
     ['speed', '이송 속도', 'mm/s', 1000],
   ],
   station: [
-    ['rule', '다음 공정', '', 1, [[0, '번갈아'], [1, '대기 적은 곳'], [2, '무작위']]],
+    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
     ['cycle', '처리 시간', 's', 1],
     ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
     ['spread', '폭·σ', 's', 1],
@@ -142,12 +163,13 @@ export const FIELDS = {
     ['crew', '작업자', '', 1, [[0, '필요 없음'], [1, '작업자 필요']]],
     ['holds', '동시 투입 가능 수', '개', 1],
     ['capacity', '대기 자리', '개', 1],
+    ['join', '합류 방식', '', 1, JOINS.map(([v, l]) => [v, l])],
     ['takes', '투입 수', '개', 1],
     ['makes', '배출 수', '개', 1],
     ['speed', '이송 속도', 'mm/s', 1000],
   ],
   buffer: [
-    ['rule', '다음 공정', '', 1, [[0, '번갈아'], [1, '대기 적은 곳'], [2, '무작위']]],
+    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
     ['capacity', '용량', '개', 1],
     ['policy', '꺼내는 순서', '', 1, [[0, '먼저 들어온 것 (FIFO)'], [1, '나중 들어온 것 (LIFO)']]],
     ['speed', '이송 속도', 'mm/s', 1000],
@@ -237,14 +259,6 @@ export class CellPanel {
       if (stop) this.send({ op: 'drive', object: this.ctx.selected(), stop });
       const turn = e.target.closest('[data-turn]')?.dataset.turn;
       if (turn != null) this.send({ op: 'turn', object: this.ctx.selected(), angle: (Number(turn) * Math.PI) / 180 });
-      // A stop's lanes: one more, or one fewer, both ways.
-      const lane = e.target.closest('[data-lane]');
-      if (lane) {
-        const object = this.ctx.selected();
-        const have = this.componentOf(object)?.lanes ?? [];
-        const t = lane.dataset.lane;
-        this.send({ op: 'amr_lanes', object, next: have.includes(t) ? have.filter((x) => x !== t) : [...have, t] });
-      }
       // A person's stations: one more, or one fewer.
       const skill = e.target.closest('[data-skill]');
       if (skill) {
@@ -285,16 +299,9 @@ export class CellPanel {
         const products = have.includes(p) ? have.filter((x) => x !== p) : [...have, p];
         return this.send({ op: 'flow_products', object, to, products });
       }
-      // A process flow's next: one more, or one fewer.
-      const next = e.target.closest('[data-flow-next]');
-      if (next) {
-        const object = this.ctx.selected();
-        const have = this.componentOf(object)?.flow?.next ?? [];
-        const t = next.dataset.flowNext;
-        const list = have.includes(t) ? have.filter((x) => x !== t) : [...have, t];
-        this.send({ op: 'flow_next', object, next: list });
-      }
-      if (e.target.closest('[data-link-pick]')) return this.startLinking(this.ctx.selected());
+      // A linked piece in the inspector: selected.
+      const pick = e.target.closest('[data-select]')?.dataset.select;
+      if (pick != null) return this.ctx.select?.(pick);
       if (e.target.closest('[data-pick]')) {
         this.pickingFor = this.ctx.selected();
         this.showFor(this.pickingFor);
@@ -353,16 +360,6 @@ export class CellPanel {
     // What the inspector last drew, so that a running machine's progress
     // does not redraw the fields under the pointer.
     this.drawn = { props: '', actions: '', io: '', plc: '' };
-    // Another level: the inspector drawn anew, with what it shows.
-    onLevel(() => {
-      this.drawn = { props: '', actions: '', io: '', plc: '' };
-      this.rolesKey = null;
-      const uid = this.ctx.selected();
-      if (uid != null) this.showFor(uid);
-    });
-    document.getElementById('cell-auto').addEventListener('click', () =>
-      this.send({ op: 'auto' }, (a) => this.ctx.toast(a.added ? `셀 역할 ${a.added}개를 이름으로 정했습니다` : '이름으로 정할 역할이 없습니다')),
-    );
   }
 
   async send(request, then) {
@@ -388,6 +385,23 @@ export class CellPanel {
   // The `cell` event.
   setCell(cell) {
     this.cell = cell;
+    // Links new since the last: drawn bold a moment, to be seen at once.
+    const keys = new Set();
+    for (const c of cell.components ?? []) for (const n of c.flow?.next ?? []) keys.add(`${c.object}>${n}`);
+    for (const h of cell.hubs ?? []) {
+      for (const a of h.ins) keys.add(`${a}>${h.robot}`);
+      for (const b of h.outs) keys.add(`${h.robot}>${b}`);
+    }
+    const added = this.linkKeys ? [...keys].filter((k) => !this.linkKeys.has(k)) : [];
+    this.linkKeys = keys;
+    if (added.length) {
+      this.flash = new Set(added);
+      clearTimeout(this.flashOff);
+      this.flashOff = setTimeout(() => {
+        this.flash = null;
+        this.drawMarkers();
+      }, 2000);
+    }
     this.drawMarkers();
     const selected = this.ctx.selected();
     if (selected != null) this.showFor(selected);
@@ -395,11 +409,10 @@ export class CellPanel {
 
   // The roles offered, as the level has them, and the one `kind` has.
   roles(kind = '') {
-    const key = `${getLevel()}|${kind}`;
+    const key = kind;
     if (key === this.rolesKey) return;
     this.rolesKey = key;
-    this.kind.innerHTML = KINDS.filter(([v]) => roleShown(v) || v === kind)
-      .map(([v, label]) => `<option value="${v}">${label}</option>`)
+    this.kind.innerHTML = KINDS.map(([v, label]) => `<option value="${v}">${label}</option>`)
       .join('');
   }
 
@@ -409,8 +422,8 @@ export class CellPanel {
     const c = this.componentOf(uid);
     this.roles(c?.kind ?? '');
     if (document.activeElement !== this.kind) this.kind.value = c?.kind ?? '';
-    const fields = c ? fieldsFor(c.kind, FIELDS[c.kind] || []) : [];
-    const propsKey = `${uid}|${c?.kind}|${getLevel()}|${JSON.stringify(c?.props)}`;
+    const fields = c ? FIELDS[c.kind] || [] : [];
+    const propsKey = `${uid}|${c?.kind}|${JSON.stringify(c?.props)}`;
     if (propsKey !== this.drawn.props) {
       this.drawn.props = propsKey;
       document.getElementById('cell-props').innerHTML = this.fieldsHtml(c, fields);
@@ -461,35 +474,35 @@ export class CellPanel {
             .join('')}${have.length ? '' : '<span class="muted">(아무것도 고르지 않으면 모두)</span>'}`
         : '<span class="muted">작업자 필요 스테이션이 생기면 맡을 곳을 고를 수 있습니다</span>';
     } else if (c && c.kind === 'amr_stop') {
-      const others = this.cell.components.filter((s) => s.kind === 'amr_stop' && s.object !== c.object);
-      const have = c.lanes ?? [];
-      actions = others.length
-        ? `<span class="muted">AMR 경로</span>${others
-            .map(
-              (s) =>
-                `<button class="text-btn${have.includes(s.object) ? ' on' : ''}" data-lane="${escapeHtml(s.object)}" aria-pressed="${have.includes(s.object)}" title="이 정지 위치와 잇는 길 (양방향)">${have.includes(s.object) ? '✓ ' : ''}${escapeHtml(s.name)}</button>`,
-            )
-            .join('')}`
-        : '<span class="muted">다른 AMR 정지 위치를 놓으면 그 사이를 길로 이을 수 있습니다</span>';
+      // The lanes it has, each with its way: clicked, that stop selected.
+      const goes = (x, y) => (this.componentOf(x)?.lanes ?? []).includes(y);
+      const linked = this.cell.components.filter((s) => s.kind === 'amr_stop' && s.object !== c.object && (goes(c.object, s.object) || goes(s.object, c.object)));
+      const me = this.stopNumber(c.object);
+      const way = (s) => {
+        const o = this.stopNumber(s.object);
+        return goes(c.object, s.object) && goes(s.object, c.object) ? `${me} ↔ ${o}` : goes(c.object, s.object) ? `${me} → ${o}` : `${o} → ${me}`;
+      };
+      actions =
+        `<div class="flow-links"><span class="muted">AMR 길</span>${
+          linked.length
+            ? linked.map((s) => `<button class="text-btn" data-select="${escapeHtml(s.object)}" title="${escapeHtml(s.name)} 선택">${way(s)}</button>`).join('')
+            : '<span class="muted">없음</span>'
+        }</div>` + '<span class="muted insp-hint">길 잇기: 연결 모드(Shift+C)에서 번호표를 다른 번호표로 끌기 · 방향·끊기: 길을 오른쪽 클릭</span>';
     } else if (c && c.flow) {
       const f = c.flow;
-      // Where its parts go: every other part of the flow, those it sends
-      // to on.
-      const targets = this.cell.components.filter(
-        (t) => t.object !== c.object && ['station', 'buffer', 'sink', 'conveyor'].includes(t.kind),
-      );
-      const kindName = Object.fromEntries(KINDS);
+      // Where its parts come from and go: the links drawn, each with what
+      // carries along it — clicked, that piece selected. Links are made
+      // with the arrows in the 3D view.
+      const via = (from, to) => {
+        const k = this.carrierOf(from, to);
+        return k.by ? ` <span class="muted">(${escapeHtml(this.carrierText(k.by, k.robot))})</span>` : '';
+      };
+      const chip = (o, from, to) => `<button class="text-btn" data-select="${escapeHtml(o)}" title="${escapeHtml(this.nameOf(o))} 선택">${escapeHtml(this.nameOf(o))}${via(from, to)}</button>`;
+      const ins = this.insOf(c.object);
+      const outs = this.outsOf(c.object);
       const nexts =
-        c.kind === 'sink'
-          ? ''
-          : targets.length
-            ? `<span class="muted">다음 공정</span>${targets
-                .map(
-                  (t) =>
-                    `<button class="text-btn${f.next.includes(t.object) ? ' on' : ''}" data-flow-next="${escapeHtml(t.object)}" aria-pressed="${f.next.includes(t.object)}" title="${escapeHtml(kindName[t.kind] ?? t.kind)}">${f.next.includes(t.object) ? '✓ ' : ''}${escapeHtml(t.name)}</button>`,
-                )
-                .join('')}`
-            : '<span class="muted">다음 공정으로 보낼 공정·버퍼·배출 역할이 없습니다</span>';
+        (c.kind === 'source' ? '' : `<div class="flow-links"><span class="muted">이전 공정</span>${ins.length ? ins.map((o) => chip(o, o, c.object)).join('') : '<span class="muted">없음</span>'}</div>`) +
+        (c.kind === 'sink' ? '' : `<div class="flow-links"><span class="muted">이후 공정</span>${outs.length ? outs.map((o) => chip(o, c.object, o)).join('') : '<span class="muted">없음</span>'}</div>`);
       const state =
         c.kind === 'sink'
           ? `배출 ${f.made}개`
@@ -497,7 +510,7 @@ export class CellPanel {
             ? `${f.unreachable ? `⚠ 로봇이 닿지 않아 이 장비로는 보내지 않습니다 (${escapeHtml(f.unreachable)}) · ` : ''}${f.down ? '고장 · 수리 중' : f.maint ? '보전 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 장비 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}개 · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
             : c.kind === 'conveyor'
               ? `끝에서 기다림 ${f.out}`
-              : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue}`;
+              : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue + (f.waiting ?? 0)}${f.waiting ? ` (운반 대기 ${f.waiting})` : ''}`;
       // Products: as many as any source mixes.
       const last = (m) => (m ?? []).reduce((k, w, i) => (w > 0 ? i + 1 : k), 0);
       const used = Math.max(1, ...this.cell.components.map((s) => last(s.flow?.mix)));
@@ -538,16 +551,9 @@ export class CellPanel {
           })
           .join('');
       }
-      // A beginner's: where it sends and how it is doing; the rest on
-      // the way up.
-      const link =
-        (c.kind === 'sink' ? '' : '<button class="text-btn" data-link-pick title="3D 화면에서 다음 설비들을 차례로 눌러 잇습니다">＋ 화면에서 잇기</button>') +
-        '<span class="muted insp-hint">오른쪽 클릭: 연결 메뉴 · 연결 모드에서 ➔ 손잡이를 끌어 잇기</span>';
       actions =
-        link +
-        (getLevel() >= 2
-          ? `${nexts}<span class="muted">${state}</span>${host}${products}${routes}`
-          : `${nexts}<span class="muted">${state}</span><span class="muted level-hint">시간 분포·고장·불량·제품·반송은 <b>중급</b>에서 정합니다</span>`);
+        `${nexts}<span class="muted">${state}</span>${host}${products}${routes}` +
+        '<span class="muted insp-hint">잇기·끊기: 연결 모드(Shift+C)에서 설비를 끌어 다른 설비에 놓기 · 화살촉을 끌어 옮기기(빈 곳: 끊기) · ⑂분기/⑃합류 표시를 눌러 방식 정하기</span>';
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};
       const at = a.out >= 1 ? '전진 끝' : a.out <= 0 ? '후진 끝' : a.extending ? '전진 중' : '후진 중';
@@ -775,7 +781,8 @@ export class CellPanel {
   // How parts go along `link`, set: { by, robot }.
   setCarrier(link, by, robot = null) {
     const said = `${this.nameOf(link.from)} → ${this.nameOf(link.to)}`;
-    const what = by === 3 ? `로봇 ${robot ? this.robotName(robot) : '(닿는 로봇 자동)'}` : CARRIER_NAMES[by] || '직접 (운반 없음)';
+    const what =
+      by === 3 ? `로봇 ${robot ? this.robotName(robot) : '(닿는 로봇 자동)'}` : by === 1 && robot ? this.amrName(robot) : CARRIER_NAMES[by] || '직접 (운반 없음)';
     this.send({ op: 'flow_carrier', object: link.from, to: link.to, by, robot }, () => this.ctx.toast(`${said}: ${what}`));
   }
 
@@ -835,6 +842,34 @@ export class CellPanel {
     return (this.ctx.robots?.() ?? []).some((r) => r.root === object);
   }
 
+  // Whether `object` is an AMR.
+  isAmr(object) {
+    return this.componentOf(object)?.kind === 'amr';
+  }
+
+  // Whether `object` is drawn as a place in the flow that parts pass
+  // through, not stop at: a robot, or an AMR.
+  isHub(object) {
+    return this.isRobot(object) || this.isAmr(object);
+  }
+
+  // The robot or AMR among `uids` (and `root`), if one is.
+  hubOf(uids, root = null) {
+    return this.ctx.robotOf?.(uids) ?? this.amrOf(uids, root);
+  }
+
+  // A robot's or an AMR's name, said as such.
+  hubName(object) {
+    return this.isAmr(object) ? this.amrName(object) : `로봇 ${this.robotName(object)}`;
+  }
+
+  // Over a robot or an AMR, where its arrows meet: [x, y, z], or null.
+  hubTop(object) {
+    if (!this.isAmr(object)) return this.ctx.robotTop?.(object) ?? null;
+    const box = this.ctx.bounds?.(object);
+    return box && !box.isEmpty() ? [(box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.max.z + 0.1] : null;
+  }
+
   // The robots drawn as places in the flow: [{ robot, ins, outs }].
   hubs() {
     return this.cell.hubs ?? [];
@@ -843,22 +878,23 @@ export class CellPanel {
   // Piece `from` sends robot `robot` its parts; or (`to`) the robot puts
   // parts into it. `remove` takes that away.
   hubLink(robot, { from = null, to = null, remove = false }, then = null) {
-    const said = from != null ? `${this.nameOf(from)} → 로봇 ${this.robotName(robot)}` : `로봇 ${this.robotName(robot)} → ${this.nameOf(to)}`;
+    const said = from != null ? `${this.nameOf(from)} → ${this.hubName(robot)}` : `${this.hubName(robot)} → ${this.nameOf(to)}`;
     this.send({ op: 'hub_link', robot, from: from ?? undefined, to: to ?? undefined, remove }, () => {
       this.ctx.toast(remove ? `연결을 끊었습니다: ${said}` : `이었습니다: ${said}`);
       then?.();
     });
   }
 
-  startLinking(from = null) {
-    this.link = { from: from && this.sends(from) ? from : null };
+  startLinking() {
+    this.link = { from: null };
     this.onLinking?.(true);
     this.drawMarkers();
-    this.ctx.toast(this.link.from ? '다음 공정이 될 설비를 차례로 누르거나, 끌어다 놓으세요 (Esc: 끝)' : '공급부터 배출까지 설비를 차례로 누르거나, 한 설비에서 다음 설비로 끌어다 놓으세요 (Esc: 끝)');
+    this.ctx.toast('연결 모드: 설비를 눌러 다음 설비로 끌어 놓으세요 (Shift+C·Esc: 끝)');
   }
 
   stopLinking() {
     this.link = null;
+    this.showPort(null);
     this.onLinking?.(false);
     this.drawMarkers();
   }
@@ -866,7 +902,7 @@ export class CellPanel {
   // Whether a part can go on from component `object` — or a robot, which
   // puts the parts it takes somewhere.
   sends(object) {
-    return ['source', 'station', 'buffer', 'conveyor'].includes(this.componentOf(object)?.kind) || this.isRobot(object);
+    return ['source', 'station', 'buffer', 'conveyor'].includes(this.componentOf(object)?.kind) || this.isHub(object);
   }
 
   // A click while linking, on object `uids` (it and those above it; `root`
@@ -876,27 +912,31 @@ export class CellPanel {
   // the source if it is the first, else a station. Returns the one clicked,
   // to select.
   linkTo(uids, root = null) {
-    // A robot: the piece before sends it its parts; and the robot is
-    // where the next link starts.
-    const robot = this.ctx.robotOf?.(uids);
+    // A robot or an AMR: the piece before sends it its parts — a sink
+    // doing so becomes a buffer —; and it is where the next link starts.
+    const robot = this.hubOf(uids, root);
     if (robot != null) {
       const from = this.link?.from;
-      if (from != null && from !== robot && !this.isRobot(from)) this.hubLink(robot, { from });
-      else this.ctx.toast(`로봇 ${this.robotName(robot)}에서 시작 · 로봇이 부품을 넣을 설비를 누르세요`);
+      if (from != null && from !== robot && !this.isHub(from)) {
+        if (this.componentOf(from)?.kind === 'sink') this.joinAs(from, 'buffer', () => this.hubLink(robot, { from }));
+        else this.hubLink(robot, { from });
+      } else if (from != null && ((this.isAmr(from) && this.isRobot(robot)) || (this.isRobot(from) && this.isAmr(robot)))) {
+        this.hubLink(from, { to: robot });
+      } else this.ctx.toast(`${this.hubName(robot)}에서 시작 · 부품을 내려놓을 설비를 누르세요`);
       if (this.link?.once) this.link = null;
-      else if (this.link) this.link.from = robot;
+      else if (this.link) this.link.from = null;
       this.drawMarkers();
       return null;
     }
     const piece = this.pieceOf(uids, root);
     if (piece?.c?.flow) return this.linkOn(piece.c.object, piece.c.kind, piece.c.name);
     if (!piece || piece.structure) {
-      this.ctx.toast('설비를 누르세요 (공정 흐름에 넣을 수 있는 것)');
+      this.ctx.toast(piece?.why ?? '설비를 누르세요 (공정 흐름에 넣을 수 있는 것)');
       return null;
     }
     const object = piece.object;
     const machine = piece.c && ['cnc', 'molder'].includes(piece.c.kind) ? piece.c : null;
-    if (machine && getLevel() >= 3 && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return null;
+    if (machine && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return null;
     const kind = !machine && !this.link.from ? 'source' : 'station';
     const props = machine ? { cycle: machine.props.cycle } : {};
     this.send({ op: 'role', object, kind, props }, () => {
@@ -909,8 +949,8 @@ export class CellPanel {
   // The flow's piece among `uids` (an object and those above it) that
   // sends parts on, if there is one: where a drag to link may start.
   sender(uids) {
-    const robot = this.ctx.robotOf?.(uids);
-    if (robot != null) return { object: robot, kind: 'robot', name: this.robotName(robot) };
+    const robot = this.hubOf(uids);
+    if (robot != null) return { object: robot, kind: this.isAmr(robot) ? 'amr' : 'robot', name: this.hubName(robot) };
     return uids.map((u) => this.componentOf(u)).find((c) => c?.flow && this.sends(c.object)) ?? null;
   }
 
@@ -925,6 +965,8 @@ export class CellPanel {
     else this.link.from = c.object;
     const made = this.linkTo(to, root);
     if (once && this.link?.once) this.link = null;
+    // A drag is one arrow: no line left trailing from where it ended.
+    else if (this.link) this.link.from = null;
     return made;
   }
 
@@ -937,6 +979,11 @@ export class CellPanel {
   // (walls, fences, lights), which never joins the flow. Null for nothing.
   pieceOf(uids, root = null) {
     const cs = uids.map((u) => this.componentOf(u));
+    const carrier = cs.find((c) => c && (NOT_PLACES[c.kind] || c.kind === 'amr'));
+    if (carrier) {
+      const why = NOT_PLACES[carrier.kind] ?? 'AMR은 운반 수단입니다';
+      return { object: carrier.object, c: carrier, name: carrier.name, structure: true, why };
+    }
     const c = cs.find((c) => c?.flow);
     if (c) return { object: c.object, c, name: c.name, structure: false };
     const machine = cs.find((c) => c && ['cnc', 'molder'].includes(c.kind));
@@ -1066,7 +1113,7 @@ export class CellPanel {
   joinAs(object, kind, then = null) {
     const c = this.componentOf(object);
     const machine = c && ['cnc', 'molder'].includes(c.kind) ? c : null;
-    if (machine && getLevel() >= 3 && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return;
+    if (machine && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return;
     const props = machine ? { cycle: machine.props.cycle } : {};
     const name = this.nameOf(object);
     this.send({ op: 'role', object, kind, props }, () => {
@@ -1078,22 +1125,28 @@ export class CellPanel {
   // What letting go of a link from `from` on `uids` (and `root`) would do:
   // { ok, text, object } — `object` the equipment it would land on.
   dropPreview(from, uids, root = null) {
-    const robot = this.ctx.robotOf?.(uids);
+    const robot = uids.length ? this.hubOf(uids, root) : null;
     if (robot != null) {
-      if (robot === from || this.isRobot(from)) return { ok: false, text: '로봇에서 로봇으로는 잇지 않습니다', object: robot };
-      return { ok: true, text: `${this.nameOf(from)} → 로봇 ${this.robotName(robot)} (로봇이 가져감)`, object: robot };
+      // An AMR to a robot: the robot takes the parts off the AMR's top
+      // plate where it stops beside it.
+      if (this.isAmr(from) && this.isRobot(robot)) return { ok: true, text: `${this.hubName(from)} → ${this.hubName(robot)} (로봇이 AMR 위에서 집음)`, object: robot };
+      // A robot to an AMR: the robot puts the parts onto it, called to
+      // stop beside it.
+      if (this.isRobot(from) && this.isAmr(robot)) return { ok: true, text: `${this.hubName(from)} → ${this.hubName(robot)} (로봇이 AMR 위에 놓음)`, object: robot };
+      if (robot === from || this.isHub(from)) return { ok: false, text: '로봇끼리, AMR끼리는 잇지 않습니다', object: robot };
+      const sink = this.componentOf(from)?.kind === 'sink' ? ' · 배출은 버퍼가 됩니다' : '';
+      return { ok: true, text: `${this.nameOf(from)} → ${this.hubName(robot)} (${this.isAmr(robot) ? 'AMR이 실어 감' : '로봇이 가져감'})${sink}`, object: robot };
     }
     const piece = uids.length ? this.pieceOf(uids, root) : null;
     if (!piece) return { ok: false, text: '다음 공정이 될 설비 위에 놓으세요', object: null };
     const { object, c, name } = piece;
-    const fromName = this.isRobot(from) ? `로봇 ${this.robotName(from)}` : this.nameOf(from);
+    const fromName = this.isHub(from) ? this.hubName(from) : this.nameOf(from);
     if (object === from || uids.includes(from)) return { ok: false, text: '같은 설비입니다', object };
-    if (piece.structure) return { ok: false, text: `${name}: 건물·구조물은 공정에 넣을 수 없습니다`, object };
+    if (piece.structure) return { ok: false, text: piece.why ? `${name}: ${piece.why}` : `${name}: 건물·구조물은 공정에 넣을 수 없습니다`, object };
     if (c?.flow) {
       if (c.kind === 'source') return { ok: false, text: `${name}: 소재 공급으로는 보낼 수 없습니다`, object };
-      if (this.isRobot(from)) {
-        if (c.kind === 'source') return { ok: false, text: `${name}: 소재 공급으로는 넣을 수 없습니다`, object };
-        return { ok: true, text: `로봇 ${this.robotName(from)} → ${name} (로봇이 넣음)`, object };
+      if (this.isHub(from)) {
+        return { ok: true, text: `${this.hubName(from)} → ${name} (${this.isAmr(from) ? 'AMR이 내려놓음' : '로봇이 넣음'})`, object };
       }
       if ((this.componentOf(from)?.flow?.next ?? []).includes(object)) return { ok: false, text: `이미 이어져 있습니다: ${fromName} → ${name}`, object };
       return { ok: true, text: `${fromName} → ${name}`, object };
@@ -1105,7 +1158,7 @@ export class CellPanel {
   // it on, linking to it, undoing its links, its role; or null for nothing.
   equipmentMenu(uids, root = null) {
     // A robot: what it carries, not a place in the flow.
-    const robot = this.ctx.robotOf?.(uids);
+    const robot = this.hubOf(uids, root);
     if (robot != null) return this.robotMenu(robot);
     const piece = this.pieceOf(uids, root);
     if (!piece) return null;
@@ -1121,11 +1174,7 @@ export class CellPanel {
         const targets = this.receivers(object).filter((t) => !have.includes(t.object));
         entries.push({
           label: '다음 공정으로 연결',
-          sub: [
-            ...targets.map((t) => ({ label: t.name, hint: hint(t), run: () => this.linkDirect(object, t.object) })),
-            ...(targets.length ? [{ sep: true }] : []),
-            { label: '화면에서 끌어 잇기…', hint: '다음 설비를 누르면 이어짐', run: () => this.startLinking(object) },
-          ],
+          sub: targets.map((t) => ({ label: t.name, hint: hint(t), run: () => this.linkDirect(object, t.object) })),
         });
       }
       if (c.kind !== 'source') {
@@ -1180,14 +1229,14 @@ export class CellPanel {
   // The menu for a right click on robot `robot`: the pieces it takes parts
   // from and puts them into, in the flow's picture.
   robotMenu(robot) {
-    const name = this.robotName(robot);
+    const name = this.hubName(robot);
     const hub = this.hubs().find((h) => h.robot === robot) ?? { ins: [], outs: [] };
     const pieces = this.cell.components.filter((c) => c.flow);
     const label = (c) => this.nameOf(c.object);
     return [
-      { title: `로봇 ${name}` },
+      { title: name },
       {
-        label: '가져올 곳 (설비 → 로봇)',
+        label: '가져올 곳 (설비 → 여기)',
         sub: pieces
           .filter((c) => c.kind !== 'sink')
           .map((c) => ({
@@ -1197,7 +1246,7 @@ export class CellPanel {
           })),
       },
       {
-        label: '넣을 곳 (로봇 → 설비)',
+        label: '내려놓을 곳 (여기 → 설비)',
         sub: pieces
           .filter((c) => c.kind !== 'source')
           .map((c) => ({
@@ -1205,16 +1254,6 @@ export class CellPanel {
             checked: hub.outs.includes(c.object),
             run: () => this.hubLink(robot, { to: c.object, remove: hub.outs.includes(c.object) }),
           })),
-      },
-      {
-        label: '여기서 화면에서 잇기…',
-        hint: '로봇이 넣을 설비를 누름',
-        run: () => {
-          this.startLinking();
-          this.link.from = robot;
-          this.drawMarkers();
-          this.ctx.toast(`로봇 ${name}에서 시작 · 로봇이 부품을 넣을 설비를 누르세요`);
-        },
       },
       { sep: true },
       { label: '선택', run: () => this.ctx.select?.(robot) },
@@ -1226,13 +1265,13 @@ export class CellPanel {
   linkMenu(link) {
     // An arrow to or from a robot in the picture.
     if (link.hub != null) {
-      const a = this.isRobot(link.from) ? `로봇 ${this.robotName(link.from)}` : this.nameOf(link.from);
-      const b = this.isRobot(link.to) ? `로봇 ${this.robotName(link.to)}` : this.nameOf(link.to);
+      const a = this.isHub(link.from) ? this.hubName(link.from) : this.nameOf(link.from);
+      const b = this.isHub(link.to) ? this.hubName(link.to) : this.nameOf(link.to);
       return [
         { title: `${a} → ${b}` },
         { label: '연결 끊기', hint: 'Delete', danger: true, run: () => this.cutHub(link) },
         { sep: true },
-        { label: `로봇 ${this.robotName(link.hub)} 메뉴…`, sub: this.robotMenu(link.hub).slice(1) },
+        { label: `${this.hubName(link.hub)} 메뉴…`, sub: this.robotMenu(link.hub).slice(1) },
       ];
     }
     const a = this.nameOf(link.from);
@@ -1245,7 +1284,10 @@ export class CellPanel {
     const robots = this.ctx.robots?.() ?? [];
     const carry = [
       { label: '직접 (운반 없음)', checked: k.by === 0, run: () => this.setCarrier(link, 0) },
-      { label: 'AMR', checked: k.by === 1, run: () => this.setCarrier(link, 1) },
+      { label: 'AMR (빈 AMR 자동)', checked: k.by === 1 && !k.robot, run: () => this.setCarrier(link, 1) },
+      ...this.cell.components
+        .filter((c) => c.kind === 'amr')
+        .map((a) => ({ label: `${this.amrName(a.object)}이 나름`, checked: k.by === 1 && k.robot === a.object, run: () => this.setCarrier(link, 1, a.object) })),
       { label: '작업자', checked: k.by === 2, run: () => this.setCarrier(link, 2) },
       { sep: true },
       { label: '로봇 (닿는 로봇 자동)', checked: k.by === 3 && !k.robot, run: () => this.setCarrier(link, 3) },
@@ -1262,7 +1304,7 @@ export class CellPanel {
     ];
     return [
       { title: `${a} → ${b}` },
-      { label: '운반', hint: k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : CARRIER_NAMES[k.by] || '직접', sub: carry },
+      { label: '운반', hint: k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : k.by === 1 && k.robot ? this.amrName(k.robot) : CARRIER_NAMES[k.by] || '직접', sub: carry },
       ...(k.reach ? [{ label: `⚠ ${k.reach}`, disabled: true }] : []),
       { label: '연결 끊기', hint: 'Delete', danger: true, run: () => this.unlink(link.from, link.to) },
       { label: '방향 뒤집기', hint: `${b} → ${a}`, run: () => this.reverseLink(link) },
@@ -1276,11 +1318,258 @@ export class CellPanel {
     ];
   }
 
+  // ---- AMR stops and lanes ------------------------------------------------
+
+  // Whether `object` is an AMR stop.
+  isStop(object) {
+    return this.componentOf(object)?.kind === 'amr_stop';
+  }
+
+  // The AMR stop among `uids` (an object and those above it), if one is.
+  stopOfUids(uids) {
+    return uids.map((u) => this.componentOf(u)).find((c) => c?.kind === 'amr_stop')?.object ?? null;
+  }
+
+  // A stop's number, as its name ends: P1, P2 — else its place in the list.
+  stopNumber(object) {
+    const n = this.nameOf(object).match(/(\d+)\s*$/)?.[1];
+    if (n) return `P${n}`;
+    const all = this.cell.components.filter((c) => c.kind === 'amr_stop');
+    return `P${all.findIndex((c) => c.object === object) + 1}`;
+  }
+
+  // The lane between stops `a` and `b`: both ways, `a` to `b` (to), `b` to
+  // `a` (from), or none.
+  setLane(a, b, way) {
+    const [p, q] = [this.stopNumber(a), this.stopNumber(b)];
+    const said = { both: `${p} ↔ ${q} 양방향`, to: `${p} → ${q} 한 방향`, from: `${q} → ${p} 한 방향`, none: `${p} – ${q} 길을 끊었습니다` }[way];
+    this.send({ op: 'amr_lane', from: a, to: b, way }, () => this.ctx.toast(`AMR 길: ${said}`));
+  }
+
+  // A lane dragged from stop `a` onto stop `b`: one way, `a` to `b`; the
+  // other way there already, both ways.
+  dragLane(a, b) {
+    if (a === b) return;
+    const back = (this.componentOf(b)?.lanes ?? []).includes(a);
+    this.setLane(a, b, back ? 'both' : 'to');
+    if (!back) this.ctx.toast(`AMR 길: ${this.stopNumber(a)} → ${this.stopNumber(b)} 한 방향 · 반대로도 끌거나 길을 오른쪽 클릭하면 양방향`);
+  }
+
+  // The menu for a right click on a lane.
+  laneMenu({ a, b }) {
+    const [p, q] = [this.stopNumber(a), this.stopNumber(b)];
+    const ab = (this.componentOf(a)?.lanes ?? []).includes(b);
+    const ba = (this.componentOf(b)?.lanes ?? []).includes(a);
+    return [
+      { title: `AMR 길 ${p} – ${q}` },
+      { label: '양방향', hint: `${p} ↔ ${q}`, checked: ab && ba, run: () => this.setLane(a, b, 'both') },
+      { label: `${p} → ${q} 한 방향`, checked: ab && !ba, run: () => this.setLane(a, b, 'to') },
+      { label: `${q} → ${p} 한 방향`, checked: ba && !ab, run: () => this.setLane(a, b, 'from') },
+      { sep: true },
+      { label: '길 끊기', hint: 'Delete', danger: true, run: () => this.setLane(a, b, 'none') },
+    ];
+  }
+
+  // The lane chosen, to undo with Delete; or none.
+  chooseLane(lane) {
+    this.chosenLane = lane;
+    this.drawMarkers();
+    if (lane) this.ctx.toast(`AMR 길 ${this.stopNumber(lane.a)} – ${this.stopNumber(lane.b)} · Delete: 끊기 · 오른쪽 클릭: 방향`);
+  }
+
+  // ---- Splits and merges --------------------------------------------------
+
+  // Where `object`'s parts go: the links drawn and those a robot carries.
+  outsOf(object) {
+    const f = this.componentOf(object)?.flow;
+    return [...(f?.next ?? []), ...(f?.derived ?? [])];
+  }
+
+  // The pieces whose links go into `object`.
+  insOf(object) {
+    return this.cell.components.filter((c) => c.flow && c.object !== object && this.outsOf(c.object).includes(object)).map((c) => c.object);
+  }
+
+  // Link `from` → `to`'s share of `from`'s parts, 0 to 1, where `from`
+  // splits them by share; else null.
+  shareOf(from, to) {
+    const c = this.componentOf(from);
+    if (c?.props?.rule !== 3) return null;
+    const outs = this.outsOf(from);
+    if (outs.length < 2) return null;
+    const w = (t) => c.flow?.shares?.[t] ?? 1;
+    const sum = outs.reduce((a, t) => a + w(t), 0);
+    return sum > 0 ? w(to) / sum : 0;
+  }
+
+  // Some of `object`'s settings changed, keeping its role; `said` once done.
+  setProps(object, props, said) {
+    const c = this.componentOf(object);
+    if (!c) return;
+    this.send({ op: 'role', object, kind: c.kind, props }, () => said && this.ctx.toast(said));
+  }
+
+  // The shares of `object`'s links asked for, as 7:3, in the order the
+  // menu lists them.
+  askShares(object) {
+    const outs = this.outsOf(object);
+    const c = this.componentOf(object);
+    const now = outs.map((t) => +(c.flow?.shares?.[t] ?? 1).toFixed(2)).join(':');
+    const names = outs.map((t, i) => `${i + 1}. ${this.nameOf(t)}`).join('\n');
+    const text = prompt(`${this.nameOf(object)}에서 갈라지는 비율 (예: 7:3)\n${names}`, now);
+    if (text == null) return;
+    const ws = text.split(/[:,\s/]+/).filter(Boolean).map(Number);
+    if (ws.length !== outs.length || ws.some((v) => !Number.isFinite(v) || v < 0) || !ws.some((v) => v > 0)) {
+      return this.ctx.toast(`갈래 ${outs.length}개의 비율을 ${outs.map(() => 'n').join(':')} 꼴로 넣으세요`);
+    }
+    const send = (k) => {
+      if (k === outs.length) {
+        if (c.props.rule !== 3) this.setProps(object, { rule: 3 });
+        return this.ctx.toast(`${this.nameOf(object)}: ${outs.map((t, i) => `${this.nameOf(t)} ${ws[i]}`).join(' : ')}`);
+      }
+      this.send({ op: 'flow_share', object, to: outs[k], share: ws[k] }, () => send(k + 1));
+    };
+    send(0);
+  }
+
+  // The menu for a split's or a merge's sign: how parts are shared out
+  // there, or how the station takes them.
+  badgeMenu({ kind, object }) {
+    const c = this.componentOf(object);
+    if (!c) return [];
+    const name = this.nameOf(object);
+    if (kind === 'split') {
+      const outs = this.outsOf(object);
+      const rule = c.props.rule ?? 0;
+      const entries = [
+        { title: `⑂ ${name}에서 ${outs.length}갈래로 갈라짐` },
+        ...RULES.map(([v, label, hint]) => ({
+          label,
+          hint,
+          checked: rule === v,
+          run: () => (v === 3 ? this.askShares(object) : this.setProps(object, { rule: v }, `${name}: 갈라질 때 ${label}`)),
+        })),
+      ];
+      if (rule === 3) {
+        entries.push(
+          { sep: true },
+          ...outs.map((t) => ({ label: `→ ${this.nameOf(t)}`, hint: `${Math.round(100 * (this.shareOf(object, t) ?? 0))}%`, disabled: true })),
+          { label: '비율 바꾸기…', run: () => this.askShares(object) },
+        );
+      }
+      return entries;
+    }
+    const ins = this.insOf(object);
+    const join = c.props.join ?? 0;
+    return [
+      { title: `⑃ ${ins.length}갈래가 ${name}로 모임` },
+      ...JOINS.map(([v, label, hint]) => ({
+        label,
+        hint: v === 1 ? `경로마다 1개 · ${ins.length}개 → 1개` : hint,
+        checked: join === v,
+        run: () => this.setProps(object, { join: v }, `${name}: ${v === 1 ? `경로마다 1개씩 ${ins.length}개를 하나로 조립` : '먼저 온 부품부터'}`),
+      })),
+      { sep: true },
+      ...ins.map((f) => ({ label: `← ${this.nameOf(f)}`, disabled: true })),
+    ];
+  }
+
+  // ---- Ports: where a link is dragged from ---------------------------------
+
+  // The port over equipment `uids` (and `root`) — a handle to drag a link
+  // from —: { object, at, fresh } — `fresh` for equipment not yet in the
+  // flow, which joins it as the drag ends. Null where no link can start.
+  portOf(uids, root = null) {
+    if (this.ctx.robotOf?.(uids) != null) return null;
+    const amr = this.amrOf(uids, root);
+    if (amr != null) {
+      const at = this.hubTop(amr);
+      return at ? { object: amr, at: [at[0], at[1], at[2] - 0.45], fresh: false } : null;
+    }
+    const piece = this.pieceOf(uids, root);
+    if (!piece || piece.structure) return null;
+    if (piece.c?.flow) {
+      const at = piece.c.flow.at;
+      if (!at) return null;
+      // Parts end at a sink: dragged on from, it becomes a buffer that
+      // sends them on (to an AMR, say).
+      if (piece.c.kind === 'sink') return { object: piece.object, at, fresh: true, kind: 'buffer' };
+      return this.sends(piece.object) ? { object: piece.object, at, fresh: false } : null;
+    }
+    const box = this.ctx.bounds?.(piece.object);
+    if (!box || box.isEmpty()) return null;
+    return { object: piece.object, at: [(box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.max.z - 0.4], fresh: true };
+  }
+
+  // The port shown over the equipment under the pointer, or none.
+  showPort(port) {
+    if ((port?.object ?? null) === (this.port?.object ?? null)) return;
+    this.port = port;
+    if (!this.portDot) {
+      this.portDot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dotTexture(), depthTest: false, transparent: true }));
+      this.portDot.material.sizeAttenuation = false;
+      this.portDot.renderOrder = 11;
+      this.portDot.userData.kept = true;
+      this.portDot.userData.size = 0.022;
+    }
+    this.portDot.removeFromParent();
+    if (!port) return;
+    this.portDot.position.set(port.at[0], port.at[1], port.at[2] + 0.45);
+    this.portDot.scale.set(0.022, 0.022, 1);
+    this.portDot.userData.handle = port.object;
+    this.portDot.userData.fresh = port.fresh;
+    // Over a handle link mode draws already: that one.
+    if (!this.markers.children.some((o) => o.userData.handle === port.object)) this.markers.add(this.portDot);
+  }
+
+  // A drag from equipment `object` not yet in the flow, let go on `to`
+  // (uids, and `root`): it joins the flow — the first supply, else a
+  // station — and is linked on. Returns the equipment let go on.
+  dragFromFresh(object, to, root = null, kind = null) {
+    kind ??= this.cell.components.some((t) => t.kind === 'source') ? 'station' : 'source';
+    this.joinAs(object, kind, () => {
+      // Link mode kept on round it, as a drag from a piece already of the
+      // flow keeps it (see `dragLink`).
+      const mode = this.link;
+      this.link = { from: object, once: true };
+      this.linkTo(to, root);
+      this.link = mode;
+      if (mode) mode.from = null;
+    });
+    return this.pieceOf(to, root)?.object ?? null;
+  }
+
+  // The arrowhead of `link` dragged and let go on `to` (uids, and `root`):
+  // the link goes there instead, keeping how parts go along it and its
+  // share; let go on nothing (`to` empty), the link is undone.
+  rewire(link, to, root = null) {
+    if (!to.length) return this.unlink(link.from, link.to);
+    const piece = this.pieceOf(to, root);
+    if (!piece || piece.object === link.to) return null;
+    const preview = this.dropPreview(link.from, to, root);
+    if (!preview.ok) return this.ctx.toast(preview.text);
+    const k = this.carrierOf(link.from, link.to);
+    const share = this.componentOf(link.from)?.flow?.shares?.[link.to];
+    const go = () => {
+      const have = this.componentOf(link.from)?.flow?.next ?? [];
+      const next = have.map((n) => (n === link.to ? piece.object : n));
+      if (this.chosenLink?.from === link.from && this.chosenLink?.to === link.to) this.chosenLink = null;
+      this.send({ op: 'flow_next', object: link.from, next }, () => {
+        this.ctx.toast(`옮겼습니다: ${this.nameOf(link.from)} → ${this.nameOf(piece.object)} (전: ${this.nameOf(link.to)})`);
+        if (k.by > 0) this.send({ op: 'flow_carrier', object: link.from, to: piece.object, by: k.by, robot: k.robot ?? null });
+        if (share != null) this.send({ op: 'flow_share', object: link.from, to: piece.object, share });
+      });
+    };
+    if (piece.c?.flow) go();
+    else this.joinAs(piece.object, 'station', go);
+    return piece.object;
+  }
+
   // The piece a link is being drawn from in link mode, and where it
   // stands: { object, at } or null.
   linkingFrom() {
     const from = this.link?.from;
-    const at = from == null ? null : this.isRobot(from) ? this.ctx.robotTop?.(from) : this.componentOf(from)?.flow?.at;
+    const at = from == null ? null : this.isHub(from) ? this.hubTop(from) : this.componentOf(from)?.flow?.at;
     return from != null && at ? { object: from, at } : null;
   }
 
@@ -1311,7 +1600,7 @@ export class CellPanel {
       }
       const have = this.componentOf(from)?.flow?.next ?? [];
       const said = `${this.nameOf(from)} → ${name}${tail}`;
-      if (this.isRobot(from)) {
+      if (this.isHub(from)) {
         this.hubLink(from, { to: object });
       } else if (!have.includes(object)) {
         this.send({ op: 'flow_next', object: from, next: [...have, object] }, () => this.ctx.toast(said));
@@ -1326,10 +1615,22 @@ export class CellPanel {
     } else if (!from) {
       this.ctx.toast(`${name}에서 시작 · 다음 설비를 누르세요 (로봇이 나르게 하려면 로봇을 먼저)`);
     }
+    // One arrow a drag: nothing carried on to the next, and link mode
+    // stays on until it is ended.
     if (this.link?.once) this.link = null;
-    else if (done) this.stopLinking();
-    else this.link.from = object;
+    else if (this.link) this.link.from = null;
     return object;
+  }
+
+  // An AMR's name, said as an AMR's once.
+  amrName(object) {
+    const name = this.nameOf(object);
+    return /AMR/i.test(name) ? name : `AMR ${name}`;
+  }
+
+  // The AMR among `uids` (and `root`), if one is.
+  amrOf(uids, root = null) {
+    return [...uids, root].filter((u) => u != null).map((u) => this.componentOf(u)).find((c) => c?.kind === 'amr')?.object ?? null;
   }
 
   // Picking a point on a shape for the selected door's hinge or connector.
@@ -1424,7 +1725,7 @@ export class CellPanel {
     const size = this.signSize(at);
     for (const c of this.cell.components) {
       const f = c.flow;
-      if (!f || !at.has(c.object) || !['station', 'buffer'].includes(c.kind)) continue;
+      if (!f || !at.has(c.object) || !['station', 'buffer', 'sink'].includes(c.kind)) continue;
       const [x, y, z] = at.get(c.object);
       let state = '';
       let text;
@@ -1432,8 +1733,13 @@ export class CellPanel {
         state = f.down ? 'down' : f.maint ? 'maint' : f.working ? 'run' : f.out ? 'blocked' : f.unreachable ? 'unreach' : 'idle';
         const busy = Math.round((f.oee?.busy ?? 0) * 100);
         text = `가동 ${busy}% · 처리 ${f.made ?? 0} · 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}`;
+      } else if (c.kind === 'sink') {
+        // What has arrived: a sink keeps no parts, it counts them.
+        text = `배출 ${f.made ?? 0}개`;
       } else {
-        text = `보관 ${(f.queue ?? 0) + (f.out ?? 0)}${c.props?.capacity ? `/${c.props.capacity}` : ''}`;
+        // On it now: those it holds, and those sent on but still standing
+        // here for a carrier to take.
+        text = `보관 ${(f.queue ?? 0) + (f.out ?? 0) + (f.waiting ?? 0)}${c.props?.capacity ? `/${c.props.capacity}` : ''}`;
       }
       const sign = this.label(text, x, y, z + 0.3 + size * 2.15, `status:${state}`, size);
       this.markers.add(sign);
@@ -1596,6 +1902,9 @@ export class CellPanel {
         linkbad: 'rgba(190, 50, 50, 0.92)',
         robotpick: 'rgba(110, 70, 190, 0.92)',
         robotchosen: 'rgba(170, 90, 255, 0.98)',
+        split: 'rgba(196, 104, 20, 0.94)',
+        stop: 'rgba(170, 118, 10, 0.95)',
+        join: 'rgba(22, 128, 104, 0.94)',
       }[style] ??
       'rgba(20, 24, 30, 0.82)';
     ctx.beginPath();
@@ -1710,6 +2019,50 @@ export class CellPanel {
       if (Math.abs(px - x) < half && Math.abs(py - y) < 12 && (!sign || d < sign.d)) sign = { d, robot: o.userData.robotPick };
     }
     if (sign) return { robot: sign.robot };
+    // An AMR stop's number: the stop, to drag a lane from or onto.
+    for (const o of this.markers.children) {
+      if (o.userData.stopPick == null) continue;
+      const [px, py] = project(o.position);
+      const half = Math.min(40, 10 * (o.scale.x / Math.max(o.scale.y, 1e-6)));
+      if (Math.abs(px - x) < half && Math.abs(py - y) < 12) return { stop: o.userData.stopPick };
+    }
+    // A split's or a merge's sign: over its words.
+    for (const o of this.markers.children) {
+      if (!o.userData.badge) continue;
+      const [px, py] = project(o.position);
+      const half = Math.min(90, 10 * (o.scale.x / Math.max(o.scale.y, 1e-6)));
+      if (Math.abs(px - x) < half && Math.abs(py - y) < 11) return { badge: o.userData.badge };
+    }
+    // An arrow's head, to drag its link elsewhere: within 14 pixels.
+    for (const o of this.markers.children) {
+      const l = o.userData.link;
+      if (!l || l.hub != null || !o.userData.b || o.userData.last === false) continue;
+      const [bx, by] = project(o.userData.b);
+      const d = Math.hypot(bx - x, by - y);
+      if (d < 14 && (!best || d < best.d)) best = { d, tip: l, a: o.userData.a };
+    }
+    if (best) return { tip: best.tip, a: best.a };
+    // An AMR lane: within 8 pixels of its line.
+    let lane = null;
+    for (const o of this.markers.children) {
+      const l = o.userData.lane;
+      if (!l) continue;
+      const [ax, ay] = project(o.userData.p);
+      const [bx, by] = project(o.userData.q);
+      const [dx, dy] = [bx - ax, by - ay];
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / Math.max(dx * dx + dy * dy, 1e-9)));
+      const d = Math.hypot(ax + t * dx - x, ay + t * dy - y);
+      if (d < 8 && (!lane || d < lane.d)) lane = { d, lane: l };
+    }
+    if (lane) return { lane: lane.lane };
+    // A link's number sign: easier to hit than its hairline.
+    for (const o of this.markers.children) {
+      const l = o.userData.link;
+      if (!l || o.userData.a || !o.isSprite) continue;
+      const [px, py] = project(o.position);
+      const half = Math.min(90, 10 * (o.scale.x / Math.max(o.scale.y, 1e-6)));
+      if (Math.abs(px - x) < half && Math.abs(py - y) < 11) return { link: l };
+    }
     for (const o of this.markers.children) {
       const l = o.userData.link;
       if (!l || !o.userData.a) continue;
@@ -1745,6 +2098,12 @@ export class CellPanel {
 
   // The arrow chosen, undone. Whether there was one.
   cutChosenLink() {
+    if (this.chosenLane) {
+      const { a, b } = this.chosenLane;
+      this.chosenLane = null;
+      this.setLane(a, b, 'none');
+      return true;
+    }
     const link = this.chosenLink;
     if (!link) return false;
     if (link.hub != null) {
@@ -1811,7 +2170,16 @@ export class CellPanel {
       for (const leg of entry.legs) uses.set(leg.key, (uses.get(leg.key) ?? 0) + 1);
       drawn.push(entry);
     };
-    const what = (k) => (k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : CARRIER_NAMES[k.by] ?? '');
+    const what = (k) =>
+      k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : k.by === 1 && k.robot ? this.amrName(k.robot) : CARRIER_NAMES[k.by] ?? '';
+    // By AMR: drawn through the AMR that carries it — the one the link
+    // names, or the only one there is —, over its top, where it is now.
+    const amrs = this.cell.components.filter((c) => c.kind === 'amr');
+    const amrTop = (k) => {
+      const amr = k.by === 1 ? (k.robot ?? (amrs.length === 1 ? amrs[0].object : null)) : null;
+      const box = amr != null ? this.ctx.bounds?.(amr) : null;
+      return box && !box.isEmpty() ? new THREE.Vector3((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.max.z + 0.1) : null;
+    };
     for (const c of this.cell.components) {
       for (const n of c.flow?.next ?? []) {
         const a = at.get(c.object);
@@ -1821,13 +2189,17 @@ export class CellPanel {
         const to = new THREE.Vector3(b[0], b[1], b[2] + 0.05);
         if (to.distanceTo(from) < 1e-6) continue;
         const k = this.carrierOf(c.object, n);
-        // By any robot that reaches: straight, its carrier on its sign.
+        const share = this.shareOf(c.object, n);
+        const via = amrTop(k);
+        // By any robot that reaches: straight, its carrier on its sign —
+        // and its share, where the way splits by share. By AMR, into the
+        // AMR and out of it.
         add({
           link: { from: c.object, to: n },
           k,
-          legs: [[from, to]],
+          legs: via ? [[from, via], [via, to]] : [[from, to]],
           num: numbers.get(`${c.object}>${n}`),
-          what: what(k),
+          what: [share != null ? `${Math.round(share * 100)}%` : '', what(k)].filter(Boolean).join(' · '),
           bad: k.reach,
         });
       }
@@ -1835,14 +2207,14 @@ export class CellPanel {
     // A robot in the picture: an arrow from each piece it takes from, one
     // to each piece it puts into — however many links it carries.
     for (const h of this.hubs()) {
-      const top = this.ctx.robotTop?.(h.robot);
+      const top = this.hubTop(h.robot);
       if (!top) continue;
       const r = new THREE.Vector3(top[0], top[1], top[2]);
       // The links it carries, each with its number and its reach.
       const carried = [];
       for (const c of this.cell.components) {
         for (const k of c.flow?.carriers ?? []) {
-          if (k.by === 3 && k.robot === h.robot && (c.flow.derived ?? []).includes(k.to)) carried.push({ from: c.object, to: k.to, num: numbers.get(`${c.object}>${k.to}`), reach: k.reach });
+          if ((k.by === 3 || k.by === 1) && k.robot === h.robot && (c.flow.derived ?? []).includes(k.to)) carried.push({ from: c.object, to: k.to, num: numbers.get(`${c.object}>${k.to}`), reach: k.reach });
         }
       }
       // What the numbers of several links have in common: 3-1 and 3-2, 3.
@@ -1854,26 +2226,31 @@ export class CellPanel {
         return parts[0].slice(0, Math.max(1, k)).join('-');
       };
       for (const a0 of h.ins) {
+        // An AMR handing to this robot, or a robot to this AMR: its arrow
+        // is drawn from the giver's side, below.
+        if (this.isHub(a0)) continue;
         const a = at.get(a0);
         if (!a) continue;
         const mine = carried.filter((l) => l.from === a0);
         const bad = mine.find((l) => l.reach)?.reach;
-        add({ link: { from: a0, to: h.robot, hub: h.robot }, k: { by: 3, robot: h.robot }, legs: [[new THREE.Vector3(a[0], a[1], a[2] + 0.05), r]], num: common(mine.map((l) => l.num)), what: '', bad });
+        add({ link: { from: a0, to: h.robot, hub: h.robot }, k: { by: this.isAmr(h.robot) ? 1 : 3, robot: h.robot }, legs: [[new THREE.Vector3(a[0], a[1], a[2] + 0.05), r]], num: common(mine.map((l) => l.num)), what: '', bad });
       }
       for (const b0 of h.outs) {
-        const b = at.get(b0);
+        // To a piece, or (an AMR's) to the robot it hands to.
+        const b = at.get(b0) ?? this.hubTop(b0);
         if (!b) continue;
         const mine = carried.filter((l) => l.to === b0);
         const bad = mine.find((l) => l.reach)?.reach;
-        add({ link: { from: h.robot, to: b0, hub: h.robot }, k: { by: 3, robot: h.robot }, legs: [[r, new THREE.Vector3(b[0], b[1], b[2] + 0.05)]], num: common(mine.map((l) => l.num)), what: '', bad });
+        add({ link: { from: h.robot, to: b0, hub: h.robot }, k: { by: this.isAmr(h.robot) ? 1 : 3, robot: h.robot }, legs: [[r, new THREE.Vector3(b[0], b[1], b[2] + 0.05)]], num: common(mine.map((l) => l.num)), what: '', bad });
       }
     }
     const taken = new Map();
     for (const { link, k, legs, num, what: by, bad } of drawn) {
       const chosen = this.chosenLink?.from === link.from && this.chosenLink?.to === link.to;
-      const color = chosen ? 0xff8a3d : bad ? 0xff5f5f : CARRIER_COLOURS[k.by] ?? 0x5aa9ff;
+      const fresh = !chosen && this.flash?.has(`${link.from}>${link.to}`);
+      const color = chosen ? 0xff8a3d : fresh ? 0x3fcf8e : bad ? 0xff5f5f : CARRIER_COLOURS[k.by] ?? 0x5aa9ff;
       const placed = [];
-      for (const { p: p0, q: q0, key } of legs) {
+      for (const [leg, { p: p0, q: q0, key }] of legs.entries()) {
         // Kept to the right of the way it goes: a way back along the same
         // leg is seen beside it; a leg two arrows share, the second
         // further out.
@@ -1887,10 +2264,24 @@ export class CellPanel {
         const way = q.clone().sub(p);
         const length = way.length();
         if (length < 1e-6) continue;
-        const arrow = new THREE.ArrowHelper(way.normalize(), p, length, color, Math.min(chosen ? 0.4 : 0.25, length * 0.3), chosen ? 0.2 : 0.12);
+        const bold = chosen || fresh;
+        const arrow = new THREE.ArrowHelper(way.normalize(), p, length, color, Math.min(bold ? 0.4 : 0.25, length * 0.3), bold ? 0.2 : 0.12);
+        // Just made: a thick shaft under it, not a hairline among the signs.
+        if (fresh) {
+          const shaft = new THREE.Mesh(
+            new THREE.CylinderGeometry(size * 0.05, size * 0.05, length, 8),
+            new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.85 }),
+          );
+          shaft.position.copy(p.clone().lerp(q, 0.5));
+          shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), way);
+          shaft.renderOrder = 10;
+          arrows.push(shaft);
+        }
         arrow.userData.link = link;
         arrow.userData.a = p.clone();
         arrow.userData.b = q.clone();
+        // Only the last leg's head is where the link ends.
+        arrow.userData.last = leg === legs.length - 1;
         arrow.traverse((o) => {
           if (o.material) {
             o.material.depthTest = false;
@@ -1915,6 +2306,43 @@ export class CellPanel {
         arrows.push(sign);
       }
     }
+    // Where the way splits, and where ways meet: a sign at the fork, a
+    // little along the links, saying how parts go there — clicked, its
+    // menu.
+    if (this.showArrows) {
+      const toward = (p, others) => {
+        const v = new THREE.Vector3();
+        for (const o of others) v.add(new THREE.Vector3(o[0] - p[0], o[1] - p[1], 0).normalize());
+        if (v.lengthSq() < 1e-6) return new THREE.Vector3(p[0], p[1], p[2]);
+        const reach = Math.min(...others.map((o) => Math.hypot(o[0] - p[0], o[1] - p[1])));
+        v.normalize().multiplyScalar(Math.min(0.35 * reach, 1.5));
+        return new THREE.Vector3(p[0] + v.x, p[1] + v.y, p[2]);
+      };
+      for (const c of this.cell.components) {
+        const p = at.get(c.object);
+        if (!p) continue;
+        const outs = this.outsOf(c.object).map((n) => at.get(n)).filter(Boolean);
+        if (outs.length > 1) {
+          const rule = RULES.find(([v]) => v === (c.props.rule ?? 0))?.[1] ?? '';
+          const q = toward(p, outs);
+          const sign = this.label(`⑂ 분기 · ${rule}`, q.x, q.y, q.z + size * 0.9, 'split', size * 0.8);
+          sign.userData.badge = { kind: 'split', object: c.object };
+          sign.renderOrder = 11;
+          arrows.push(sign);
+        }
+        if (!['station', 'buffer', 'conveyor', 'sink'].includes(c.kind)) continue;
+        const ins = this.insOf(c.object).map((f) => at.get(f)).filter(Boolean);
+        if (ins.length > 1) {
+          const assembles = c.kind === 'station' && c.props.join === 1;
+          const q = toward(p, ins);
+          const text = assembles ? `⑃ 조립 · ${ins.length}→1` : `⑃ 합류${c.kind === 'station' ? ' · 도착 순' : ''}`;
+          const sign = this.label(text, q.x, q.y, q.z + size * 0.9, 'join', size * 0.8);
+          if (c.kind === 'station') sign.userData.badge = { kind: 'join', object: c.object };
+          sign.renderOrder = 11;
+          arrows.push(sign);
+        }
+      }
+    }
     if (this.showArrows) for (const a of arrows) this.markers.add(a);
     // In either link mode, a sign over each robot, seen through whatever
     // stands in front of it — a machine hides the robot that tends it —:
@@ -1930,43 +2358,62 @@ export class CellPanel {
         this.markers.add(sign);
       }
     }
-    // In link mode, a handle over each piece that sends parts on: dragged
-    // onto other equipment, it links the two. Not shown otherwise — the
-    // right-click menu links as well, without them over everything.
-    const linking = this.link != null && !this.link.once;
-    for (const c of linking ? this.cell.components : []) {
-      const a = at.get(c.object);
-      if (!a || !this.sends(c.object)) continue;
-      const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.dotTexture(), depthTest: false, transparent: true }));
-      dot.material.sizeAttenuation = false;
-      const size = this.hovered === c.object ? 0.0286 : 0.022;
-      dot.scale.set(size, size, 1);
-      dot.position.set(a[0], a[1], a[2] + 0.45);
-      dot.renderOrder = 11;
-      dot.userData.handle = c.object;
-      dot.userData.size = 0.022;
-      this.markers.add(dot);
-    }
+    // A link's handle shows over the equipment under the pointer only (see
+    // `showPort`), in link mode too: a dot over every piece hid the arrows
+    // just made under it.
+    // The port over the equipment under the pointer, kept as it was.
+    if (this.port && !this.markers.children.some((o) => o.userData.handle === this.port.object)) this.markers.add(this.portDot);
     this.drawNames(at, this.drawLoads(at));
     this.drawStatus(at);
     this.drawProgress(at);
-    // The AMRs' lanes: a line between each two stops linked.
+    // The AMRs' lanes: a line between each two stops linked both ways, an
+    // arrow where one way only; and each stop's number over it.
     const stops = new Map(this.cell.components.filter((c) => c.stop_at).map((c) => [c.object, c.stop_at]));
-    const lanes = [];
+    const goes = (x, y) => (this.componentOf(x)?.lanes ?? []).includes(y);
+    const seen = new Set();
     for (const c of this.cell.components) {
       for (const n of c.lanes ?? []) {
-        if (c.object > n) continue;
+        const key = [c.object, n].sort().join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
         const a = stops.get(c.object);
         const b = stops.get(n);
-        if (a && b) lanes.push(a[0], a[1], 0.01, b[0], b[1], 0.01);
+        if (!a || !b) continue;
+        const both = goes(n, c.object);
+        const p = new THREE.Vector3(a[0], a[1], 0.02);
+        const q = new THREE.Vector3(b[0], b[1], 0.02);
+        const chosen = this.chosenLane && [this.chosenLane.a, this.chosenLane.b].sort().join('|') === key;
+        const color = chosen ? 0xff8a3d : 0xf2b53c;
+        const way = q.clone().sub(p);
+        const length = way.length();
+        if (length < 1e-6) continue;
+        let shape;
+        if (both) {
+          const geometry = new THREE.BufferGeometry().setFromPoints([p, q]);
+          shape = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false }));
+        } else {
+          const head = Math.min(0.5, length * 0.25);
+          shape = new THREE.ArrowHelper(way.clone().normalize(), p, length, color, head, head * 0.5);
+          shape.traverse((o) => {
+            if (o.material) {
+              o.material.depthTest = false;
+              o.material.transparent = true;
+              o.material.opacity = 0.9;
+            }
+          });
+        }
+        shape.traverse((o) => (o.renderOrder = 8));
+        shape.userData.lane = { a: c.object, b: n, both };
+        shape.userData.p = p;
+        shape.userData.q = q;
+        this.markers.add(shape);
       }
     }
-    if (lanes.length) {
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(lanes, 3));
-      const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0xf2b53c, transparent: true, opacity: 0.9, depthTest: false }));
-      lines.renderOrder = 8;
-      this.markers.add(lines);
+    for (const [object, at] of stops) {
+      const sign = this.label(this.stopNumber(object), at[0], at[1], 0.35, 'stop', 0.3);
+      sign.userData.stopPick = object;
+      sign.renderOrder = 12;
+      this.markers.add(sign);
     }
     // Each sensor's beam: red while a part breaks it.
     for (const c of this.cell.components) {

@@ -201,7 +201,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .toolbar button svg { width: 17px; height: 17px; }
 .toolbar button:hover { background: var(--panel-2); color: var(--text); }
 .toolbar button.on { color: var(--accent); background: var(--accent-soft); }
-.toolbar button[data-action="record"] { display: inline-flex; gap: 4px; }
+.toolbar button.menu-btn { display: inline-flex; align-items: center; gap: 4px; width: auto; padding: 0 8px; font-size: 12px; }
 .toolbar .rec-dot { fill: currentColor; stroke: none; }
 .toolbar button.recording { color: #ff5a5a; background: rgba(255, 90, 90, 0.14); }
 .toolbar .rec-time { font: 11px var(--mono); }
@@ -1048,7 +1048,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .st-top td { color: var(--text); font-weight: 600; }
 .st-tag { font-size: 10px; color: #ff8a3d; border: 1px solid #ff8a3d; border-radius: 3px; padding: 0 4px; margin-left: 4px; }
 
-.flow-products, .flow-route { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; width: 100%; margin-top: 4px; }
+.flow-products, .flow-route, .flow-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; width: 100%; margin-top: 4px; }
 .flow-products label { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: var(--muted); }
 .flow-products input { width: 46px; }
 .flow-num { width: 48px; margin: 0 3px; }
@@ -1062,11 +1062,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .floor-fields label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .floor-fields input { width: 72px; }
 
-/* The level: what the page shows, from a beginner's to everything. */
-body[data-level="1"] [data-min="2"],
-body[data-level="1"] [data-min="3"],
-body[data-level="2"] [data-min="3"] { display: none !important; }
-.level-hint { display: block; margin-top: 4px; font-size: 11px; }
 
 /* A sample's level, in the project panel. */
 
@@ -1080,23 +1075,6 @@ body[data-level="2"] [data-min="3"] { display: none !important; }
 .modal-actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 /* The process flow as a chart. */
-.fc-view { overflow: auto; padding: 4px 8px 12px; }
-.fc-hint { margin: 2px 0 6px; font-size: 11px; }
-.fc-svg { display: block; user-select: none; }
-.fc-node rect:first-of-type { fill: var(--panel-2); stroke: var(--kind); stroke-width: 1.2; cursor: pointer; }
-.fc-node:hover rect:first-of-type, .fc-node.target rect:first-of-type { stroke-width: 2.5; fill: var(--panel); }
-.fc-name { fill: var(--text); font-size: 12px; font-weight: 600; pointer-events: none; }
-.fc-kind { fill: var(--muted, #9aa3ad); font-size: 10.5px; pointer-events: none; }
-.fc-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; cursor: crosshair; }
-.fc-dot:hover { r: 9; }
-.fc-line, .fc-drag { fill: none; stroke: #5aa9ff; stroke-width: 1.8; }
-.fc-drag { stroke-dasharray: 5 4; pointer-events: none; }
-.fc-head { fill: #5aa9ff; }
-.fc-hit { fill: none; stroke: transparent; stroke-width: 14; }
-.fc-cut { opacity: 0; cursor: pointer; transition: opacity 0.12s; }
-.fc-cut circle { fill: var(--panel); stroke: #ff6b6b; stroke-width: 1.5; }
-.fc-cut path { stroke: #ff6b6b; stroke-width: 1.6; }
-.fc-edge:hover .fc-cut { opacity: 1; }
 
 /* The right-click menu: a column of entries, a second beside it for a
    submenu. */

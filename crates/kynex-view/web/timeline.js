@@ -9,7 +9,6 @@
 
 import { costCards, csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, sweepChart, throughputChart } from './stats.js';
 import { FIELDS } from './cell.js';
-import { FlowChart } from './flowchart.js';
 
 // Hands `text` to the browser as a file called `name`.
 function download(name, text, type) {
@@ -76,14 +75,6 @@ export class TimelinePanel {
     this.data = null;
     this.scenarios = { list: [], compared: [], comparing: false };
     this.tab = 'timeline';
-    this.chart = new FlowChart(document.getElementById('tl-view-flowchart'), {
-      escapeHtml: ctx.escapeHtml,
-      toast: ctx.toast,
-      select: (uid) => ctx.select?.(uid),
-      showMenu: ctx.showMenu,
-      equipmentMenu: ctx.equipmentMenu,
-      linkMenu: ctx.linkMenu,
-    });
     document.getElementById('tl-close').addEventListener('click', () => this.ctx.toggle(false));
     for (const b of this.box.querySelectorAll('[data-tl-tab]')) {
       b.addEventListener('click', () => this.showTab(b.dataset.tlTab));
@@ -156,22 +147,9 @@ export class TimelinePanel {
         reps: Number(document.getElementById('sc-reps').value),
       });
     });
-    // The process flow: run, stop, reset.
+    // The process flow as it stands: run, stopped and reset by the run
+    // badge over the view and the toolbar's 처음으로, not here.
     this.flowState = null;
-    document.getElementById('flow-run').addEventListener('click', () =>
-      this.flowOp(this.flowState?.on ? 'stop' : 'start'),
-    );
-    document.getElementById('flow-reset').addEventListener('click', () => this.flowOp('reset'));
-    // How fast the factory runs: the simulation's clock, shared with the
-    // robots' programs.
-    document.getElementById('flow-speed').addEventListener('change', async (e) => {
-      try {
-        const answer = await post({ op: 'speed', speed: Number(e.target.value) });
-        if (!answer.ok) this.ctx.toast(answer.error || '배속을 바꾸지 못했습니다');
-      } catch (err) {
-        this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
-      }
-    });
     // The flow's settings, all of them each time: the calendar and the
     // cost's figures.
     for (const id of ['flow-work', 'flow-rest', 'flow-warmup', 'cost-hours', 'cost-years', 'cost-margin']) {
@@ -206,7 +184,6 @@ export class TimelinePanel {
     document.getElementById('tl-view-timeline').hidden = tab !== 'timeline';
     document.getElementById('tl-view-scenarios').hidden = tab !== 'scenarios';
     document.getElementById('tl-view-stats').hidden = tab !== 'stats';
-    document.getElementById('tl-view-flowchart').hidden = tab !== 'flowchart';
     this.render();
   }
 
@@ -220,15 +197,8 @@ export class TimelinePanel {
     }
   }
 
-  // The simulation's clock as KYNEX has it: the speed shown, unless it is
-  // being chosen.
-  setClock(clock) {
-    const speed = document.getElementById('flow-speed');
-    if (!clock || document.activeElement === speed) return;
-    const v = String(clock.speed);
-    if (![...speed.options].some((o) => o.value === v)) speed.add(new Option(`${v}배속`, v));
-    speed.value = v;
-  }
+  // The simulation's clock: its speed is shown on the run badge.
+  setClock() {}
 
   // The `scenarios` event.
   setScenarios(data) {
@@ -372,10 +342,8 @@ export class TimelinePanel {
     const f = cell.flow;
     this.flowState = f;
     this.components = cell.components ?? [];
-    if (this.tab === 'flowchart' && !this.box.hidden) this.chart.render(this.components);
     document.getElementById('flow-bar').hidden = !any;
     if (!any || !f) return;
-    document.getElementById('flow-run').textContent = f.on ? '■ 정지' : '▶ 실행';
     const lead = f.lead_mean != null ? ` · 리드타임 평균 ${f.lead_mean.toFixed(1)} s (최소 ${f.lead_min.toFixed(1)}, 최대 ${f.lead_max.toFixed(1)})` : '';
     const amr = f.carrying ? ` · 운반 ${f.carrying}건` : '';
     // The calendar's fields, as KYNEX has them, unless being typed in.
@@ -466,7 +434,6 @@ export class TimelinePanel {
   }
 
   render() {
-    if (this.tab === 'flowchart') return this.chart.render(this.components ?? []);
     if (this.tab === 'scenarios') return this.renderScenarios();
     if (this.tab === 'stats') return this.renderStats();
     const { escapeHtml } = this.ctx;

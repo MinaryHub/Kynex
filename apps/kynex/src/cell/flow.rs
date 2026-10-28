@@ -57,6 +57,9 @@ pub struct Station {
     pub made: u64,
     /// The next of its targets to try first.
     pub turn: usize,
+    /// Parts sent along each of its links, by where they go: how far each
+    /// has had its share.
+    pub sent: BTreeMap<u64, u64>,
     /// The operator it has called, who works at it (see `fleet`).
     pub crew: Option<u64>,
     /// A source's wait for its next part, drawn as each comes.
@@ -424,6 +427,12 @@ impl Cell {
             .iter()
             .find(|c| c.object == object && c.kind.flow())
             .ok_or("공정 흐름(공급·공정·버퍼·배출)의 역할이 아닙니다")?;
+        // Links to what is no longer in the cell — equipment deleted — go:
+        // they would refuse every change to this piece's links.
+        let next: Vec<u64> = next
+            .into_iter()
+            .filter(|n| self.components.iter().any(|t| t.object == *n))
+            .collect();
         if c.kind == Kind::Sink && !next.is_empty() {
             return Err("배출에서는 부품이 나가지 않습니다".into());
         }
@@ -438,6 +447,8 @@ impl Cell {
         }
         // A link gone takes its carrier with it.
         self.carriers
+            .retain(|(from, to), _| *from != object || next.contains(to));
+        self.shares
             .retain(|(from, to), _| *from != object || next.contains(to));
         self.flow_next.insert(object, next);
         self.carriers_from_senders();
@@ -615,7 +626,13 @@ impl Cell {
         let layout = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            let cm = |v: DVec3| [(v.x * 100.0).round() as i64, (v.y * 100.0).round() as i64, (v.z * 100.0).round() as i64];
+            let cm = |v: DVec3| {
+                [
+                    (v.x * 100.0).round() as i64,
+                    (v.y * 100.0).round() as i64,
+                    (v.z * 100.0).round() as i64,
+                ]
+            };
             for (o, d) in &docks {
                 (o, cm(d.0)).hash(&mut h);
             }
@@ -668,9 +685,68 @@ impl Cell {
         }
         match (t.props.holds, self.door_station(t.object)) {
             (0, false) => None,
-            (0, true) => Some(t.props.takes.max(1)),
-            (n, _) => Some(n.max(t.props.takes)),
+            (0, true) => Some(self.takes_of(t)),
+            (n, _) => Some(n.max(self.takes_of(t))),
         }
+    }
+
+    /// The flow pieces whose links go into `object`, in order.
+    pub(super) fn inputs(&self, object: u64) -> Vec<u64> {
+        self.flow_next
+            .iter()
+            .filter(|(from, next)| **from != object && next.contains(&object))
+            .map(|(from, _)| *from)
+            .collect()
+    }
+
+    /// How many parts station `t` takes a cycle: one from each link into
+    /// it where it assembles what meets there (`Props::join`).
+    fn takes_of(&self, t: &Component) -> u32 {
+        if t.props.join == 1 {
+            self.inputs(t.object).len().max(1) as u32
+        } else {
+            t.props.takes.max(1)
+        }
+    }
+
+    /// Room at `t` for a part from `from`. A station that assembles one
+    /// part from each link into it keeps room for each link apart: one
+    /// way's parts never fill it while it waits for another's.
+    fn room_from(&self, t: &Component, from: u64, coming: &BTreeMap<u64, u32>) -> u32 {
+        if t.kind != Kind::Station || t.props.join != 1 {
+            return self.room(t, coming);
+        }
+        let n = self.inputs(t.object).len().max(1) as u32;
+        let empty = Station::default();
+        let s = self.stations.get(&t.object).unwrap_or(&empty);
+        let holds = self.holds_of(t);
+        let came = |u: &u64| {
+            self.part_index(*u)
+                .is_some_and(|i| self.parts[i].came == from)
+        };
+        let mut mine = s.queue.iter().filter(|u| came(u)).count();
+        if holds.is_some() {
+            mine += s
+                .working
+                .iter()
+                .flat_map(|(_, p)| p)
+                .filter(|u| came(u))
+                .count();
+            mine += s.out.iter().filter(|u| came(u)).count();
+        }
+        mine += self
+            .parts
+            .iter()
+            .filter(|p| p.came == from)
+            .filter(|p| {
+                matches!(&p.flow, Some(Place::Moving { to, .. } | Place::Waiting { to, .. } | Place::Riding { to, .. }) if *to == t.object)
+            })
+            .count();
+        let each = match holds {
+            Some(h) => (h / n).max(1),
+            None => t.props.capacity.max(1),
+        };
+        each.saturating_sub(mine as u32)
     }
 
     /// Room for more at component `t`: what may still come to it, with
@@ -703,7 +779,11 @@ impl Cell {
                 if machine {
                     return left;
                 }
-                return left.min(t.props.capacity.saturating_sub((s.queue.len() + coming) as u32));
+                return left.min(
+                    t.props
+                        .capacity
+                        .saturating_sub((s.queue.len() + coming) as u32),
+                );
             }
         }
         let held = match t.kind {
@@ -1120,12 +1200,28 @@ impl Cell {
                 s.pm_in = None;
                 s.pm_until = None;
             }
-            let takes = c.props.takes.max(1) as usize;
+            // The parts it would take: the first `takes` waiting; or, as an
+            // assembly of the links into it, the first from each.
+            let taking: Option<Vec<usize>> = if c.props.join == 1 {
+                let came = |u: &u64| self.part_index(*u).map_or(0, |i| self.parts[i].came);
+                let inputs = self.inputs(c.object);
+                let mut at: Vec<usize> = Vec::new();
+                for from in &inputs {
+                    if let Some(k) = s.queue.iter().position(|u| came(u) == *from) {
+                        at.push(k);
+                    }
+                }
+                at.sort_unstable();
+                (!inputs.is_empty() && at.len() == inputs.len()).then_some(at)
+            } else {
+                let takes = c.props.takes.max(1) as usize;
+                (s.queue.len() >= takes).then(|| (0..takes).collect())
+            };
             let ready = s.working.is_none()
                 && s.down_until.is_none()
                 && s.pm_until.is_none()
                 && s.out.is_empty()
-                && s.queue.len() >= takes;
+                && taking.is_some();
             // A station that needs a person works once one is at it: called
             // if none is, waited for while they walk.
             let manned = c.props.crew == 0
@@ -1140,7 +1236,11 @@ impl Cell {
                     }
                 };
             if ready && manned {
-                let parts: Vec<u64> = s.queue.drain(..takes).collect();
+                let at = taking.unwrap_or_default();
+                let parts: Vec<u64> = at.iter().map(|k| s.queue[*k]).collect();
+                for k in at.iter().rev() {
+                    s.queue.remove(*k);
+                }
                 // Its time for this product, and a change-over if it is
                 // another than the last.
                 let product = parts
@@ -1242,9 +1342,30 @@ impl Cell {
                     };
                     let open: Vec<usize> = (0..next.len())
                         .map(|k| (turn + k) % next.len())
-                        .filter(|k| takes(next[*k]) && self.room(next[*k], &coming) > 0)
+                        .filter(|k| {
+                            takes(next[*k]) && self.room_from(next[*k], c.object, &coming) > 0
+                        })
                         .collect();
+                    // By share: the link furthest behind its share, waited
+                    // for while it has no room — the split held to, as a
+                    // fraction of parts that must go that way would be.
+                    let share = |t: u64| self.shares.get(&(c.object, t)).copied().unwrap_or(1.0);
+                    let due = (c.props.rule == 3 && by_recipe.is_none())
+                        .then(|| {
+                            let sent = &self.stations.get(&c.object)?.sent;
+                            (0..next.len())
+                                .filter(|k| takes(next[*k]) && share(next[*k].object) > 0.0)
+                                .min_by(|a, b| {
+                                    let behind = |k: usize| {
+                                        let t = next[k].object;
+                                        (sent.get(&t).copied().unwrap_or(0) as f64 + 1.0) / share(t)
+                                    };
+                                    behind(*a).total_cmp(&behind(*b)).then(a.cmp(b))
+                                })
+                        })
+                        .flatten();
                     let pick = match c.props.rule {
+                        3 if by_recipe.is_none() => due.filter(|k| open.contains(k)),
                         // The one with the fewest waiting and coming.
                         1 => open
                             .iter()
@@ -1269,10 +1390,12 @@ impl Cell {
                 s.out.remove(pick_at);
                 if !by_recipe {
                     s.turn = k + 1;
+                    *s.sent.entry(target.object).or_insert(0) += 1;
                 }
                 let Some(i) = self.part_index(uid) else {
                     continue;
                 };
+                self.parts[i].came = c.object;
                 if by_recipe {
                     self.parts[i].step += 1;
                 }
@@ -1293,8 +1416,15 @@ impl Cell {
                         amr: None,
                         phase: super::fleet::Phase::Waiting,
                         by: carrier.by,
-                        robot: carrier.robot,
+                        // Through an AMR drawn in the picture: the fleet's,
+                        // any AMR free; named on the link, that one.
+                        robot: carrier.robot.filter(|_| {
+                            !(carrier.by == 1 && self.is_derived(c.object, target.object))
+                        }),
                         gripped: false,
+                        handoff: carrier.then,
+                        docked: None,
+                        since: self.last_tick.unwrap_or(0.0),
                     });
                     continue;
                 }
@@ -1406,7 +1536,12 @@ impl Cell {
         let ungripped: Vec<u64> = self
             .jobs
             .iter()
-            .filter(|j| j.by == 3 && j.amr.is_some() && !j.gripped)
+            .filter(|j| {
+                j.by == 3
+                    && j.amr.is_some()
+                    && !j.gripped
+                    && (j.docked.is_none() || j.handoff.is_some())
+            })
             .map(|j| j.part)
             .collect();
         for j in self.jobs.iter().filter(|j| ungripped.contains(&j.part)) {
@@ -1638,6 +1773,10 @@ impl Cell {
                 .or_else(|| Self::dock(doc, c))
                 .map(|d| [d.0.x, d.0.y, d.0.z]),
             "queue": s.queue.len(),
+            // Sent on, but still standing here for an AMR, a person or a
+            // robot to take: on it still, as one looking at it sees.
+            "waiting": self.jobs.iter().filter(|j| j.from == c.object && j.part != 0 && j.amr.is_none() && j.docked.is_none()).count()
+                + self.jobs.iter().filter(|j| j.from == c.object && j.by == 3 && j.amr.is_some() && !j.gripped).count(),
             "out": s.out.len(),
             "working": s.working.is_some(),
             // In it now — waiting, at work and done —, and the most it may
@@ -1683,6 +1822,12 @@ impl Cell {
                 .iter()
                 .filter(|((from, _), _)| *from == c.object)
                 .map(|((_, to), p)| (to.to_string(), json!(p)))
+                .collect::<serde_json::Map<_, _>>(),
+            "shares": self
+                .shares
+                .iter()
+                .filter(|((from, _), _)| *from == c.object)
+                .map(|((_, to), w)| (to.to_string(), json!(w)))
                 .collect::<serde_json::Map<_, _>>(),
             "oee": (c.kind == Kind::Station).then(|| self.oee(c)),
         })
@@ -1762,7 +1907,8 @@ impl Cell {
         let s = self.stations.get(&c.object).cloned().unwrap_or_default();
         let now = self.last_tick.unwrap_or(0.0);
         let planned =
-            (self.flow_stats.from.map_or(0.0, |f| (now - f).max(0.0)) - s.rested - s.maint).max(0.0);
+            (self.flow_stats.from.map_or(0.0, |f| (now - f).max(0.0)) - s.rested - s.maint)
+                .max(0.0);
         let run = (planned - s.down).max(0.0);
         let made = s.good + s.bad;
         let a = if planned > 0.0 { run / planned } else { 0.0 };

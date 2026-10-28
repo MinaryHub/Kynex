@@ -520,9 +520,14 @@ pub struct Props {
     /// A source's limit on its parts in the flow at once — a kanban: none
     /// more until one leaves (0: no limit); and how any flow component
     /// picks among the next with room: in turn (0), the one with the
-    /// fewest waiting (1), or at random (2).
+    /// fewest waiting (1), at random (2), or by each link's share (3,
+    /// see `Cell::shares`).
     pub kanban: u32,
     pub rule: u32,
+    /// How a station where several links meet takes its parts: as they
+    /// come, `takes` at a time (0), or one from each link into it, an
+    /// assembly of the ways that meet there (1).
+    pub join: u32,
     /// An AMR's battery: minutes it drives on a full charge (0: no
     /// battery to mind), and minutes to charge it from empty; a stop's
     /// being a charger (1).
@@ -546,6 +551,9 @@ pub struct Props {
     pub shift_to: f64,
     /// An operator's wage, won an hour.
     pub wage: f64,
+    /// An AMR's wait to fill its load (its 적재량) before it sets out,
+    /// seconds at most from the first part waiting: 0 sets out at once.
+    pub gather: f64,
     /// Process flow: how many parts may wait (a source's and a buffer's,
     /// how many it holds); how many a station takes and makes a cycle.
     pub capacity: u32,
@@ -599,6 +607,7 @@ impl Default for Props {
             policy: 0,
             kanban: 0,
             rule: 0,
+            join: 0,
             battery: 0.0,
             charge: 60.0,
             charger: 0,
@@ -607,6 +616,7 @@ impl Default for Props {
             shift_from: 0.0,
             shift_to: 0.0,
             wage: 0.0,
+            gather: 60.0,
             capacity: 1,
             takes: 1,
             makes: 1,
@@ -747,6 +757,9 @@ impl Props {
         self.scrap = v["scrap"]
             .as_f64()
             .map_or(self.scrap, |x| x.clamp(0.0, 1.0));
+        self.gather = v["gather"]
+            .as_f64()
+            .map_or(self.gather, |x| x.clamp(0.0, 36000.0));
         self.wage = v["wage"]
             .as_f64()
             .map_or(self.wage, |x| x.clamp(0.0, 1.0e8));
@@ -776,7 +789,10 @@ impl Props {
             .map_or(self.kanban, |x| x.clamp(0.0, 100000.0) as u32);
         self.rule = v["rule"]
             .as_f64()
-            .map_or(self.rule, |x| x.round().clamp(0.0, 2.0) as u32);
+            .map_or(self.rule, |x| x.round().clamp(0.0, 3.0) as u32);
+        self.join = v["join"]
+            .as_f64()
+            .map_or(self.join, |x| if x > 0.5 { 1 } else { 0 });
         self.policy = v["policy"]
             .as_f64()
             .map_or(self.policy, |x| if x > 0.5 { 1 } else { 0 });
@@ -827,12 +843,14 @@ impl Props {
             "dispatch": self.dispatch,
             "rail": self.rail,
             "rule": self.rule,
+            "join": self.join,
             "takes": self.takes,
             "makes": self.makes,
             "holds": self.holds,
         });
         // Apart: one map of them all is more than `json!` takes at once.
         v["pm_every"] = json!(self.pm_every);
+        v["gather"] = json!(self.gather);
         v["pm_time"] = json!(self.pm_time);
         v
     }
@@ -845,13 +863,23 @@ impl Props {
 pub struct Carrier {
     pub by: u32,
     pub robot: Option<u64>,
+    /// By AMR (1): the robot that takes the part off the AMR's top plate,
+    /// where the AMR stops beside it, and puts it where it goes — an AMR
+    /// linked to a robot in the flow's picture. By robot (3): the AMR the
+    /// robot puts the part onto, called to stop beside it, which carries
+    /// it on — a robot linked to an AMR.
+    pub then: Option<u64>,
 }
 
 impl Carrier {
     fn of(v: &Value) -> Option<Self> {
         let by = v["by"].as_u64()?.min(3) as u32;
         let robot = v["robot"].as_str().and_then(|s| s.parse().ok());
-        (by > 0).then_some(Self { by, robot: robot.filter(|_| by == 3) })
+        (by > 0).then_some(Self {
+            by,
+            robot: robot.filter(|_| by == 1 || by == 3),
+            then: None,
+        })
     }
 
     fn to_json(self) -> Value {
@@ -887,7 +915,11 @@ impl Hub {
             let to: Vec<u64> = if served.is_empty() {
                 self.outs.clone()
             } else if served.contains(a) {
-                self.outs.iter().copied().filter(|o| !served.contains(o)).collect()
+                self.outs
+                    .iter()
+                    .copied()
+                    .filter(|o| !served.contains(o))
+                    .collect()
             } else {
                 served.clone()
             };
@@ -1015,6 +1047,9 @@ pub struct Part {
     pub order: u32,
     /// The step of its source's recipe it goes to next.
     pub step: u32,
+    /// The flow piece it was last sent on from (0: none yet): which of
+    /// the links into a station it came along.
+    pub came: u64,
     /// What it looks like (see [`LOOKS`]): as the last flow piece that
     /// made it has it.
     pub look: u32,
@@ -1228,6 +1263,9 @@ pub struct Cell {
     orders: BTreeMap<u64, Vec<flow::Order>>,
     cycles: BTreeMap<u64, Vec<f64>>,
     routes: BTreeMap<(u64, u64), Vec<u8>>,
+    /// Each link's share of its sender's parts, where the sender splits
+    /// them by share (`Props::rule` 3): none set is 1.
+    shares: BTreeMap<(u64, u64), f64>,
     flow_cfg: flow::Settings,
     /// Room on each belt of the flow for one more, this step; the tops of
     /// each rack's shelves, lowest first.
@@ -1676,7 +1714,10 @@ impl Cell {
                 self.flow_cfg = flow::Settings::of(&saved["flow_settings"]);
                 continue;
             }
-            if let Some(robot) = saved["robot_hub"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+            if let Some(robot) = saved["robot_hub"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+            {
                 let list = |key: &str| -> Vec<u64> {
                     saved[key]
                         .as_array()
@@ -1685,7 +1726,13 @@ impl Cell {
                         .filter_map(|x| x.as_str().and_then(|s| s.parse().ok()))
                         .collect()
                 };
-                self.hubs.insert(robot, Hub { ins: list("ins"), outs: list("outs") });
+                self.hubs.insert(
+                    robot,
+                    Hub {
+                        ins: list("ins"),
+                        outs: list("outs"),
+                    },
+                );
                 continue;
             }
             let name = saved["name"].as_str().unwrap_or_default();
@@ -1759,6 +1806,13 @@ impl Cell {
                             .filter_map(|x| x.as_u64().map(|x| x as u8))
                             .collect();
                         self.routes.insert((object, to), p);
+                    }
+                }
+                if let Some(shares) = saved["shares"].as_object() {
+                    for (to, w) in shares {
+                        if let (Ok(to), Some(w)) = (to.parse::<u64>(), w.as_f64()) {
+                            self.shares.insert((object, to), w.clamp(0.0, 1.0e6));
+                        }
                     }
                 }
             }
@@ -1835,7 +1889,7 @@ impl Cell {
         let named: Vec<((u64, u64), u64)> = self
             .carriers
             .iter()
-            .filter(|(k, c)| c.by == 3 && !self.derived.contains(k))
+            .filter(|(k, c)| (c.by == 3 || c.by == 1) && !self.derived.contains(k))
             .filter_map(|(k, c)| Some((*k, c.robot?)))
             .collect();
         for ((a, b), robot) in named {
@@ -1881,21 +1935,129 @@ impl Cell {
             .filter(|c| c.kind == Kind::Source)
             .map(|c| c.object)
             .collect();
+        let amrs: std::collections::BTreeSet<u64> = self
+            .components
+            .iter()
+            .filter(|c| c.kind == Kind::Amr)
+            .map(|c| c.object)
+            .collect();
+        let known: std::collections::BTreeSet<u64> =
+            self.components.iter().map(|c| c.object).collect();
+        let robots: std::collections::BTreeSet<u64> = self
+            .hubs
+            .keys()
+            .copied()
+            .filter(|r| !amrs.contains(r))
+            .collect();
         for (robot, hub) in &mut self.hubs {
-            // Gone pieces let go.
-            hub.ins.retain(|p| pieces.contains(p) && !sinks.contains(p));
-            hub.outs.retain(|p| pieces.contains(p) && !sources.contains(p));
+            // Gone pieces let go. An AMR may hand to a robot: the robot
+            // takes from the AMR (see below).
+            let amr = amrs.contains(robot);
+            let other = |p: &u64| {
+                if amr {
+                    robots.contains(p)
+                } else {
+                    amrs.contains(p)
+                }
+            };
+            // Equipment there still but out of the flow for now (another
+            // role) is kept, unworked: given a flow role again, its links
+            // come back.
+            let idle = |p: &u64| !pieces.contains(p) && known.contains(p);
+            hub.ins
+                .retain(|p| (pieces.contains(p) && !sinks.contains(p)) || other(p) || idle(p));
+            hub.outs
+                .retain(|p| (pieces.contains(p) && !sources.contains(p)) || other(p) || idle(p));
+        }
+        let hubs = self.hubs.clone();
+        for (robot, hub) in &hubs {
+            // An AMR handing to a robot: from what the AMR takes from to
+            // where the robot puts what it takes from the AMR, by the AMR
+            // and then the robot.
+            if amrs.contains(robot) {
+                for r in hub.outs.iter().filter(|o| robots.contains(o)) {
+                    let into: Vec<u64> = hubs[r]
+                        .pairs()
+                        .into_iter()
+                        .filter(|(a, b)| a == robot && pieces.contains(b))
+                        .map(|(_, b)| b)
+                        .collect();
+                    for a in hub.ins.iter().filter(|a| pieces.contains(a)) {
+                        for b in into.iter().filter(|b| *b != a) {
+                            let next = self.flow_next.entry(*a).or_default();
+                            if next.contains(b) {
+                                continue;
+                            }
+                            next.push(*b);
+                            self.carriers.insert(
+                                (*a, *b),
+                                Carrier {
+                                    by: 1,
+                                    robot: Some(*robot),
+                                    then: Some(*r),
+                                },
+                            );
+                            self.derived.insert((*a, *b));
+                        }
+                    }
+                }
+            }
+            // A robot handing to an AMR: from where the robot takes what it
+            // puts onto the AMR to where the AMR takes it, by the robot and
+            // then the AMR.
+            if !amrs.contains(robot) {
+                for a in hub.outs.iter().filter(|o| amrs.contains(o)) {
+                    let from: Vec<u64> = hub
+                        .pairs()
+                        .into_iter()
+                        .filter(|(x, b)| b == a && pieces.contains(x))
+                        .map(|(x, _)| x)
+                        .collect();
+                    let Some(ha) = hubs.get(a) else { continue };
+                    let into: Vec<u64> = ha
+                        .pairs()
+                        .into_iter()
+                        .filter(|(x, b)| x == robot && pieces.contains(b))
+                        .map(|(_, b)| b)
+                        .collect();
+                    for x in &from {
+                        for b in into.iter().filter(|b| *b != x) {
+                            let next = self.flow_next.entry(*x).or_default();
+                            if next.contains(b) {
+                                continue;
+                            }
+                            next.push(*b);
+                            self.carriers.insert(
+                                (*x, *b),
+                                Carrier {
+                                    by: 3,
+                                    robot: Some(*robot),
+                                    then: Some(*a),
+                                },
+                            );
+                            self.derived.insert((*x, *b));
+                        }
+                    }
+                }
+            }
             for (a, b) in hub.pairs() {
+                // Between pieces: an AMR or a robot at either end is the
+                // hand-over above.
+                if !pieces.contains(&a) || !pieces.contains(&b) {
+                    continue;
+                }
                 let next = self.flow_next.entry(a).or_default();
                 if next.contains(&b) {
                     continue;
                 }
                 next.push(b);
+                // An AMR in the picture carries as an AMR does: that one.
                 self.carriers.insert(
                     (a, b),
                     Carrier {
-                        by: 3,
+                        by: if amrs.contains(robot) { 1 } else { 3 },
                         robot: Some(*robot),
+                        then: None,
                     },
                 );
                 self.derived.insert((a, b));
@@ -1933,7 +2095,9 @@ impl Cell {
         let id = id_of(doc, object)?;
         let robots = kynex_model::robots(doc);
         for r in &robots {
-            let Some(rid) = id_of(doc, r.root) else { continue };
+            let Some(rid) = id_of(doc, r.root) else {
+                continue;
+            };
             let item_root = doc.object(rid).and_then(|o| o.parent);
             if rid == id || is_below(doc, id, rid) || item_root == Some(id) {
                 return Some(r.root);
@@ -1978,7 +2142,8 @@ impl Cell {
             for next in self.flow_next.values_mut() {
                 next.retain(|n| *n != object);
             }
-            self.carriers.retain(|(a, b), _| *a != object && *b != object);
+            self.carriers
+                .retain(|(a, b), _| *a != object && *b != object);
             // The robot in the picture where the station was.
             let hub = self.hubs.entry(robot).or_default();
             for from in ins.into_iter().filter(|f| *f != object) {
@@ -2086,6 +2251,7 @@ impl Cell {
                 self.carriers.entry((c.object, *to)).or_insert(Carrier {
                     by: c.props.carrier,
                     robot: None,
+                    then: None,
                 });
             }
             c.props.carrier = 0;
@@ -2156,6 +2322,12 @@ impl Cell {
                         .iter()
                         .filter(|((from, _), _)| *from == c.object)
                         .map(|((_, to), p)| (to.to_string(), json!(p)))
+                        .collect::<serde_json::Map<_, _>>(),
+                    "shares": self
+                        .shares
+                        .iter()
+                        .filter(|((from, _), _)| *from == c.object)
+                        .map(|((_, to), w)| (to.to_string(), json!(w)))
                         .collect::<serde_json::Map<_, _>>(),
                 })
             })
@@ -2626,6 +2798,7 @@ impl Cell {
             origin: 0,
             order: 0,
             step: 0,
+            came: 0,
             look: 0,
             rail: None,
         });
@@ -2683,7 +2856,10 @@ impl Cell {
                     }
                 }
                 // A robot carries along the links; it is no place in them.
-                if req["kind"].as_str().and_then(Kind::of).is_some_and(Kind::flow)
+                if req["kind"]
+                    .as_str()
+                    .and_then(Kind::of)
+                    .is_some_and(Kind::flow)
                     && Self::robot_for(doc, object).is_some()
                 {
                     return Err("로봇(과 로봇이 선 받침대)은 공정 흐름에 넣지 않습니다. 로봇이 나르게 하려면 연결 화살표를 오른쪽 클릭해 '운반'에서 로봇을 고르거나, 연결 모드에서 보내는 설비 → 로봇 → 받는 설비를 누르세요".into());
@@ -2719,6 +2895,22 @@ impl Cell {
                             .unwrap_or_default(),
                     });
                 }
+                // No longer of the flow: links into it and out of it go —
+                // the flow would never send along them —; the robots' and
+                // AMRs' links worked out again, either way.
+                if !self
+                    .components
+                    .iter()
+                    .any(|c| c.object == object && c.kind.flow())
+                {
+                    for next in self.flow_next.values_mut() {
+                        next.retain(|n| *n != object);
+                    }
+                    self.flow_next.remove(&object);
+                    self.carriers
+                        .retain(|(a, b), _| *a != object && *b != object);
+                }
+                self.rederive_hubs();
                 self.roles_changed = true;
                 self.changed = true;
                 self.merge_nested_flow_roles(doc);
@@ -2951,6 +3143,11 @@ impl Cell {
                     .collect();
                 self.set_lanes(uid("object")?, next, req["oneway"] == true)?;
             }
+            // One lane between two stops, the others as they are.
+            "amr_lane" => {
+                let (a, b) = (uid("from")?, uid("to")?);
+                self.set_lane(a, b, req["way"].as_str().unwrap_or("both"))?;
+            }
             "flow_products" => {
                 let object = uid("object")?;
                 let floats = |key: &str| -> Vec<f64> {
@@ -2986,6 +3183,22 @@ impl Cell {
                 self.roles_changed = true;
                 self.changed = true;
             }
+            // A link's share of its sender's parts, split by share.
+            "flow_share" => {
+                let object = uid("object")?;
+                let to = uid("to")?;
+                let share = req["share"].as_f64().ok_or("share가 없습니다")?;
+                if !self.flow_next.get(&object).is_some_and(|n| n.contains(&to)) {
+                    return Err("이어지지 않은 연결입니다".into());
+                }
+                if (share - 1.0).abs() < 1e-9 {
+                    self.shares.remove(&(object, to));
+                } else {
+                    self.shares.insert((object, to), share.clamp(0.0, 1.0e6));
+                }
+                self.roles_changed = true;
+                self.changed = true;
+            }
             "flow_orders" => {
                 let object = uid("object")?;
                 let orders = flow::Order::parse(req["csv"].as_str().unwrap_or(""))?;
@@ -3017,7 +3230,8 @@ impl Cell {
                         (from, to),
                         Carrier {
                             by,
-                            robot: robot.filter(|_| by == 3),
+                            robot: robot.filter(|_| by == 1 || by == 3),
+                            then: None,
                         },
                     );
                 }
@@ -3029,12 +3243,58 @@ impl Cell {
             // it puts parts into piece `to`; `remove` takes that away.
             "hub_link" => {
                 let robot = uid("robot")?;
-                if !kynex_model::robots(doc).iter().any(|r| r.root == robot) {
-                    return Err("로봇이 아닙니다".into());
+                // A robot, or an AMR: either is drawn as a place in the flow.
+                let amr = self
+                    .components
+                    .iter()
+                    .any(|c| c.object == robot && c.kind == Kind::Amr);
+                if !amr && !kynex_model::robots(doc).iter().any(|r| r.root == robot) {
+                    return Err("로봇이나 AMR이 아닙니다".into());
                 }
-                let piece = |o: u64| self.components.iter().find(|c| c.object == o && c.kind.flow()).map(|c| c.kind);
+                let piece = |o: u64| {
+                    self.components
+                        .iter()
+                        .find(|c| c.object == o && c.kind.flow())
+                        .map(|c| c.kind)
+                };
                 let remove = req["remove"] == true;
-                if let Some(from) = req["from"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+                let is_amr = |o: u64| {
+                    self.components
+                        .iter()
+                        .any(|c| c.object == o && c.kind == Kind::Amr)
+                };
+                let is_robot = |o: u64| kynex_model::robots(doc).iter().any(|r| r.root == o);
+                // An AMR handing parts to a robot: the AMR puts into the
+                // robot, the robot takes from the AMR — both said at once.
+                // Or a robot handing to an AMR, the same way round.
+                let pair =
+                    |x: u64, y: u64| (is_amr(x) && is_robot(y)) || (is_robot(x) && is_amr(y));
+                let handing = match (req["from"].as_str(), req["to"].as_str()) {
+                    (Some(f), _) => f
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|f| pair(*f, robot))
+                        .map(|f| (f, robot)),
+                    (_, Some(t)) => t
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|t| pair(robot, *t))
+                        .map(|t| (robot, t)),
+                    _ => None,
+                };
+                if let Some((a, r)) = handing {
+                    let ha = self.hubs.entry(a).or_default();
+                    ha.outs.retain(|p| *p != r);
+                    if !remove {
+                        ha.outs.push(r);
+                    }
+                    let hr = self.hubs.entry(r).or_default();
+                    hr.ins.retain(|p| *p != a);
+                    if !remove {
+                        hr.ins.push(a);
+                    }
+                } else if let Some(from) = req["from"].as_str().and_then(|s| s.parse::<u64>().ok())
+                {
                     match piece(from) {
                         Some(Kind::Sink) => return Err("배출에서는 부품이 나가지 않습니다".into()),
                         None => return Err("공정 흐름의 설비가 아닙니다".into()),
@@ -3199,6 +3459,11 @@ impl Cell {
             let uid = self.parts[k].uid;
             if let Some(j) = self.jobs.iter_mut().find(|j| j.part == uid) {
                 j.gripped = true;
+                // Off an AMR's top plate: the AMR free to go. (One called
+                // to take it from the robot stays.)
+                if j.handoff.is_none() {
+                    j.docked = None;
+                }
             }
         }
         let near = match riding {
@@ -5270,7 +5535,9 @@ pub fn is_op(op: &str) -> bool {
             | "flow_next"
             | "flow_recipe"
             | "amr_lanes"
+            | "amr_lane"
             | "flow_products"
+            | "flow_share"
             | "flow_orders"
             | "operator_skills"
             | "flow_host"

@@ -58,6 +58,13 @@ pub struct Job {
     /// then the part keeps its place where it waits; after, it goes with
     /// the gripper, and once let go, on to where it goes.
     pub gripped: bool,
+    /// By AMR (1): the robot it hands the part to, the AMR stopping beside
+    /// it; then, by that robot (3): the AMR standing there with the part on
+    /// its top plate until the robot grips it.
+    pub handoff: Option<u64>,
+    pub docked: Option<u64>,
+    /// When it began to wait for a carrier, on the flow's clock.
+    pub since: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +116,37 @@ impl Cell {
             }
         }
         self.lanes.insert(object, next);
+        self.lanes.retain(|_, v| !v.is_empty());
+        self.roles_changed = true;
+        self.changed = true;
+        Ok(())
+    }
+
+    /// The lane between stops `a` and `b` set, the others left as they
+    /// are: both ways, `a` to `b` only, `b` to `a` only, or none.
+    pub fn set_lane(&mut self, a: u64, b: u64, way: &str) -> Result<(), String> {
+        let is_stop = |u: u64| {
+            self.components
+                .iter()
+                .any(|c| c.object == u && c.kind == Kind::Stop)
+        };
+        if !is_stop(a) || !is_stop(b) || a == b {
+            return Err("다른 두 AMR 정지 위치 사이에만 길을 낼 수 있습니다".into());
+        }
+        let (ab, ba) = match way {
+            "both" => (true, true),
+            "to" => (true, false),
+            "from" => (false, true),
+            "none" => (false, false),
+            _ => return Err("way: both, to, from, none".into()),
+        };
+        for (x, y, on) in [(a, b, ab), (b, a, ba)] {
+            let next = self.lanes.entry(x).or_default();
+            next.retain(|n| *n != y);
+            if on {
+                next.push(y);
+            }
+        }
         self.lanes.retain(|_, v| !v.is_empty());
         self.roles_changed = true;
         self.changed = true;
@@ -242,6 +280,16 @@ impl Cell {
             .map(|(n, _)| n)
     }
 
+    /// The stop nearest point `at`, within reach of it, if there is one.
+    fn stop_near_point(&self, doc: &Document, at: DVec3) -> Option<u64> {
+        self.stop_places(doc)
+            .into_iter()
+            .map(|(n, (p, _))| (n, p.truncate().distance(at.truncate())))
+            .filter(|(_, d)| *d <= NEAR)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(n, _)| n)
+    }
+
     /// Whether any AMR is free for a job (see `free_amr`).
     fn any_free_amr(&self) -> bool {
         self.components.iter().any(|c| self.free(c))
@@ -252,7 +300,10 @@ impl Cell {
         c.kind == Kind::Amr
             && c.mirror.is_none()
             && (c.props.battery <= 0.0 || self.energy.get(&c.object).is_none_or(|e| *e >= LOW))
-            && !self.jobs.iter().any(|j| j.amr == Some(c.object))
+            && !self
+                .jobs
+                .iter()
+                .any(|j| j.amr == Some(c.object) || j.docked == Some(c.object))
             && !self.charging.contains(&c.object)
             && (self.flow_on || self.rovers.get(&c.object).is_none_or(|r| r.legs.is_empty()))
     }
@@ -339,14 +390,46 @@ impl Cell {
             })
             .filter_map(|(k, j)| Some((k, self.stop_near(doc, j.from)?)))
             .collect();
+        // A link that names its AMR is that AMR's alone.
+        let named: Vec<Option<u64>> = self.jobs.iter().map(|j| j.robot).collect();
+        // An AMR sets out with a full load (its 적재량), or once the first
+        // part has waited its 모아 싣기 time: not with each part as it comes.
+        let now = self.last_tick.unwrap_or(0.0);
+        let ready = |cell: &Cell, amr: u64, k: usize| {
+            let Some(c) = cell.components.iter().find(|c| c.object == amr) else {
+                return true;
+            };
+            let most = c.props.capacity.max(1) as usize;
+            let j = &cell.jobs[k];
+            let same: Vec<&Job> = cell
+                .jobs
+                .iter()
+                .filter(|o| o.part != 0 && o.amr.is_none() && o.phase == Phase::Waiting)
+                .filter(|o| (o.from, o.to, o.by) == (j.from, j.to, j.by))
+                .collect();
+            let first = same.iter().map(|o| o.since).fold(f64::INFINITY, f64::min);
+            most <= 1 || same.len() >= most || now - first >= c.props.gather
+        };
         let mut changed = false;
         while !free.is_empty() && !waiting.is_empty() {
+            let cell: &Cell = self;
             let best = free
                 .iter()
                 .enumerate()
-                .flat_map(|(f, (_, d))| {
-                    waiting.iter().enumerate().map(move |(w, (_, stop))| {
-                        (f, w, d.get(stop).copied().unwrap_or(f64::INFINITY))
+                .flat_map(|(f, (amr, d))| {
+                    let named = &named;
+                    let ready = &ready;
+                    waiting.iter().enumerate().map(move |(w, (k, stop))| {
+                        let theirs = named[*k].is_none_or(|r| r == *amr) && ready(cell, *amr, *k);
+                        (
+                            f,
+                            w,
+                            if theirs {
+                                d.get(stop).copied().unwrap_or(f64::INFINITY)
+                            } else {
+                                f64::INFINITY
+                            },
+                        )
                     })
                 })
                 .filter(|(.., d)| d.is_finite())
@@ -398,7 +481,10 @@ impl Cell {
         self.components
             .iter()
             .any(|c| c.object == amr && c.kind == Kind::Amr && c.mirror.is_none())
-            && !self.jobs.iter().any(|j| j.amr == Some(amr))
+            && !self
+                .jobs
+                .iter()
+                .any(|j| j.amr == Some(amr) || j.docked == Some(amr))
             && !self.charging.contains(&amr)
             && self.rovers.get(&amr).is_none_or(|r| r.legs.is_empty())
     }
@@ -765,17 +851,23 @@ impl Cell {
     /// as it would stand there).
     pub fn robot_jobs(&self, doc: &Document) -> Vec<RobotJob> {
         let belts = self.belts(doc);
+        let decks = self.decks(doc);
         self.jobs
             .iter()
             .filter(|j| j.by == 3 && j.amr.is_none() && j.part != 0)
+            // Handing to an AMR: once the AMR stands beside the robot.
+            .filter(|j| j.handoff.is_none() || j.docked.is_some_and(|a| self.rovers.get(&a).is_none_or(|r| r.legs.is_empty())))
             .filter_map(|j| {
                 let p = self.parts.iter().find(|p| p.uid == j.part)?;
                 let to = self.components.iter().find(|c| c.object == j.to)?;
                 // Onto a belt at its start, where the flow puts its parts:
                 // not its middle, which may be out of the robot's reach.
-                let top = match belts.iter().find(|b| b.object == j.to) {
-                    Some(b) => b.centre + b.along * (-b.length / 2.0 + super::RAW.0),
-                    None => Self::dock(doc, to)?.0,
+                // Onto an AMR, its top plate's middle.
+                let deck = j.handoff.and_then(|a| decks.iter().find(|d| d.object == a));
+                let top = match (deck, belts.iter().find(|b| b.object == j.to)) {
+                    (Some(d), _) => d.pose.transform_point3((d.lo + d.hi) / 2.0 * DVec3::new(1.0, 1.0, 0.0) + DVec3::Z * d.hi.z),
+                    (None, Some(b)) => b.centre + b.along * (-b.length / 2.0 + super::RAW.0),
+                    (None, None) => Self::dock(doc, to)?.0,
                 };
                 Some((
                     j.part,
@@ -814,6 +906,19 @@ impl Cell {
         };
         self.parts[i].held = None;
         match failed {
+            // Put onto the AMR standing by: it carries it on, loaded now.
+            None if job.handoff.is_some() && job.docked.is_some() => {
+                let a = job.docked.unwrap();
+                self.parts[i].flow = Some(Place::Riding { amr: a, to: job.to });
+                let j = &mut self.jobs[k];
+                j.by = 1;
+                j.amr = Some(a);
+                j.robot = Some(a);
+                j.handoff = None;
+                j.docked = None;
+                j.gripped = false;
+                j.phase = Phase::Loading(now);
+            }
             None => {
                 self.parts[i].flow = Some(Place::Moving {
                     from: self.parts[i].world.translation,
@@ -834,6 +939,19 @@ impl Cell {
             }
         }
         self.changed = true;
+    }
+
+    /// Part `part`'s robot stopped from outside, its carrying program gone:
+    /// in the gripper, the part goes on to where it was going; not yet
+    /// taken, it waits again for a robot. Nothing went wrong, so no problem
+    /// is told.
+    pub fn robot_dropped(&mut self, part: u64) {
+        let held = self
+            .part_index(part)
+            .is_some_and(|i| self.parts[i].held.is_some());
+        let told = self.flow_problem.clone();
+        self.robot_done(part, (!held).then(String::new));
+        self.flow_problem = told;
     }
 
     /// Part `part`'s job for a robot that no robot can do — its place out
@@ -984,8 +1102,45 @@ impl Cell {
             let job = self.jobs[k].clone();
             let idle = |cell: &Cell, a: u64| cell.rovers.get(&a).is_none_or(|r| r.legs.is_empty());
             let hand = job.by == 2;
-            // A robot's job is the view's, which runs robots.
+            // A robot's job is the view's, which runs robots: but one handing
+            // to an AMR calls the AMR first, to stand beside the robot.
             if job.by == 3 {
+                if let (Some(_), None) = (job.handoff, job.docked) {
+                    let stop = job.robot.and_then(|r| {
+                        let at = doc.world_transform(id_of(doc, r)?).translation;
+                        self.stop_near_point(doc, at)
+                    });
+                    // Whichever AMR is free, the nearest the robot's stop:
+                    // the AMR drawn is the fleet's place in the picture.
+                    let places = self.stop_places(doc);
+                    let near = stop.and_then(|stop| {
+                        self.components
+                            .iter()
+                            .filter(|c| self.free(c))
+                            .filter_map(|c| {
+                                let d = self.lane_distances(&places, self.rover(doc, c)?.at);
+                                Some((c.object, d.get(&stop).copied().unwrap_or(f64::INFINITY)))
+                            })
+                            .filter(|(_, d)| d.is_finite())
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(a, _)| a)
+                    });
+                    match (stop, near) {
+                        (Some(stop), Some(a)) => match self.send(doc, a, stop) {
+                            Ok(()) => {
+                                self.jobs[k].docked = Some(a);
+                                self.jobs[k].handoff = Some(a);
+                                happened = true;
+                            }
+                            Err(e) => self.flow_problem = Some(e),
+                        },
+                        (Some(_), None) => {}
+                        (None, _) => {
+                            self.flow_problem =
+                                Some("로봇 가까이(4 m)에 AMR 정지 위치가 없습니다".into());
+                        }
+                    }
+                }
                 continue;
             }
             let next = match job.phase {
@@ -1046,8 +1201,15 @@ impl Cell {
                             to: job.to,
                         });
                     }
+                    // Handing to a robot: to the stop nearest the robot.
+                    let toward = job.handoff.and_then(|r| {
+                        let at = doc.world_transform(id_of(doc, r)?).translation;
+                        self.stop_near_point(doc, at)
+                    });
                     let sent = if hand {
                         self.walk_to(doc, job.amr.unwrap(), job.to)
+                    } else if let Some(stop) = toward {
+                        self.send(doc, job.amr.unwrap(), stop)
                     } else {
                         match self.stop_near(doc, job.to) {
                             Some(stop) => self.send(doc, job.amr.unwrap(), stop),
@@ -1062,6 +1224,15 @@ impl Cell {
                         continue;
                     }
                     Phase::Carrying
+                }
+                // Beside the robot it hands to: the robot's to take, off
+                // the top plate, the AMR standing by till it has.
+                Phase::Carrying if job.handoff.is_some() && idle(self, job.amr.unwrap()) => {
+                    let j = &mut self.jobs[k];
+                    j.docked = j.amr.take();
+                    j.robot = j.handoff.take();
+                    j.by = 3;
+                    Phase::Waiting
                 }
                 Phase::Carrying if idle(self, job.amr.unwrap()) => {
                     Phase::Unloading(now + if hand { HAND } else { LOAD })

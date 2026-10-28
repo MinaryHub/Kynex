@@ -119,11 +119,11 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   robot follows the bar on the screen at once — what is beyond the joint
   turned (or slid) where the bar is, without waiting for KYNEX to answer —
   and takes KYNEX's own pose as each answer comes and once it is let go.
-- **Run and stop**: the toolbar's green ▶ runs the flow and every robot
-  with a program, as Space does; while anything runs it is a red ■ that
-  stops them, with the clock's speed beside it when it is not 1× (+/−).
-  **처음으로** beside it (or Home) puts everything back as it was before
-  the run: programs and the flow stopped, every product taken away, the
+- **Run and stop**: the run badge over the view is the one run control:
+  its 실행/정지 runs the flow and every robot with a program, as Space
+  does, and stops them; − and + beside it set the clock's speed (as the
+  − and + keys do). The toolbar's **처음으로** (or Home) puts everything
+  back as it was before the run: programs and the flow stopped, every product taken away, the
   robots posed as they stood when the run started.
 - **Smooth motion**: while a program or the flow runs, KYNEX tells poses
   some twenty times a second, not evenly, each stamped with when it was
@@ -682,31 +682,19 @@ by `Offs`. Names and comments are kept to ASCII; other letters become
 The page shows every setting and role at once. It once had a 초급 / 중급 /
 전문가 switch in the header that hid the factory's detail and the robots'
 programs and wiring until asked for; it is gone, as sorting by it said
-little. `crates/kynex-view/web/level.js` keeps the levels for what may
-use them again, set to show all.
+little, and so is what was left of it in the code. The timeline panel's
+2D 공정 흐름도 went too: links are made in the 3D view alone.
 
-### The process flow chart
+### Linking, and the bottleneck in colour
 
-The timeline panel's **공정 흐름도** tab draws the process flow as boxes —
-sources, stations, buffers, conveyors, sinks, coloured by kind, with what
-each is doing — in columns by how far down the flow each is, an arrow for
-each link. Drag from a box's dot (●) onto another box to link them; the
-✕ on an arrow (shown when the pointer is over it) undoes the link;
-clicking a box selects its equipment in the scene.
+Links are made in link mode (see *Linking by drag and drop* below). A
+piece's inspector lists the links it has — **이전 공정** and **이후 공정**,
+each with what carries along it; clicked, that piece is selected — not
+every piece it could link to.
 
-### Linking by clicking, and the bottleneck in colour
-
-**연결** on the toolbar (or **＋ 화면에서 잇기** in the inspector): click
-equipment in order — the source, each machine, the sink — and each is
-linked to the one before; it ends at a sink, or with Esc. Or drag from one
-piece of equipment onto the next: a dashed line follows the pointer and
-the two are linked where it is let go (a press anywhere else still turns
-the view).
-
-Out of link mode too, each piece that sends parts on — a source, a
-station, a buffer, a conveyor — has an orange handle (➔) over it, grown
-a little under the pointer: dragged onto other equipment, it links the
-two. While a link is drawn — from a handle, or from the last piece in link
+In link mode the equipment under the pointer has an orange handle (➔)
+over it: dragged onto other equipment, it links the two, as a drag from
+the equipment itself does. While a link is drawn — from a handle, or from the last piece in link
 mode — the line is green where letting go would link and red where it
 would not, the equipment under the pointer is tinted, and a note by the
 pointer says what would happen: the link to be made, "already linked",
@@ -719,10 +707,9 @@ orange) and **Delete** undoes the link, the equipment left as it is.
 Arrows and handles are picked by how near the pointer is to them on the
 screen, the same however near the view is.
 
-A **right click** — in the 3D view, on a row of the tree, on a box or an
-arrow of the flow chart — opens a menu. On equipment of the flow: **다음
-공정으로 연결** (every piece it could send to, nearest first, with the
-distance; and **화면에서 끌어 잇기…**, which starts link mode from it),
+A **right click** — in the 3D view or on a row of the tree — opens a
+menu. On equipment of the flow: **다음 공정으로 연결** (every piece it
+could send to, nearest first, with the distance),
 **앞 공정에서 연결 받기**, **연결 끊기** (each of its links, or all), and
 **역할 바꾸기** (source, station, buffer, sink, or out of the flow). On
 equipment not yet of the flow: **공정 흐름에 넣기** with a role, or
@@ -736,10 +723,10 @@ and 화면 맞춤. The menu closes on a choice, a click outside it, or Esc.
 The signs over the flow — each piece's name, a station's load and
 bottleneck, a cycle's progress — are as big as they are in the scene from
 afar, but never taller on the screen than a line of text, so that close
-up they do not cover what they name. **이름표** on the toolbar (or **L**)
-hides them, the load discs and the flow's arrows left; the choice is kept
-in the browser. **흐름 화살표** on the toolbar (or **A**) shows or hides
-the arrows of the process flow on their own. They are shown at first, and
+up they do not cover what they name. The toolbar's **보기** menu (or
+**L**) hides them, the load discs and the flow's arrows left; the choice
+is kept in the browser. 보기 ▸ **공정 흐름 화살표** (or **A**) shows or
+hides the arrows of the process flow on their own. They are shown at first, and
 the choice is kept in the browser too.
 
 **Space** runs the simulation: nothing going, it starts the process flow
@@ -753,8 +740,8 @@ so that it turns and pans about what is looked at, as far as it is near;
 it stops short of what is there (a two-hundredth of the scene, 0.3–1 m)
 rather than going through it or under the floor. Equipment not
 yet of the flow is made so as it is clicked: a CNC machine or a moulder a
-공정 스테이션 keeping its time (at 전문가, after asking: it was a robot
-cell's machine), one with no role the 소재 공급 if it is the first, else a
+공정 스테이션 keeping its time (after asking: it was a robot cell's
+machine), one with no role the 소재 공급 if it is the first, else a
 공정 스테이션.
 
 Once the flow has run, a disc over each station goes from green (idle)
@@ -931,7 +918,9 @@ not change the session's scene.
 
   Settings start at industry-typical values (docs/roadmap-vs-visual-components.md
   §4): 90 s machining, 3 s door, 1 s chuck, 5 × 4 places 100 mm apart, and
-  0.5 s grip. **셀 자동 구성** sets roles from names. A CNC machine is the
+  0.5 s grip. Roles are set in the inspector; those of a robot cell are
+  listed as **로봇 셀: …** (a robot cell's 배출 팔레트 is no 배출 of the
+  process flow). A CNC machine is the
   lowest object with a `…door…` and a `…chuck…` below it, an injection
   moulding machine one with a `…door…` and a `…mould…`, and a conveyor a
   mesh named `belt` or `…conveyor…`. Pallets are
@@ -1013,9 +1002,8 @@ not change the session's scene.
     속도. A station holds what it made until there is room ahead, and
     starts nothing meanwhile (blocked). Blue arrows in the scene show the
     routing.
-  - In the timeline panel, **공정 흐름 ▶ 실행 / ■ 정지 / ⟲ 초기화** runs
-    the flow on the simulation clock, at the robot panel's 배속. The bar
-    shows parts out, parts an hour, parts in process and lead time (mean,
+  - The run badge runs the flow on the simulation clock. The timeline
+    panel's 공정 흐름 bar shows parts out, parts an hour, parts in process and lead time (mean,
     least, most). Each station gets a lane in the timeline: working,
     blocked, idle, and its utilization. Robot programs can run alongside.
 - **Variation, breakdowns and scrap** in a process flow, so that results
@@ -1049,7 +1037,7 @@ not change the session's scene.
   - A station's **품종별 처리 시간** gives each product its own time
     (blank: the station's own). **품종 교체 시간** is added when it
     takes a part of another product than the last.
-  - Under a source's or station's 다음 공정, each link's product buttons
+  - In a source's or station's inspector, each link's product buttons
     say which products go that way. None picked means all.
   - In the flow bar, **근무 / 휴식** (minutes) runs the flow in turns:
     at rest nothing comes in or is worked on, the timeline shows 휴식,
@@ -1063,9 +1051,16 @@ not change the session's scene.
     queueing. At its end they go on to the conveyor's own 다음 공정, so
     belts can merge (several sending to one) and divert (one sending to
     several, by room and by product).
+  - A buffer's **보관** counts the parts on it, those sent on but still
+    standing there for an AMR, a person or a robot to take included
+    (운반 대기 in its inspector); a sink's sign counts the parts that have
+    reached it (**배출 n개**).
   - An AMR's **적재량** and an operator's **한 번에 드는 수**: parts
     waiting to go from one place to the same place are carried together,
-    up to that many, side by side.
+    up to that many, side by side. An AMR waits to fill its load before it sets
+    out — at most its **모아 싣기 최대 대기** (seconds from the first part
+    waiting, 60 unless set; 0 sets out at once) —, then goes with what
+    there is.
   - **Robots in the flow's picture**: a robot is drawn as a place in the
     flow that parts pass through, not stop at. Link a piece to the robot
     (the robot takes its parts) and the robot to pieces (it puts parts
@@ -1097,6 +1092,63 @@ not change the session's scene.
     number after the step, 2-1 and 2-2, kept along that branch (3-1,
     3-2) until the branches meet again (4). Several sources are told
     apart the same way.
+  - **Linking by drag and drop**, in link mode only — **Shift+C** (or
+    the toolbar's 연결 모드 button) turns it on and off; Esc ends it.
+    Press on equipment, drag, and let go on the next: one arrow. Then
+    the same again for the next step; link mode stays on, a sink
+    reached or not. Out of link mode a drag on equipment turns the view,
+    as anywhere, and no handles or arrowheads are dragged. In link
+    mode a drag that starts on the floor turns the view as ever, one on a
+    gizmo's arrows (or rings) moves or turns the equipment — its middle,
+    over a selected item's body, is the body's: a drag there links —, and
+    a press let go without moving is a click. A link's number sign can be
+    clicked or right-clicked for its link, as its line can. Links to
+    equipment since deleted are dropped the next time that piece's links
+    change, rather than refusing the change. A piece given a role out of
+    the flow (a robot cell's 배출 팔레트, say) loses its links at once,
+    which the flow could not send along; what a robot or an AMR puts into
+    it is kept, unworked, and works again once the piece has a flow role
+    (배출) back. What a link is let go on is not selected, so its gizmo never
+    stands in the way of the next drag. Pointing at equipment also shows
+    an orange handle over it, to drag from in the same way. Equipment not yet in the flow joins it as
+    the drag ends (the first supply, else a station), and so does what it
+    is dropped on. Drag an arrow's head onto other equipment to move the
+    link there, keeping its 운반 and share; let it go on nothing and the
+    link is undone. A link just made is drawn bold and green for two
+    seconds, so it is seen at once among the signs.
+  - **AMRs in the flow's picture**, as robots are: drag from equipment
+    onto an AMR (the AMR takes its parts) and from the AMR onto
+    equipment (it puts them there). Each arrow is drawn as it is let go,
+    green, into and out of the AMR, following it as it drives. The links
+    it carries are worked out as a robot's are, carried by the fleet:
+    whichever AMR is free, the drawn one standing for them all (a link
+    named to one AMR in its 운반 menu is that AMR's alone). Dragged from a sink (배출), the sink becomes a buffer that
+    sends its parts on. Right-click an AMR for 가져올 곳 and 내려놓을 곳.
+    Drag from an AMR onto a robot and the robot unloads it: the AMR
+    drives to the stop nearest the robot and stands there, the part on
+    its top plate, until the robot has gripped it and put it where the
+    robot's own arrows go (a robot tending machines, into them). The
+    AMR is free for other work once the part is off. The other way
+    round, drag from a robot onto an AMR: when the robot has a part for
+    it, the AMR is called to the stop nearest the robot; once it stands
+    there the robot puts the part onto its top plate, and the AMR
+    carries it on to where its own arrows go.
+    A link's 운반 menu also names each AMR, beside 빈 AMR 자동; a project
+    whose links named an AMR has them drawn through it when opened. An
+    AMR stop or an operator never becomes a place in the flow.
+  - **Splits and merges**: where one piece sends to several, a
+    **⑂ 분기** sign stands at the fork; where several send to one, a
+    **⑃ 합류** sign. Click (or right-click) a split's sign to choose how
+    parts are shared out: 번갈아, 대기 적은 곳, 무작위, or **비율**
+    (asked as 7:3, in the order the menu lists the ways), whose
+    percentages are drawn on the arrows. By 비율 the way furthest behind
+    its share is waited for while it is full, so a fraction that must go
+    one way (a rework loop, say) does. Click a merge's sign at a station
+    for **도착 순** (parts as they come, 투입 수 at a time) or **조립**:
+    one part from each way into it, made into one, with room kept for
+    each way apart so a quick way never fills the station while it
+    waits for a slow one. Both are also the station's and the sender's
+    **합류 방식** and **다음 공정** settings.
   - **운반: 로봇**: an idle robot with a grip point carries the
     part, with no program written. It is the robot the link names, or,
     for any, the nearest such robot that reaches both places. KYNEX solves the arm for above the part, at it,
@@ -1150,12 +1202,19 @@ not change the session's scene.
     that were not.
   - A source's **칸반**: no new part goes in while that many of its own
     are still in the flow. It pulls, rather than pushes.
-  - **다음 공정 고르기** on a source, station or buffer: 번갈아 (in turn,
+  - **분기 방식** on a source, station or buffer: 번갈아 (in turn,
     the first with room), 대기 적은 곳 (the one with the fewest waiting
     and coming), or 무작위.
   - The 통계 tab draws parts in process (WIP) and parts out an hour as
     they went over the run. The CSV carries the orders' figures.
 - **AMR lanes and traffic** (`apps/kynex/src/cell/fleet.rs`).
+  - Each AMR stop has its number over it (P1, P2, … as its name ends).
+    In link mode (Shift+C) drag from a stop — its number or itself —
+    onto another: a lane one way, drawn as an arrow; drag back the other
+    way, or right-click the lane, for both ways. A lane's right-click
+    menu sets it 양방향, either way one way, or cuts it; click it and
+    Delete cuts it too. Each lane is set on its own, the others as they
+    were (`{"op": "amr_lane", "from", "to", "way": "both"|"to"|"from"|"none"}`).
   - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
     go both ways and are drawn in orange. Through the request
     (`{"op": "amr_lanes", …, "oneway": true}`) a link goes one way only,
@@ -1302,7 +1361,10 @@ and against the robot's own links (`crates/kynex-collide`).
 - **Live**: parts in contact at the pose shown turn red, the contact
   point is marked, and the robot card lists the pairs (**충돌 N곳**). The
   check runs on every scene change, so it covers jogging, programs
-  playing and robots moving in Kreate.
+  playing and robots moving in Kreate. The red parts and points show
+  only with the toolbar's 보기 ▸ **충돌 표시** (K) on; it starts off,
+  and the browser remembers the choice. The robot card lists the
+  pairs either way.
 - **Along a program**: each move is checked every 20 ms. The first
   contact in a move shows under it, for example
   `충돌: tool0 ↔ pallet (0.17 s)`. The rest of the scene stands where the

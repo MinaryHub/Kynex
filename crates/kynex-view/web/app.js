@@ -1108,6 +1108,14 @@ document.querySelector('[data-toggle="labels"]')?.classList.toggle('on', view.la
 // And the flow's arrows.
 view.arrows = cellPanel.showArrows;
 document.querySelector('[data-toggle="arrows"]')?.classList.toggle('on', view.arrows);
+// And the contacts shown in red: not unless chosen.
+try {
+  view.contacts = localStorage.getItem('kynex.contacts') === 'on';
+} catch {
+  view.contacts = false;
+}
+document.querySelector('[data-toggle="contacts"]')?.classList.toggle('on', view.contacts);
+robotPanel.showContacts = view.contacts;
 
 // Where a point on the screen lands in the scene: on the part under it, or
 // on the floor.
@@ -1150,10 +1158,6 @@ const timelinePanel = new TimelinePanel({
   toast,
   toggle: (on) => setToggle('timeline', on),
   select: (uid) => select(uid),
-  // The flow chart's right-click menus: the same as the 3D view's.
-  showMenu,
-  equipmentMenu: (uid) => cellPanel.equipmentMenu(chainOf(uid), libraryPanel.itemOf(uid)?.root ?? null),
-  linkMenu: (link) => cellPanel.linkMenu(link),
 });
 
 const libraryPanel = new LibraryPanel({
@@ -1196,7 +1200,7 @@ document.getElementById('robots').addEventListener('dblclick', (e) => {
 
 // A part's colour over its own: red in contact, orange selected.
 function tintOf(rec) {
-  if (contacted.has(rec.uid)) return colorOf(rec).lerp(CONTACT, 0.75);
+  if (view.contacts && contacted.has(rec.uid)) return colorOf(rec).lerp(CONTACT, 0.75);
   if (dropTarget != null && underOf(rec.uid, dropTarget)) return colorOf(rec).lerp(LANDING, 0.6);
   if (selected === rec.uid) return colorOf(rec).lerp(ACCENT, 0.55);
   if (group.size && underGroup(rec.uid)) return colorOf(rec).lerp(ACCENT, 0.4);
@@ -1511,9 +1515,11 @@ document.getElementById('interact-reset').addEventListener('click', async () => 
   toast('움직인 문과 관절을 처음 상태로 되돌렸습니다');
 });
 
-// Linking by dragging: in link mode, pressed on equipment that sends parts
-// on and dragged onto another, a line follows the pointer and the two are
-// linked where it is let go. A press anywhere else turns the view as ever.
+// Linking by dragging: from the handle over the equipment under the pointer
+// (or, in link mode, from equipment that sends parts on) dragged onto
+// another, a line follows the pointer and the two are linked where it is
+// let go. An arrow's head dragged moves its link elsewhere, or, let go on
+// nothing, undoes it. A press anywhere else turns the view as ever.
 let linkDrag = null;
 const linkLine = new THREE.Line(
   new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
@@ -1544,6 +1550,33 @@ canvas.addEventListener(
     if (e.button !== 0) return;
     // A dot over a piece that sends parts on: always a link's start.
     const marker = markerAt(e.clientX, e.clientY);
+    // A split's or a merge's sign: its menu.
+    if (marker?.badge) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      down = null;
+      showMenu(e.clientX, e.clientY, cellPanel.badgeMenu(marker.badge));
+      return;
+    }
+    // An arrow's head: its link, to drag elsewhere.
+    if (marker?.tip && cellPanel.linking()) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      down = null;
+      controls.enabled = false;
+      linkDrag = { uids: [marker.tip.from], object: marker.tip.from, rewire: marker.tip, x: e.clientX, y: e.clientY, from: marker.a.clone(), moved: false };
+      return;
+    }
+    // In link mode, an AMR stop's number: a lane from it, dragged.
+    if (marker?.stop != null && cellPanel.linking()) {
+      const at = cellPanel.componentOf(marker.stop)?.stop_at;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      down = null;
+      controls.enabled = false;
+      linkDrag = { uids: [marker.stop], object: marker.stop, lane: true, x: e.clientX, y: e.clientY, from: new THREE.Vector3(at[0], at[1], 0.05), moved: false };
+      return;
+    }
     // A robot's sign: a link from the robot, dragged; pressed, a click.
     if (marker?.robot != null) {
       const top = cellPanel.ctx.robotTop(marker.robot);
@@ -1554,13 +1587,19 @@ canvas.addEventListener(
       return;
     }
     if (marker?.handle) {
-      const c = cellPanel.componentOf(marker.handle);
-      const at = c?.flow?.at;
+      // Its piece's place, or — equipment not yet in the flow — the port's.
+      const port = cellPanel.port?.object === marker.handle ? cellPanel.port : null;
+      const at = cellPanel.componentOf(marker.handle)?.flow?.at ?? port?.at;
+      if (!at) return;
       e.stopImmediatePropagation();
       e.preventDefault();
+      down = null;
       controls.enabled = false;
       linkDrag = {
         uids: [marker.handle],
+        object: marker.handle,
+        fresh: !!port?.fresh,
+        kind: port?.kind ?? null,
         x: e.clientX,
         y: e.clientY,
         from: new THREE.Vector3(at[0], at[1], at[2] + 0.45),
@@ -1568,24 +1607,80 @@ canvas.addEventListener(
       };
       return;
     }
+    // In link mode, pressed on equipment itself and dragged: a link from
+    // it, let go on the next. Pressed on the floor, the view turns as
+    // ever; on a gizmo, the equipment moves; let go without moving, it is
+    // a click. Out of link mode the view turns, as anywhere.
     if (!cellPanel.linking()) return;
+    // A selected item's gizmo stands over its body: only its arrows and
+    // rings (an axis) move or turn it there; its middle is the body's.
+    const gizmoAxis = ['X', 'Y', 'Z'].includes(libraryPanel.handle?.axis);
+    if (view.interact || view.measure || cellPanel.picking() || libraryPanel.dragging || gizmoAxis || robotPanel.ownsPointer() || libraryPanel.armed) return;
     const hit = partAt(e.clientX, e.clientY);
     const uids = hit ? chainOf(hit.uid) : [];
-    if (!cellPanel.sender(uids)) return;
-    // The view stays still while the line is drawn.
+    if (!uids.length) return;
+    const stop = cellPanel.stopOfUids(uids);
+    if (stop != null) {
+      const at = cellPanel.componentOf(stop)?.stop_at ?? [hit.point.x, hit.point.y, 0];
+      e.stopImmediatePropagation();
+      down = { x: e.clientX, y: e.clientY };
+      controls.enabled = false;
+      linkDrag = { uids: [stop], object: stop, lane: true, x: e.clientX, y: e.clientY, from: new THREE.Vector3(at[0], at[1], 0.05), moved: false };
+      return;
+    }
+    const robot = robotOf(uids);
+    const port = robot != null ? null : cellPanel.portOf(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+    const object = robot ?? port?.object;
+    if (object == null) return;
+    // The view stays still while the line is drawn, and the gizmo is not
+    // given the press; a press let go at once is still a click.
+    e.stopImmediatePropagation();
+    down = { x: e.clientX, y: e.clientY };
     controls.enabled = false;
-    linkDrag = { uids, x: e.clientX, y: e.clientY, from: hit.point, moved: false };
+    linkDrag = {
+      uids: [object],
+      object,
+      fresh: !!port?.fresh,
+      kind: port?.kind ?? null,
+      body: true,
+      x: e.clientX,
+      y: e.clientY,
+      from: hit.point,
+      moved: false,
+    };
   },
   { capture: true },
 );
 // A hand over a handle: it can be dragged, and it grows a little. In link
 // mode, a line from the last piece follows the pointer, and what is under
 // the pointer is shown as the link's end would be.
+// Over equipment, a handle to drag a link from: no mode to enter first.
+let portAsk = null;
+function hoverPort(x, y, over) {
+  if (over?.handle != null || over?.badge || over?.tip) return;
+  if (!cellPanel.linking()) return cellPanel.showPort(null);
+  if (view.measure || cellPanel.picking() || robotPanel.ownsPointer() || libraryPanel.ownsPointer() || !view.arrows) return cellPanel.showPort(null);
+  const hit = partAt(x, y);
+  const uids = hit ? chainOf(hit.uid) : [];
+  cellPanel.showPort(uids.length ? cellPanel.portOf(uids, libraryPanel.itemOf(uids[0])?.root ?? null) : null);
+}
+canvas.addEventListener('pointerleave', () => {
+  if (!linkDrag) cellPanel.showPort(null);
+});
 canvas.addEventListener('pointermove', (e) => {
   if (e.buttons || linkDrag || view.interact) return;
   const over = markerAt(e.clientX, e.clientY);
   cellPanel.hoverHandle(over?.handle ?? null);
-  canvas.style.cursor = over?.handle || over?.robot != null ? 'grab' : over?.link ? 'pointer' : cellPanel.linking() ? 'crosshair' : '';
+  // Once a frame at most: the scene is cast into at each.
+  if (!portAsk) {
+    const [x, y] = [e.clientX, e.clientY];
+    portAsk = requestAnimationFrame(() => {
+      portAsk = null;
+      hoverPort(x, y, markerAt(x, y));
+    });
+  }
+  const linking = cellPanel.linking();
+  canvas.style.cursor = over?.handle || over?.robot != null || (linking && (over?.tip || over?.stop != null)) ? 'grab' : over?.link || over?.badge || over?.tip ? 'pointer' : linking ? 'crosshair' : '';
   const from = cellPanel.linking() ? cellPanel.linkingFrom() : null;
   if (from) previewLink(from.object, new THREE.Vector3(from.at[0], from.at[1], from.at[2] + 0.45), e.clientX, e.clientY);
   else if (linkLine.visible) previewLink(null);
@@ -1594,8 +1689,9 @@ canvas.addEventListener('pointermove', (e) => {
   if (!linkDrag) return;
   if (!linkDrag.moved && Math.hypot(e.clientX - linkDrag.x, e.clientY - linkDrag.y) < 6) return;
   linkDrag.moved = true;
-  const from = cellPanel.sender(linkDrag.uids)?.object;
-  if (from != null) previewLink(from, linkDrag.from, e.clientX, e.clientY);
+  canvas.style.cursor = 'grabbing';
+  const from = linkDrag.object ?? cellPanel.sender(linkDrag.uids)?.object;
+  if (from != null) previewLink(from, linkDrag.from, e.clientX, e.clientY, linkDrag.rewire);
 });
 window.addEventListener('pointerup', (e) => {
   if (!linkDrag) return;
@@ -1603,12 +1699,30 @@ window.addEventListener('pointerup', (e) => {
   linkDrag = null;
   controls.enabled = true;
   previewLink(null);
+  canvas.style.cursor = '';
+  // A lane from a stop, let go on another stop (its number or itself).
+  if (drag.lane) {
+    if (!drag.moved) return;
+    const onto = markerAt(e.clientX, e.clientY)?.stop ?? cellPanel.stopOfUids(chainOf(partAt(e.clientX, e.clientY)?.uid ?? ''));
+    if (onto == null || onto === drag.object) return toast('다른 AMR 정지 위치(번호표)에 놓으세요');
+    cellPanel.dragLane(drag.object, onto);
+    return;
+  }
+  // An arrow's head moved: its link with it, or undone.
+  if (drag.rewire) {
+    if (!drag.moved) return cellPanel.chooseLink(drag.rewire);
+    const hit = markerAt(e.clientX, e.clientY)?.robot != null ? null : partAt(e.clientX, e.clientY);
+    const uids = hit ? chainOf(hit.uid) : [];
+    // Not selected after: its gizmo would be over it, and the next press
+    // there would move it rather than link from it.
+    cellPanel.rewire(drag.rewire, uids, uids.length ? (libraryPanel.itemOf(uids[0])?.root ?? null) : null);
+    return;
+  }
+  // Equipment pressed, not dragged: a click, which the click handler has.
+  if (!drag.moved && drag.body) return;
   // A handle pressed, not dragged: its piece clicked, in either mode.
   if (!drag.moved) {
-    if (cellPanel.linking()) {
-      const to = cellPanel.linkTo(drag.uids, null);
-      if (to != null) select(to);
-    }
+    if (drag.fresh) select(drag.object);
     return;
   }
   const onRobot = markerAt(e.clientX, e.clientY)?.robot;
@@ -1621,11 +1735,12 @@ window.addEventListener('pointerup', (e) => {
   const uids = chainOf(hit.uid);
   if (uids.some((u) => drag.uids.includes(u))) return;
   const root = libraryPanel.itemOf(uids[0])?.root ?? null;
-  const from = cellPanel.sender(drag.uids)?.object;
+  const from = drag.object ?? cellPanel.sender(drag.uids)?.object;
   const preview = from != null ? cellPanel.dropPreview(from, uids, root) : null;
   if (preview && !preview.ok) return toast(preview.text);
-  const to = cellPanel.dragLink(drag.uids, uids, root);
-  if (to != null) select(to);
+  // What it was let go on is not selected: see above.
+  if (drag.fresh) cellPanel.dragFromFresh(drag.object, uids, root, drag.kind);
+  else cellPanel.dragLink(drag.uids, uids, root);
 });
 
 // The link being drawn — dragged from a handle, or from the last piece in
@@ -1633,10 +1748,11 @@ window.addEventListener('pointerup', (e) => {
 // starts) to the pointer at (x, y): the line green where letting go would
 // link, red where it would not, a note by the pointer saying what would
 // happen, and the equipment under it tinted. `from` null takes it all
-// away.
+// away. `rewire`, the link whose head is dragged: let go on nothing, it
+// is undone.
 let dropTarget = null;
 const dragTip = document.getElementById('drag-tip');
-function previewLink(from, point = null, x = 0, y = 0) {
+function previewLink(from, point = null, x = 0, y = 0, rewire = null) {
   if (from == null) {
     linkLine.visible = false;
     dragTip.hidden = true;
@@ -1648,7 +1764,15 @@ function previewLink(from, point = null, x = 0, y = 0) {
   const uids = sign != null ? [sign] : hit ? chainOf(hit.uid) : [];
   const top = sign != null ? cellPanel.ctx.robotTop(sign) : null;
   const to = top ? new THREE.Vector3(top[0], top[1], top[2]) : hit?.point ?? ray.ray.intersectPlane(_floor, new THREE.Vector3());
-  const preview = cellPanel.dropPreview(from, uids, uids.length && sign == null ? (libraryPanel.itemOf(uids[0])?.root ?? null) : null);
+  const stopTo = cellPanel.isStop(from) ? (markerAt(x, y)?.stop ?? cellPanel.stopOfUids(uids)) : null;
+  let preview = cellPanel.isStop(from)
+    ? stopTo != null && stopTo !== from
+      ? { ok: true, text: `AMR 길 ${cellPanel.stopNumber(from)} → ${cellPanel.stopNumber(stopTo)}`, object: stopTo }
+      : { ok: false, text: '다른 AMR 정지 위치(번호표)에 놓으세요', object: null }
+    : cellPanel.dropPreview(from, uids, uids.length && sign == null ? (libraryPanel.itemOf(uids[0])?.root ?? null) : null);
+  if (rewire && !uids.length) preview = { ok: false, text: `여기 놓으면 연결을 끊습니다: ${cellPanel.nameOf(rewire.from)} → ${cellPanel.nameOf(rewire.to)}`, object: null };
+  else if (rewire && preview.object === rewire.to) preview = { ok: false, text: '그대로 둡니다', object: null };
+  else if (rewire && preview.ok) preview = { ...preview, text: `연결 옮기기: ${preview.text}` };
   if (to) {
     linkLine.geometry.setFromPoints([point, to]);
     linkLine.computeLineDistances();
@@ -1703,6 +1827,9 @@ function sceneMenu(x, y) {
   // A robot's sign, or the robot itself: its menu, before the arrows that
   // run over it.
   if (marker?.robot != null) return showMenu(x, y, cellPanel.robotMenu(marker.robot));
+  if (marker?.badge) return showMenu(x, y, cellPanel.badgeMenu(marker.badge));
+  if (marker?.tip) return showMenu(x, y, cellPanel.linkMenu(marker.tip));
+  if (marker?.lane) return showMenu(x, y, cellPanel.laneMenu(marker.lane));
   const under = partAt(x, y);
   const robot = under ? robotOf(chainOf(under.uid)) : null;
   if (robot != null) return showMenu(x, y, cellPanel.robotMenu(robot));
@@ -1750,25 +1877,13 @@ canvas.addEventListener('pointerup', (e) => {
   const marker = hits.find((h) => !isShape(h) && uidOf(h) != null);
   const shape = shapeHit(hits);
   const hit = marker && (!shape || marker.distance < shape.distance) ? marker : shape;
-  // Process link mode: the equipment or the robot clicked, linked from
-  // the one before — before the arrows, which may run over a robot.
-  const robotSign = cellPanel.linking() ? markerAt(e.clientX, e.clientY)?.robot : null;
-  if (robotSign != null) {
-    cellPanel.linkTo([robotSign], null);
-    return;
-  }
-  if (cellPanel.linking() && hit) {
-    const uids = [];
-    for (let at = uidOf(hit), n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) uids.push(at);
-    const to = cellPanel.linkTo(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
-    if (to != null) select(to);
-    return;
-  }
   // An arrow of the flow: chosen, to undo with Delete.
   if (!view.measure && !cellPanel.picking()) {
     const marker = markerAt(e.clientX, e.clientY);
     if (marker?.link) return cellPanel.chooseLink(marker.link);
     cellPanel.chooseLink(null);
+    if (marker?.lane) return cellPanel.chooseLane(marker.lane);
+    if (cellPanel.chosenLane) cellPanel.chooseLane(null);
   }
   // Measuring: the click is a point on a shape.
   if (view.measure) {
@@ -1976,9 +2091,18 @@ function measureAngle(point) {
 function setToggle(name, on) {
   view[name] = on;
   document.querySelector(`[data-toggle="${name}"]`)?.classList.toggle('on', on);
+  toolsButton()?.classList.toggle('on', !!(view.measure || view.interact));
   if (name === 'grid') grid.visible = on;
   if (name === 'labels') cellPanel.setLabels(on);
   if (name === 'arrows') cellPanel.setArrows(on);
+  if (name === 'contacts') {
+    try {
+      localStorage.setItem('kynex.contacts', on ? 'on' : 'off');
+    } catch {}
+    robotPanel.showContacts = on;
+    robotPanel.setContacts(robotPanel.contacts ?? []);
+    for (const uid of contacted) highlight(uid);
+  }
   if (name === 'joints') for (const [uid, g] of gizmos) g.visible = on && records.get(uid)?.visible !== false;
   if (name === 'timeline') {
     timelinePanel.show(on);
@@ -2074,17 +2198,49 @@ function record(button) {
   toast('녹화를 시작했습니다. 녹화 버튼을 다시 누르면 끝납니다');
 }
 
+// The toolbar's 보기 and 도구: menus over their buttons, each entry ticked
+// as it stands, with its key.
+const toolsButton = () => document.querySelector('[data-action="tools-menu"]');
+function viewMenu(b) {
+  const r = b.getBoundingClientRect();
+  const item = (key, label, hint) => ({ label, hint, checked: !!view[key], run: () => setToggle(key, !view[key]) });
+  showMenu(r.left, r.top - 8, [
+    { title: '보기' },
+    item('arrows', '공정 흐름 화살표', 'A'),
+    item('labels', '이름표·가동률', 'L'),
+    item('contacts', '충돌 표시', 'K'),
+    item('grid', '그리드', 'G'),
+    { sep: true },
+    item('joints', '관절·링크', 'J'),
+    item('wire', '와이어프레임', 'W'),
+  ]);
+}
+function toolsMenu(b) {
+  const r = b.getBoundingClientRect();
+  showMenu(r.left, r.top - 8, [
+    { title: '도구' },
+    { label: '측정', hint: 'M', checked: !!view.measure, run: () => setToggle('measure', !view.measure) },
+    { label: '상호작용 (문·관절 끌기)', hint: 'I', checked: !!view.interact, run: () => setToggle('interact', !view.interact) },
+    { sep: true },
+    { label: '배치 보고서 (인쇄·PDF)', run: () => report() },
+    { label: recording ? '화면 녹화 끝 (내려받기)' : '화면 녹화 시작', checked: !!recording, run: () => record(b) },
+    { sep: true },
+    {
+      label: 'PLC 연결',
+      run: () => {
+        projectPanel.panel.hidden = true;
+        floorPanel.panel.hidden = true;
+        plcPanel.toggle();
+      },
+    },
+  ]);
+}
+
 document.querySelector('.toolbar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.dataset.action === 'record') record(b);
-  if (b.dataset.action === 'report') report();
-  // One panel over the toolbar at a time.
-  if (b.dataset.action === 'plc') {
-    projectPanel.panel.hidden = true;
-    floorPanel.panel.hidden = true;
-    plcPanel.toggle();
-  }
+  if (b.dataset.action === 'view-menu') viewMenu(b);
+  if (b.dataset.action === 'tools-menu') toolsMenu(b);
   if (b.dataset.action === 'project') {
     plcPanel.panel.hidden = true;
     floorPanel.panel.hidden = true;
@@ -2099,7 +2255,6 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
     projectPanel.panel.hidden = true;
     floorPanel.toggle();
   }
-  if (b.dataset.action === 'play') playPause();
   if (b.dataset.action === 'reset-run') resetRun();
   if (b.dataset.action === 'undo') history('undo');
   if (b.dataset.action === 'redo') history('redo');
@@ -2269,7 +2424,13 @@ window.addEventListener('keydown', (e) => {
   // Space on a button pressed last: the key is the view's, not the button's.
   if (k === ' ' && e.target.closest('button')) e.target.blur();
   if (k === ' ') playPause();
-  else if (k === '+' || k === '=') stepSpeed(true);
+  // Shift+C: link mode on or off.
+  else if (k === 'c' && e.shiftKey) {
+    if (cellPanel.linking()) {
+      cellPanel.stopLinking();
+      toast('연결 모드를 끝냈습니다');
+    } else cellPanel.startLinking();
+  } else if (k === '+' || k === '=') stepSpeed(true);
   else if (k === '-' || k === '_') stepSpeed(false);
   else if (k === 'f') frame();
   else if (k === 'j') setToggle('joints', !view.joints);
@@ -2277,6 +2438,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'g') setToggle('grid', !view.grid);
   else if (k === 'l') setToggle('labels', !view.labels);
   else if (k === 'a') setToggle('arrows', !view.arrows);
+  else if (k === 'k') setToggle('contacts', !view.contacts);
   else if (k === 'home') resetRun();
   else if (k === 'm') setToggle('measure', !view.measure);
   else if (k === 'i') setToggle('interact', !view.interact);
@@ -2595,12 +2757,7 @@ function showPlay() {
   const key = `${on}|${speed}`;
   if (key === playShown) return;
   playShown = key;
-  const b = document.querySelector('[data-action="play"]');
-  if (!b) return;
-  b.classList.toggle('on', on);
-  b.title = on ? '정지 (스페이스)' : '실행: 공정 흐름과 프로그램이 있는 로봇을 함께 돌립니다 (스페이스)';
-  b.querySelector('.play-speed').textContent = speed !== 1 ? `${speed}×` : '';
-  // And the badge over the view.
+  // The badge over the view: the one run control.
   const badge = document.getElementById('run-badge');
   if (!badge) return;
   badge.classList.toggle('on', on);

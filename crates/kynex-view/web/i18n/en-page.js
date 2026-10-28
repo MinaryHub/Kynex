@@ -173,7 +173,7 @@ export default {
   '근무와 휴식을 번갈아: 휴식 중에는 흐름이 멈추고 OEE 계획 시간에서 빠집니다 (0: 쉬지 않음)':
     'Alternate work and breaks: the flow stops during breaks, which are excluded from OEE planned time (0: no breaks)',
   '근무': 'Work',
-  '분 휴식': 'min, break',
+  '분 휴식': 'min · Rest',
   '분': 'min',
   '처음 이만큼은 통계에서 뺍니다: 라인이 차는 동안을 빼고 정상 상태만': 'Excluded from statistics at the start: skip line fill-up, keep steady state only',
   '워밍업': 'Warm-up',

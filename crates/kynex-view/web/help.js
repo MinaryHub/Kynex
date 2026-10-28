@@ -173,13 +173,25 @@ function keysOf(label) {
   return keys;
 }
 
-// The words of `label` without what is in its fields: its name.
+// The words before `label`'s first field: its name. Words after a field
+// are its unit (분, 시간), and stay where they are.
+function leading(label) {
+  const out = [];
+  for (const n of label.childNodes) {
+    if (n.nodeType === Node.ELEMENT_NODE && n.matches('input, select, textarea')) break;
+    if (n.nodeType === Node.TEXT_NODE) out.push(n);
+  }
+  return out;
+}
+
 function nameOf(label) {
   const span = label.querySelector(':scope > .insp-label');
   if (span) return span.textContent.trim();
-  let text = '';
-  for (const n of label.childNodes) if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
-  return text.replace(/\s+/g, ' ').trim();
+  return leading(label)
+    .map((n) => n.textContent)
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function explain(label) {
@@ -253,7 +265,7 @@ function decorate(label) {
     span.className = 'insp-label';
     span.textContent = name;
     span.title = name;
-    for (const n of [...label.childNodes]) if (n.nodeType === Node.TEXT_NODE) n.remove();
+    for (const n of leading(label)) n.remove();
     label.prepend(span);
   }
   // English names are longer than Korean ones of the same weight.

@@ -478,8 +478,10 @@ do not have, so no two names are alike.
 
 **Placing exactly.** The inspector's **스냅** sets the handle's steps: a
 grid of 10, 50, 100 or 500 mm to move on (a click that places equipment
-lands on it too) and 5, 15, 45 or 90° to turn by; the choice is kept in
-the browser. **X축** and **Y축** tilt equipment, before its turn about
+lands on it too), shown while the handle moves; and, while it turns
+(**회전**), **각도 스냅**: 5, 15 (unless chosen otherwise), 45 or 90°, each
+angle a multiple of it from 0° — equipment at 7° turns to 0°, 15°, 30° —
+not steps from where it stood. The choices are kept in the browser. **X축** and **Y축** tilt equipment, before its turn about
 Z: a robot on a wall at 90°, one hung under a gantry at 180°, which
 still reaches as it should. Tilted equipment does not snap onto
 connection points. With several selected, **정렬** lines them up by
@@ -823,7 +825,8 @@ thumbnails: each drawn from the piece at its usual size
 - 성형기: 사출 성형기 (a 150 t class machine: clamp and mould behind a
   guard, injection unit with its hopper; length, width, height).
 - 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대.
-- 물류: 벨트 컨베이어 (length, belt width, height), AMR (a mobile base
+- 물류: 벨트 컨베이어 (length, belt width, height; yellow chevrons on its
+  belt point the way it runs, as on a corner one, round the bend), AMR (a mobile base
   with a top plate to carry a load; length, width, height), AMR 정지 위치
   (a frame its size on the floor, an arrow the way it faces).
 - 안전: 안전 펜스, 보호 가드레일 (yellow posts and two rails).
@@ -889,7 +892,10 @@ in that plane; in **회전** (or `R`; `T` or **이동** back) drag the red,
 green or blue ring to turn it about X, Y or Z — its X and Y tilt and its
 turn, in the angle snap's steps. Several selected together turn about Z
 only; Alt held as it is let go keeps it from snapping onto a connection
-point.
+point. Turned, it is only set down as it is let go, not snapped onto a
+connection point: a conveyor turned about its middle would otherwise be
+turned straight back in line with the next, its end still near that
+one's.
 
 **Interact** (the hand on the toolbar, or `I`), as Visual Components'
 Interact: the parts that move are dragged along their own way, within

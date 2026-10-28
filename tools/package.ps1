@@ -41,7 +41,12 @@ try {
 
 # And the programs on their own, to run without installing.
 $zip = Join-Path $out "KYNEX-$version-windows-x64.zip"
-Compress-Archive -Force -Path (Join-Path $bin 'kynex.exe'), (Join-Path $bin 'kynex-studio.exe') -DestinationPath $zip
+# Copied out first: a KYNEX running from target\release is not zipped.
+$stage = Join-Path $out "KYNEX-$version"
+New-Item -ItemType Directory -Force $stage | Out-Null
+Copy-Item (Join-Path $bin 'kynex.exe'), (Join-Path $bin 'kynex-studio.exe') $stage
+Compress-Archive -Force -Path (Join-Path $stage '*') -DestinationPath $zip
+Remove-Item -Recurse -Force $stage
 
 Get-ChildItem $out -File | Where-Object { $_.Extension -in '.exe', '.msi', '.zip' } |
     Select-Object Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }

@@ -6,6 +6,10 @@
 // Entries: { label, hint?, danger?, disabled?, checked?, sub?: [...], run?() }
 // or { sep: true } or { title: '...' }.
 
+import { tFor } from './i18n.js';
+
+const t = tFor('page');
+
 let open = null;
 
 export function closeMenu() {
@@ -73,7 +77,7 @@ function column(entries, root) {
         for (const other of col.querySelectorAll('.ctx-item.open')) other.classList.remove('open');
         if (root.querySelector(`.ctx-col.sub[data-owner="${row.dataset.id}"]`)) return;
         row.classList.add('open');
-        const sub = column(entry.sub.length ? entry.sub : [{ label: '없음', disabled: true }], root);
+        const sub = column(entry.sub.length ? entry.sub : [{ label: t('없음'), disabled: true }], root);
         sub.classList.add('sub');
         sub.dataset.owner = row.dataset.id;
         root.appendChild(sub);

@@ -25,6 +25,17 @@ Kreate ──patch──▶ relay (kreate-collab, TCP 7878) ──patch──▶
 If KYNEX starts before Kreate opens the session, it waits and connects once
 the scene is there. It never seeds the session with an empty scene.
 
+## Language
+
+The viewer is in English unless Korean is chosen with the button by the
+version (English / 한국어), kept in the browser. The page is written in
+Korean; `crates/kynex-view/web/i18n.js` gives each phrase in English from
+the tables in `web/i18n/` — one per part of the page, each looked in
+first by its own part, as one Korean word may be two English ones — and
+what KYNEX itself says (its messages, its equipment's names) from
+`en-server.js`, with patterns for those with names and numbers in them.
+Equipment placed while the page is in English is named in English.
+
 ## Version and releases
 
 Each build is numbered: `major.minor.<build>`, the build being the commits

@@ -7,6 +7,9 @@
 
 import * as THREE from 'three';
 import { TransformControls } from '/vendor/TransformControls.js';
+import { tFor, tr } from './i18n.js';
+
+const t = tFor('robot');
 
 const KIND_CHIP = { revolute: 'R', continuous: 'C', prismatic: 'P', fixed: 'F', floating: '6', planar: '2' };
 
@@ -18,49 +21,49 @@ const STEPS = [
 ];
 // What a step can tell a CNC machine, and what it can wait for.
 const COMMANDS = [
-  ['open', '문 열기'],
-  ['close', '문 닫기'],
-  ['clamp', '척 물림'],
-  ['unclamp', '척 풀기'],
-  ['start', '가공 시작'],
+  ['open', t('문 열기')],
+  ['close', t('문 닫기')],
+  ['clamp', t('척 물림')],
+  ['unclamp', t('척 풀기')],
+  ['start', t('가공 시작')],
 ];
 const SIGNALS = [
-  ['door_open', '문 열림'],
-  ['door_closed', '문 닫힘'],
-  ['clamped', '척 물림'],
-  ['unclamped', '척 풀림'],
-  ['idle', '가공 대기'],
-  ['done', '가공 완료'],
+  ['door_open', t('문 열림')],
+  ['door_closed', t('문 닫힘')],
+  ['clamped', t('척 물림')],
+  ['unclamped', t('척 풀림')],
+  ['idle', t('가공 대기')],
+  ['done', t('가공 완료')],
 ];
 
 // What each kind of machine takes and says, as the program's rows offer it.
 const COMMANDS_OF = {
   cnc: COMMANDS,
   actuator: [
-    ['extend', '전진'],
-    ['retract', '후진'],
+    ['extend', t('전진')],
+    ['retract', t('후진')],
   ],
   molder: [
-    ['open', '가드 열기'],
-    ['close', '가드 닫기'],
-    ['start', '성형 시작'],
+    ['open', t('가드 열기')],
+    ['close', t('가드 닫기')],
+    ['start', t('성형 시작')],
   ],
 };
 const SIGNALS_OF = {
   cnc: SIGNALS,
   molder: [
-    ['door_open', '가드 열림'],
-    ['door_closed', '가드 닫힘'],
-    ['idle', '성형 대기'],
-    ['done', '성형 완료'],
+    ['door_open', t('가드 열림')],
+    ['door_closed', t('가드 닫힘')],
+    ['idle', t('성형 대기')],
+    ['done', t('성형 완료')],
   ],
-  conveyor: [['part_at_end', '부품 도착']],
-  sensor: [['detected', '감지']],
+  conveyor: [['part_at_end', t('부품 도착')]],
+  sensor: [['detected', t('감지')]],
   actuator: [
-    ['extended', '전진 끝'],
-    ['retracted', '후진 끝'],
+    ['extended', t('전진 끝')],
+    ['retracted', t('후진 끝')],
   ],
-  amr: [['arrived', 'AMR 도착']],
+  amr: [['arrived', t('AMR 도착')]],
 };
 const SPEEDS = [1, 2, 5, 10, 20, 50, 100, 200, 300];
 // How a variable is compared, as a condition's row offers it.
@@ -253,7 +256,7 @@ export class RobotPanel {
     const button = section.querySelector('[data-act="follow"]');
     if (!button) return;
     const input = section.querySelector('[data-opt="follow-host"]');
-    button.textContent = f ? '멈춤' : '따라가기';
+    button.textContent = f ? t('멈춤') : t('따라가기');
     button.setAttribute('aria-pressed', String(!!f));
     input.disabled = !!f;
     const state = section.querySelector('.follow-state');
@@ -261,10 +264,10 @@ export class RobotPanel {
     state.textContent = !f
       ? ''
       : f.connected
-        ? `연결됨 · 프로그램 ${f.state?.program ?? ''}`
+        ? t('연결됨 · 프로그램 {p}', { p: tr(f.state?.program ?? '') })
         : f.error
-          ? `연결 안 됨: ${f.error}`
-          : '연결 중…';
+          ? t('연결 안 됨: {e}', { e: tr(f.error) })
+          : t('연결 중…');
   }
 
   // The robots whose programs are going.
@@ -293,7 +296,7 @@ export class RobotPanel {
     const play = section.querySelector('[data-act="play"]');
     if (!play) return;
     const going = run && run.state !== 'done' && run.state !== 'alarm';
-    play.textContent = going ? '■ 정지' : '▶ 실행';
+    play.textContent = going ? t('■ 정지') : t('▶ 실행');
     play.setAttribute('aria-pressed', String(!!going));
     const speed = section.querySelector('[data-opt="clock"]');
     if (speed && document.activeElement !== speed) speed.value = String(this.clock.speed);
@@ -301,19 +304,19 @@ export class RobotPanel {
     let text = '';
     if (run) {
       const what = {
-        running: '실행 중',
-        moving: `이동 ${run.detail}`,
-        waiting: `대기: ${run.detail}`,
-        pausing: `잠시 ${run.detail}`,
-        done: '끝',
-        alarm: `알람: ${run.detail}`,
+        running: t('실행 중'),
+        moving: t('이동 {d}', { d: tr(run.detail) }),
+        waiting: t('대기: {d}', { d: tr(run.detail) }),
+        pausing: t('잠시 {d}', { d: tr(run.detail) }),
+        done: t('끝'),
+        alarm: t('알람: {d}', { d: tr(run.detail) }),
       }[run.state];
-      const cycles = run.cycles ? ` · 사이클 ${run.cycles}회, 직전 ${run.last_cycle.toFixed(1)} s` : '';
+      const cycles = run.cycles ? t(' · 사이클 {n}회, 직전 {s} s', { n: run.cycles, s: run.last_cycle.toFixed(1) }) : '';
       // In a routine it calls, by its name and its own step.
       const program = this.programs[section.dataset.root];
       const here = program?.routines?.[program.active];
       const local = run.local ?? run.step;
-      const where = run.routine && run.routine !== here ? `${run.routine} · ${local + 1}단계` : `${local + 1}단계`;
+      const where = run.routine && run.routine !== here ? t('{routine} · {n}단계', { routine: tr(run.routine), n: local + 1 }) : t('{n}단계', { n: local + 1 });
       text = run.state === 'done' ? `${what}${cycles}` : `${where} · ${what}${cycles}`;
     }
     state.textContent = text;
@@ -358,9 +361,9 @@ export class RobotPanel {
       section.classList.toggle('in-contact', mine.length > 0);
       if (!mine.length) continue;
       // Each pair once, however many places they meet.
-      const pairs = [...new Set(mine.map((c) => `${c.part_name} ↔ ${c.other_name}`))];
+      const pairs = [...new Set(mine.map((c) => `${tr(c.part_name)} ↔ ${tr(c.other_name)}`))];
       box.innerHTML =
-        `<span class="contact-title">충돌 ${pairs.length}곳</span>` +
+        `<span class="contact-title">${t('충돌 {n}곳', { n: pairs.length })}</span>` +
         pairs.map((p) => `<span class="contact-pair">${escapeHtml(p)}</span>`).join('');
     }
   }
@@ -409,7 +412,7 @@ export class RobotPanel {
     document.getElementById('robot-count').textContent = this.robots.length;
     if (!this.robots.length) {
       host.dataset.shape = '';
-      host.innerHTML = '<p class="muted pad">장면에 로봇이 없습니다. 라이브러리에서 로봇을 놓으면 관절과 프로그램이 여기에 나타납니다.</p>';
+      host.innerHTML = `<p class="muted pad">${t('장면에 로봇이 없습니다. 라이브러리에서 로봇을 놓으면 관절과 프로그램이 여기에 나타납니다.')}</p>`;
       return;
     }
     // Same robots and joints as drawn: update the numbers in place, so a pose
@@ -432,20 +435,20 @@ export class RobotPanel {
     const tool = r.tool ? this.ctx.records.get(r.tool) : null;
     const grippers = this.grippersOf(r);
     const current = this.toolOf(r);
-    const nameOf = (uid) => escapeHtml(this.ctx.records.get(uid)?.name ?? uid);
+    const nameOf = (uid) => escapeHtml(tr(this.ctx.records.get(uid)?.name ?? uid));
     const toolPick = grippers.length
-      ? `<select class="tcp-pick" data-opt="tool" title="TCP로 쓸 링크">${[r.tool, ...grippers.map((g) => g.object)]
+      ? `<select class="tcp-pick" data-opt="tool" title="${t('TCP로 쓸 링크')}">${[r.tool, ...grippers.map((g) => g.object)]
           .map((uid) => `<option value="${escapeHtml(uid)}"${uid === current ? ' selected' : ''}>${nameOf(uid)}</option>`)
           .join('')}</select>`
-      : `<span class="tcp-tool" title="툴 링크">${escapeHtml(tool?.name ?? '')}</span>`;
+      : `<span class="tcp-tool" title="${t('툴 링크')}">${escapeHtml(tr(tool?.name ?? ''))}</span>`;
     const gripRows = grippers
       .map(
         (g) => `
           <div class="grip-row" data-gripper="${escapeHtml(g.object)}">
             <span class="grip-name">${nameOf(g.object)}</span>
             <span class="grip-state"></span>
-            <button class="chip-btn" data-act="grip">잡기</button>
-            <button class="chip-btn" data-act="release">놓기</button>
+            <button class="chip-btn" data-act="grip">${t('잡기')}</button>
+            <button class="chip-btn" data-act="release">${t('놓기')}</button>
           </div>`,
       )
       .join('');
@@ -458,14 +461,14 @@ export class RobotPanel {
     return `
       <section class="robot" data-root="${escapeHtml(r.root)}">
         <div class="robot-head">
-          <span class="robot-name">${escapeHtml(r.name)}</span>
+          <span class="robot-name">${escapeHtml(tr(r.name))}</span>
           <span class="robot-meta">${r.joints.filter((j) => j.moves).length} DOF${r.mass ? ` · ${r.mass.toFixed(1)} kg` : ''}</span>
         </div>
         <div class="robot-contacts" hidden></div>
         <div class="robot-local" hidden>
-          <span class="local-badge">움직인 자세</span>
-          <span class="local-note">배치(장면)의 자세와 다릅니다. 지점으로 남기려면 + MoveJ·MoveL</span>
-          <button class="text-btn" data-act="session">원래 자세로</button>
+          <span class="local-badge">${t('움직인 자세')}</span>
+          <span class="local-note">${t('배치(장면)의 자세와 다릅니다. 지점으로 남기려면 + MoveJ·MoveL')}</span>
+          <button class="text-btn" data-act="session">${t('원래 자세로')}</button>
         </div>
         <ul class="joints">
           ${r.joints
@@ -473,9 +476,9 @@ export class RobotPanel {
               (j) => `
             <li class="joint${j.moves ? ' movable' : ''}" data-uid="${escapeHtml(j.uid)}">
               <span class="kind ${j.kind === 'fixed' ? 'fixed' : ''}" title="${j.kind}">${KIND_CHIP[j.kind] || '?'}</span>
-              <span class="jname">${escapeHtml(j.name)}</span>
+              <span class="jname">${escapeHtml(tr(j.name))}</span>
               <span class="jval"></span>
-              ${j.moves ? '<span class="track" title="끌어서 관절 이동"><span class="fill"></span><span class="mark"></span></span><span class="limits"><span class="lo"></span><span class="hi"></span></span>' : ''}
+              ${j.moves ? `<span class="track" title="${t('끌어서 관절 이동')}"><span class="fill"></span><span class="mark"></span></span><span class="limits"><span class="lo"></span><span class="hi"></span></span>` : ''}
             </li>`,
             )
             .join('')}
@@ -487,8 +490,8 @@ export class RobotPanel {
           <div class="tcp-head">
             <span class="tcp-title">TCP</span>
             ${toolPick}
-            <button class="chip-btn" data-act="handle" aria-pressed="false" title="장면에서 끌어서 TCP 이동">핸들</button>
-            <button class="chip-btn" data-act="reach" aria-pressed="false" title="관절 한계 안에서 플랜지가 닿는 범위 (자기 충돌은 보지 않음)">범위</button>
+            <button class="chip-btn" data-act="handle" aria-pressed="false" title="${t('장면에서 끌어서 TCP 이동')}">${t('핸들')}</button>
+            <button class="chip-btn" data-act="reach" aria-pressed="false" title="${t('관절 한계 안에서 플랜지가 닿는 범위 (자기 충돌은 보지 않음)')}">${t('범위')}</button>
           </div>
           ${gripRows ? `<div class="grippers">${gripRows}</div>` : ''}
           <dl class="tcp-pose num">
@@ -501,63 +504,63 @@ export class RobotPanel {
             ${jog('z', 'Z')}${jog('rz', 'Rz')}
           </div>
           <div class="tcp-opts">
-            <div class="seg" role="group" aria-label="좌표계">
-              <button data-frame="world" class="${ui.frame === 'world' ? 'on' : ''}">월드</button>
-              <button data-frame="tool" class="${ui.frame === 'tool' ? 'on' : ''}">툴</button>
+            <div class="seg" role="group" aria-label="${t('좌표계')}">
+              <button data-frame="world" class="${ui.frame === 'world' ? 'on' : ''}">${t('월드')}</button>
+              <button data-frame="tool" class="${ui.frame === 'tool' ? 'on' : ''}">${t('툴')}</button>
             </div>
-            <select data-opt="step" aria-label="간격">
+            <select data-opt="step" aria-label="${t('간격')}">
               ${STEPS.map((s, i) => `<option value="${i}"${i === ui.step ? ' selected' : ''}>${s.label}</option>`).join('')}
             </select>
           </div>
           <div class="tcp-opts">
-            <label class="check"><input type="checkbox" data-opt="lock"${ui.lock ? ' checked' : ''}> 이동할 때 자세 유지</label>
-            <label class="offset">오프셋 Z <input type="number" data-opt="offset" value="${ui.offset}" step="1"> mm</label>
+            <label class="check"><input type="checkbox" data-opt="lock"${ui.lock ? ' checked' : ''}> ${t('이동할 때 자세 유지')}</label>
+            <label class="offset">${t('오프셋 Z')} <input type="number" data-opt="offset" value="${ui.offset}" step="1"> mm</label>
           </div>
-          <div class="handle-modes seg" role="group" aria-label="핸들" hidden>
-            <button data-mode="translate" class="${ui.mode === 'translate' ? 'on' : ''}">이동</button>
-            <button data-mode="rotate" class="${ui.mode === 'rotate' ? 'on' : ''}">회전</button>
+          <div class="handle-modes seg" role="group" aria-label="${t('핸들')}" hidden>
+            <button data-mode="translate" class="${ui.mode === 'translate' ? 'on' : ''}">${t('이동')}</button>
+            <button data-mode="rotate" class="${ui.mode === 'rotate' ? 'on' : ''}">${t('회전')}</button>
           </div>
           <div class="tcp-status"></div>
           <div class="tcp-sing" hidden></div>
         </div>
-        <div class="follow" title="실제 UR 로봇의 관절과 그리퍼 출력을 RTDE(포트 30004)로 받아 이 로봇을 똑같이 움직입니다. 로봇에는 아무것도 보내지 않습니다">
-          <span class="section-title">실제 로봇</span>
-          <input class="follow-host" type="text" data-opt="follow-host" maxlength="100" spellcheck="false" placeholder="UR 로봇 IP (예: 192.168.0.10)" aria-label="실제 로봇 주소" value="${escapeHtml(this.followHost(r.root))}">
-          <button class="chip-btn" data-act="follow">따라가기</button>
+        <div class="follow" title="${t('실제 UR 로봇의 관절과 그리퍼 출력을 RTDE(포트 30004)로 받아 이 로봇을 똑같이 움직입니다. 로봇에는 아무것도 보내지 않습니다')}">
+          <span class="section-title">${t('실제 로봇')}</span>
+          <input class="follow-host" type="text" data-opt="follow-host" maxlength="100" spellcheck="false" placeholder="${t('UR 로봇 IP (예: 192.168.0.10)')}" aria-label="${t('실제 로봇 주소')}" value="${escapeHtml(this.followHost(r.root))}">
+          <button class="chip-btn" data-act="follow">${t('따라가기')}</button>
           <span class="follow-state"></span>
         </div>
         <div class="program">
           <div class="prog-head">
-            <span class="section-title">프로그램</span>
-            <select class="routine-pick" data-opt="routine" aria-label="프로그램 고르기" title="이 로봇의 프로그램: 메인과 서브루틴"></select>
-            <button class="icon-mini" data-act="routine-new" title="새 서브루틴">+</button>
-            <button class="icon-mini" data-act="routine-rename" title="이름 바꾸기">✎</button>
-            <button class="icon-mini" data-act="routine-delete" title="이 서브루틴 지우기">✕</button>
+            <span class="section-title">${t('프로그램')}</span>
+            <select class="routine-pick" data-opt="routine" aria-label="${t('프로그램 고르기')}" title="${t('이 로봇의 프로그램: 메인과 서브루틴')}"></select>
+            <button class="icon-mini" data-act="routine-new" title="${t('새 서브루틴')}">+</button>
+            <button class="icon-mini" data-act="routine-rename" title="${t('이름 바꾸기')}">✎</button>
+            <button class="icon-mini" data-act="routine-delete" title="${t('이 서브루틴 지우기')}">✕</button>
             <span class="prog-cycle num"></span>
           </div>
           <div class="prog-actions">
-            <button class="chip-btn" data-act="teach" data-kind="joint" title="현재 자세를 관절 이동(MoveJ) 지점으로 추가">+ MoveJ</button>
-            <button class="chip-btn" data-act="teach" data-kind="linear" title="현재 자세를 직선 이동(MoveL) 지점으로 추가">+ MoveL</button>
-            <button class="chip-btn" data-act="teach" data-kind="circular" title="원호 이동(MoveC): 경유점 자세에서 한 번, 끝 자세에서 한 번 누릅니다">+ MoveC</button>
-            <button class="chip-btn" data-act="edge" aria-pressed="false" title="장면에서 부품의 모서리 가까이를 눌러, 그 모서리를 따라가는 경로(디버링·실링·용접)를 만듭니다">모서리</button>
-            <select class="step-pick" data-opt="newstep" aria-label="동작 추가" title="고른 단계 다음에 동작을 넣습니다">
-              <option value="">+ 동작</option>
-              <option value="grip">그리퍼 잡기</option>
-              <option value="release">그리퍼 놓기</option>
-              <option value="command">장비 명령</option>
-              <option value="wait">신호 대기</option>
-              <option value="delay">시간 대기</option>
-              <option value="next">팔레트 다음 칸</option>
-              <option value="drive">AMR 주행</option>
-              <option value="turn">포지셔너 회전</option>
-              <option value="call">서브루틴 호출</option>
-              <option value="signal_set">PLC 신호 쓰기</option>
-              <option value="signal_wait">PLC 신호 대기</option>
-              <optgroup label="흐름">
-                <option value="if">만약 (조건)</option>
-                <option value="else">아니면</option>
-                <option value="while">반복 (조건)</option>
-                <option value="var_set">변수 정하기</option>
+            <button class="chip-btn" data-act="teach" data-kind="joint" title="${t('현재 자세를 관절 이동(MoveJ) 지점으로 추가')}">+ MoveJ</button>
+            <button class="chip-btn" data-act="teach" data-kind="linear" title="${t('현재 자세를 직선 이동(MoveL) 지점으로 추가')}">+ MoveL</button>
+            <button class="chip-btn" data-act="teach" data-kind="circular" title="${t('원호 이동(MoveC): 경유점 자세에서 한 번, 끝 자세에서 한 번 누릅니다')}">+ MoveC</button>
+            <button class="chip-btn" data-act="edge" aria-pressed="false" title="${t('장면에서 부품의 모서리 가까이를 눌러, 그 모서리를 따라가는 경로(디버링·실링·용접)를 만듭니다')}">${t('모서리')}</button>
+            <select class="step-pick" data-opt="newstep" aria-label="${t('동작 추가')}" title="${t('고른 단계 다음에 동작을 넣습니다')}">
+              <option value="">${t('+ 동작')}</option>
+              <option value="grip">${t('그리퍼 잡기')}</option>
+              <option value="release">${t('그리퍼 놓기')}</option>
+              <option value="command">${t('장비 명령')}</option>
+              <option value="wait">${t('신호 대기')}</option>
+              <option value="delay">${t('시간 대기')}</option>
+              <option value="next">${t('팔레트 다음 칸')}</option>
+              <option value="drive">${t('AMR 주행')}</option>
+              <option value="turn">${t('포지셔너 회전')}</option>
+              <option value="call">${t('서브루틴 호출')}</option>
+              <option value="signal_set">${t('PLC 신호 쓰기')}</option>
+              <option value="signal_wait">${t('PLC 신호 대기')}</option>
+              <optgroup label="${t('흐름')}">
+                <option value="if">${t('만약 (조건)')}</option>
+                <option value="else">${t('아니면')}</option>
+                <option value="while">${t('반복 (조건)')}</option>
+                <option value="var_set">${t('변수 정하기')}</option>
               </optgroup>
             </select>
           </div>
@@ -565,19 +568,19 @@ export class RobotPanel {
           <div class="edge-bar" hidden></div>
           <ol class="points"></ol>
           <div class="run-bar">
-            <button class="chip-btn play" data-act="play" aria-pressed="false">▶ 실행</button>
-            <select data-opt="clock" aria-label="배속" title="시뮬레이션 배속">
-              ${SPEEDS.map((v) => `<option value="${v}">${v}배속</option>`).join('')}
+            <button class="chip-btn play" data-act="play" aria-pressed="false">${t('▶ 실행')}</button>
+            <select data-opt="clock" aria-label="${t('배속')}" title="${t('시뮬레이션 배속')}">
+              ${SPEEDS.map((v) => `<option value="${v}">${t('{v}배속', { v })}</option>`).join('')}
             </select>
             <span class="run-state"></span>
           </div>
           <div class="prog-foot">
-            <label class="check" title="마지막 지점에서 첫 지점으로 돌아와 반복합니다"><input type="checkbox" data-opt="close"> 순환 재생</label>
-            <button class="text-btn quiet" data-act="export" data-vendor="ur" title="UR 컨트롤러용 URScript 파일로 내려받기">URScript</button>
-            <button class="text-btn quiet" data-act="export" data-vendor="abb" title="ABB 컨트롤러용 RAPID 모듈로 내려받기">RAPID</button>
-            <button class="text-btn quiet" data-act="export" data-vendor="doosan" title="두산 로보틱스 컨트롤러용 DRL 프로그램으로 내려받기">DRL</button>
-            <button class="text-btn quiet" data-act="export" data-vendor="fanuc" title="FANUC 컨트롤러용 TP 프로그램(LS)으로 내려받기">TP</button>
-            <button class="text-btn quiet danger" data-act="clear">모두 지우기</button>
+            <label class="check" title="${t('마지막 지점에서 첫 지점으로 돌아와 반복합니다')}"><input type="checkbox" data-opt="close"> ${t('순환 재생')}</label>
+            <button class="text-btn quiet" data-act="export" data-vendor="ur" title="${t('UR 컨트롤러용 URScript 파일로 내려받기')}">URScript</button>
+            <button class="text-btn quiet" data-act="export" data-vendor="abb" title="${t('ABB 컨트롤러용 RAPID 모듈로 내려받기')}">RAPID</button>
+            <button class="text-btn quiet" data-act="export" data-vendor="doosan" title="${t('두산 로보틱스 컨트롤러용 DRL 프로그램으로 내려받기')}">DRL</button>
+            <button class="text-btn quiet" data-act="export" data-vendor="fanuc" title="${t('FANUC 컨트롤러용 TP 프로그램(LS)으로 내려받기')}">TP</button>
+            <button class="text-btn quiet danger" data-act="clear">${t('모두 지우기')}</button>
           </div>
         </div>`
             : ''
@@ -590,7 +593,7 @@ export class RobotPanel {
     const { escapeHtml } = this.ctx;
     const seconds = (s) => `${s.toFixed(2)} s`;
     const problems = (m) =>
-      (m?.problems || []).map((p) => `<div class="pprob">⚠ ${escapeHtml(p)}</div>`).join('');
+      (m?.problems || []).map((p) => `<div class="pprob">⚠ ${escapeHtml(tr(p))}</div>`).join('');
     for (const section of this.host.querySelectorAll('.robot')) {
       const list = section.querySelector('.points');
       if (!list) continue;
@@ -601,14 +604,14 @@ export class RobotPanel {
       const moves = points.filter((p) => p.type === 'move');
       // With actions the cycle is what a run measures; this is the moves'.
       section.querySelector('.prog-cycle').textContent =
-        program?.cycle != null && moves.length > 1 ? `이동 ${seconds(program.cycle)}` : '';
+        program?.cycle != null && moves.length > 1 ? t('이동 {d}', { d: seconds(program.cycle) }) : '';
       section.querySelector('[data-opt="close"]').checked = !!program?.close;
       // Its programs: the main one, then its routines.
       const routines = program?.routines ?? ['메인'];
       const pick = section.querySelector('[data-opt="routine"]');
       if (document.activeElement !== pick) {
         pick.innerHTML = routines
-          .map((n, i) => `<option value="${i}">${escapeHtml(n)}${i === 0 && n !== '메인' ? ' (메인)' : ''}</option>`)
+          .map((n, i) => `<option value="${i}">${escapeHtml(tr(n))}${i === 0 && n !== '메인' ? t(' (메인)') : ''}</option>`)
           .join('');
         pick.value = String(program?.active ?? 0);
       }
@@ -621,7 +624,7 @@ export class RobotPanel {
         .forEach((b) => (b.hidden = !points.length || (r.vendor != null && b.dataset.vendor !== r.vendor)));
       if (!points.length) {
         list.innerHTML =
-          '<li class="points-empty">로봇을 원하는 자세로 옮긴 뒤 <b>+ MoveJ</b> 또는 <b>+ MoveL</b>로 지점을 추가하세요.</li>';
+          `<li class="points-empty">${t('로봇을 원하는 자세로 옮긴 뒤 <b>+ MoveJ</b> 또는 <b>+ MoveL</b>로 지점을 추가하세요.')}</li>`;
         continue;
       }
       const firstMove = points.findIndex((p) => p.type === 'move');
@@ -655,20 +658,20 @@ export class RobotPanel {
         return `
           <li class="point${bad ? ' bad' : ''}${i === ui.cursor ? ' cursor' : ''}${inRange(i) ? ' inrange' : ''}" data-index="${i}" draggable="true"${indent(i)}>
             <span class="pidx num">${i + 1}</span>
-            <span class="pname">${escapeHtml(p.name)}${p.blend ? ` <span class="pblend" title="블렌드 반경: 멈추지 않고 지나감">◠${Math.round(p.blend * 1000)}</span>` : ''}</span>
-            <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${circular ? '원호 이동 (MoveC) · 눌러서 직선 이동으로' : linear ? '직선 이동 (MoveL) · 눌러서 관절 이동으로' : '관절 이동 (MoveJ) · 눌러서 직선 이동으로'}">${circular ? 'C' : linear ? 'L' : 'J'}</button>
-            <input class="pspeed num" type="number" data-opt="speed" value="${speed}" min="1" step="${linear ? 10 : 5}"${into ? '' : ' disabled'} aria-label="속도">
+            <span class="pname">${escapeHtml(tr(p.name))}${p.blend ? ` <span class="pblend" title="${t('블렌드 반경: 멈추지 않고 지나감')}">◠${Math.round(p.blend * 1000)}</span>` : ''}</span>
+            <button class="kind-chip${linear ? ' linear' : ''}" data-act="kind" title="${circular ? t('원호 이동 (MoveC) · 눌러서 직선 이동으로') : linear ? t('직선 이동 (MoveL) · 눌러서 관절 이동으로') : t('관절 이동 (MoveJ) · 눌러서 직선 이동으로')}">${circular ? 'C' : linear ? 'L' : 'J'}</button>
+            <input class="pspeed num" type="number" data-opt="speed" value="${speed}" min="1" step="${linear ? 10 : 5}"${into ? '' : ' disabled'} aria-label="${t('속도')}">
             <span class="unit">${linear ? 'mm/s' : '%'}</span>
-            <span class="ptime num">${p.move ? seconds(p.move.duration) : i === firstMove ? '시작' : ''}</span>
+            <span class="ptime num">${p.move ? seconds(p.move.duration) : i === firstMove ? t('시작') : ''}</span>
             <span class="pacts">
-              <button class="icon-mini${p.frame ? ' on' : ''}" data-act="frame" title="${p.frame ? '기준 해제: 월드 좌표로' : '가까운 장비를 기준으로: 장비가 옮겨지면 따라가고, 팔레트면 실행할 때 지금 칸으로 갑니다'}">⌖</button>
-              <button class="icon-mini" data-act="goto" title="이 지점으로 이동">→</button>
-              <button class="icon-mini" data-act="retouch" title="현재 자세로 다시 지정">⟳</button>
-              <button class="icon-mini" data-act="delete" title="삭제">✕</button>
+              <button class="icon-mini${p.frame ? ' on' : ''}" data-act="frame" title="${p.frame ? t('기준 해제: 월드 좌표로') : t('가까운 장비를 기준으로: 장비가 옮겨지면 따라가고, 팔레트면 실행할 때 지금 칸으로 갑니다')}">⌖</button>
+              <button class="icon-mini" data-act="goto" title="${t('이 지점으로 이동')}">→</button>
+              <button class="icon-mini" data-act="retouch" title="${t('현재 자세로 다시 지정')}">⟳</button>
+              <button class="icon-mini" data-act="delete" title="${t('삭제')}">✕</button>
             </span>
             ${p.frame ? this.frameLine(p) : ''}
-            ${circular && i === ui.cursor ? `<div class="pslot"><span>경유점</span> <button class="icon-mini" data-act="goto-via" title="경유점으로 이동">→</button><button class="icon-mini" data-act="retouch-via" title="현재 자세를 경유점으로">⟳</button></div>` : ''}
-            ${i === ui.cursor ? `<div class="pslot"><span>블렌드</span> <input class="pblend-in num" type="number" data-opt="blend" value="${Math.round((p.blend || 0) * 1000)}" min="0" max="500" step="10" aria-label="블렌드 반경"> mm <span class="muted">${points[i + 1]?.type === 'move' ? '0이면 멈춤' : '다음이 동작이라 멈춤'}</span></div>` : ''}
+            ${circular && i === ui.cursor ? `<div class="pslot"><span>${t('경유점')}</span> <button class="icon-mini" data-act="goto-via" title="${t('경유점으로 이동')}">→</button><button class="icon-mini" data-act="retouch-via" title="${t('현재 자세를 경유점으로')}">⟳</button></div>` : ''}
+            ${i === ui.cursor ? `<div class="pslot"><span>${t('블렌드')}</span> <input class="pblend-in num" type="number" data-opt="blend" value="${Math.round((p.blend || 0) * 1000)}" min="0" max="500" step="10" aria-label="${t('블렌드 반경')}"> mm <span class="muted">${points[i + 1]?.type === 'move' ? t('0이면 멈춤') : t('다음이 동작이라 멈춤')}</span></div>` : ''}
             ${problems(p.move)}
           </li>`;
       });
@@ -676,7 +679,7 @@ export class RobotPanel {
         rows.push(`
           <li class="point back${program.back.problems.length ? ' bad' : ''}">
             <span class="pidx num">↩</span>
-            <span class="pname muted">${escapeHtml(moves[0].name)}(으)로 복귀 · ${moves[0].kind === 'linear' ? 'L' : 'J'}</span>
+            <span class="pname muted">${escapeHtml(t('{name}(으)로 복귀 · {k}', { name: tr(moves[0].name), k: moves[0].kind === 'linear' ? 'L' : 'J' }))}</span>
             <span class="ptime num">${seconds(program.back.duration)}</span>
             ${problems(program.back)}
           </li>`);
@@ -692,7 +695,7 @@ export class RobotPanel {
     const { escapeHtml } = this.ctx;
     const pick = (field, options, value) =>
       `<select data-field="${field}">${options
-        .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+        .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(tr(label))}</option>`)
         .join('')}</select>`;
     const grippers = (r ? this.grippersOf(r) : []).map((g) => [g.object, this.ctx.records.get(g.object)?.name ?? g.name]);
     // Machines take commands; a conveyor's sensor is waited on too.
@@ -700,42 +703,42 @@ export class RobotPanel {
     const sensed = this.cell.components.filter((c) => c.kind in SIGNALS_OF).map((c) => [c.object, c.name]);
     const kind = this.cell.components.find((c) => c.object === step.machine)?.kind ?? 'cnc';
     // One that has gone from the cell still shows by its name.
-    const keep = (list, uid, name) => (list.some(([v]) => v === uid) ? list : [[uid, `${name} (없음)`], ...list]);
+    const keep = (list, uid, name) => (list.some(([v]) => v === uid) ? list : [[uid, t('{name} (없음)', { name: tr(name) })], ...list]);
     let icon = '';
     let body = '';
     switch (step.type) {
       case 'grip':
       case 'release':
-        icon = step.type === 'grip' ? '잡기' : '놓기';
+        icon = step.type === 'grip' ? t('잡기') : t('놓기');
         body = pick('gripper', keep(grippers, step.gripper, step.gripper_name), step.gripper);
         break;
       case 'command':
-        icon = '명령';
+        icon = t('명령');
         body = pick('machine', keep(machines, step.machine, step.machine_name), step.machine) + pick('command', COMMANDS_OF[kind] ?? COMMANDS, step.command);
         break;
       case 'wait':
-        icon = '대기';
+        icon = t('대기');
         body = pick('machine', keep(sensed, step.machine, step.machine_name), step.machine) + pick('signal', SIGNALS_OF[kind] ?? SIGNALS, step.signal);
         break;
       case 'delay':
-        icon = '대기';
+        icon = t('대기');
         body = `<input class="pspeed num" type="number" data-field="seconds" value="${step.seconds}" min="0" step="0.5"><span class="unit">s</span>`;
         break;
       case 'next':
-        icon = '칸';
-        body = pick('pallet', keep(this.pallets(), step.pallet, step.pallet_name), step.pallet) + '<span class="unit">다음 칸</span>';
+        icon = t('칸');
+        body = pick('pallet', keep(this.pallets(), step.pallet, step.pallet_name), step.pallet) + `<span class="unit">${t('다음 칸')}</span>`;
         break;
       case 'call': {
-        icon = '호출';
+        icon = t('호출');
         const program = this.programs[r?.root];
         const others = (program?.routines ?? []).filter((n, i) => i !== program.active).map((n) => [n, n]);
         body =
           pick('routine', keep(others, step.routine, step.routine), step.routine) +
-          `<input class="pspeed num" type="number" data-field="times" value="${step.times}" min="1" max="1000" step="1" aria-label="반복 횟수"><span class="unit">회</span>`;
+          `<input class="pspeed num" type="number" data-field="times" value="${step.times}" min="1" max="1000" step="1" aria-label="${t('반복 횟수')}"><span class="unit">${t('회')}</span>`;
         break;
       }
       case 'drive':
-        icon = '주행';
+        icon = t('주행');
         body =
           pick('amr', keep(this.ofKind('amr'), step.amr, step.amr_name), step.amr) +
           '<span class="unit">→</span>' +
@@ -746,36 +749,36 @@ export class RobotPanel {
         icon = 'PLC';
         const list = this.plcSignals(step.type === 'signal_wait');
         body =
-          `<span class="unit">${step.type === 'signal_set' ? '쓰기' : '대기'}</span>` +
+          `<span class="unit">${step.type === 'signal_set' ? t('쓰기') : t('대기')}</span>` +
           pick('name', keep(list, step.name, step.name), step.name) +
-          `<span class="unit">=</span><input class="pspeed num" type="number" data-field="value" value="${step.value}" step="1" aria-label="값">`;
+          `<span class="unit">=</span><input class="pspeed num" type="number" data-field="value" value="${step.value}" step="1" aria-label="${t('값')}">`;
         break;
       }
       case 'var_set':
-        icon = '변수';
+        icon = t('변수');
         body =
-          `<input class="var-name" type="text" data-field="name" value="${escapeHtml(step.name)}" maxlength="16" spellcheck="false" aria-label="변수 이름">` +
+          `<input class="var-name" type="text" data-field="name" value="${escapeHtml(step.name)}" maxlength="16" spellcheck="false" aria-label="${t('변수 이름')}">` +
           pick('add', [['false', '='], ['true', '+=']], String(!!step.add)) +
-          `<input class="pspeed num" type="number" data-field="value" value="${step.value}" step="1" aria-label="값">`;
+          `<input class="pspeed num" type="number" data-field="value" value="${step.value}" step="1" aria-label="${t('값')}">`;
         break;
       case 'if':
       case 'while':
-        icon = step.type === 'if' ? '만약' : '반복';
+        icon = step.type === 'if' ? t('만약') : t('반복');
         body = this.condFields(step.cond, pick, keep, sensed);
         break;
       case 'else':
-        icon = '아니면';
-        body = '<span class="unit">조건이 아닐 때</span>';
+        icon = t('아니면');
+        body = `<span class="unit">${t('조건이 아닐 때')}</span>`;
         break;
       case 'end':
-        icon = '끝';
+        icon = t('끝');
         body = '';
         break;
       case 'turn':
-        icon = '회전';
+        icon = t('회전');
         body =
           pick('positioner', keep(this.ofKind('positioner'), step.positioner, step.positioner_name), step.positioner) +
-          `<input class="pspeed num" type="number" data-field="degrees" value="${Math.round(step.degrees * 10) / 10}" min="-360" max="360" step="15" aria-label="각도"><span class="unit">°</span>`;
+          `<input class="pspeed num" type="number" data-field="degrees" value="${Math.round(step.degrees * 10) / 10}" min="-360" max="360" step="15" aria-label="${t('각도')}"><span class="unit">°</span>`;
         break;
     }
     return `
@@ -783,7 +786,7 @@ export class RobotPanel {
             <span class="pidx num">${i + 1}</span>
             <span class="act-icon act-${step.type}">${icon}</span>
             <span class="act-body">${body}</span>
-            <span class="pacts"><button class="icon-mini" data-act="delete" title="삭제">✕</button></span>
+            <span class="pacts"><button class="icon-mini" data-act="delete" title="${t('삭제')}">✕</button></span>
           </li>`;
   }
 
@@ -791,7 +794,7 @@ export class RobotPanel {
   // signal, a variable — and against what.
   condFields(cond, pick, keep, sensed) {
     const { escapeHtml } = this.ctx;
-    const kinds = [['machine', '장비'], ['plc', 'PLC'], ['var', '변수']];
+    const kinds = [['machine', t('장비')], ['plc', 'PLC'], ['var', t('변수')]];
     let fields = '';
     if (cond.kind === 'machine') {
       const kind = this.cell.components.find((c) => c.object === cond.machine)?.kind ?? 'cnc';
@@ -801,12 +804,12 @@ export class RobotPanel {
     } else if (cond.kind === 'plc') {
       fields =
         pick('c_name', keep(this.plcSignals(true), cond.name, cond.name), cond.name) +
-        `<span class="unit">=</span><input class="pspeed num" type="number" data-field="c_value" value="${cond.value}" step="1" aria-label="값">`;
+        `<span class="unit">=</span><input class="pspeed num" type="number" data-field="c_value" value="${cond.value}" step="1" aria-label="${t('값')}">`;
     } else {
       fields =
-        `<input class="var-name" type="text" data-field="c_name" value="${escapeHtml(cond.name)}" maxlength="16" spellcheck="false" aria-label="변수 이름">` +
+        `<input class="var-name" type="text" data-field="c_name" value="${escapeHtml(cond.name)}" maxlength="16" spellcheck="false" aria-label="${t('변수 이름')}">` +
         pick('c_cmp', CMPS, cond.cmp) +
-        `<input class="pspeed num" type="number" data-field="c_value" value="${cond.value}" step="1" aria-label="값">`;
+        `<input class="pspeed num" type="number" data-field="c_value" value="${cond.value}" step="1" aria-label="${t('값')}">`;
     }
     return pick('c_kind', kinds, cond.kind) + fields;
   }
@@ -859,14 +862,14 @@ export class RobotPanel {
   frameLine(p) {
     const { escapeHtml } = this.ctx;
     const options = [
-      ['', '월드 (기준 없음)'],
+      ['', t('월드 (기준 없음)')],
       ...this.machines().map(([u, n]) => [`m:${u}`, n]),
-      ...this.pallets().map(([u, n]) => [`p:${u}`, `${n} · 칸마다`]),
+      ...this.pallets().map(([u, n]) => [`p:${u}`, t('{n} · 칸마다', { n })]),
     ];
     const value = p.pallet ? `p:${p.pallet}` : `m:${p.frame}`;
-    if (!options.some(([v]) => v === value)) options.push([value, `${p.frame_name || '?'} (없음)`]);
-    return `<div class="pslot"><span>⌖ 기준</span> <select data-opt="frame">${options
-      .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+    if (!options.some(([v]) => v === value)) options.push([value, t('{name} (없음)', { name: p.frame_name || '?' })]);
+    return `<div class="pslot"><span>${t('⌖ 기준')}</span> <select data-opt="frame">${options
+      .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(tr(label))}</option>`)
       .join('')}</select></div>`;
   }
 
@@ -880,26 +883,26 @@ export class RobotPanel {
     const machines = this.machines();
     const copy =
       span[1] > span[0] && machines.length > 1
-        ? `<select data-opt="copyto" aria-label="복제할 CNC"><option value="">CNC 골라 복제…</option>${machines
-            .map(([u, n]) => `<option value="${escapeHtml(u)}">${escapeHtml(n)}용으로 복제</option>`)
+        ? `<select data-opt="copyto" aria-label="${t('복제할 CNC')}"><option value="">${t('CNC 골라 복제…')}</option>${machines
+            .map(([u, n]) => `<option value="${escapeHtml(u)}">${escapeHtml(t('{n}용으로 복제', { n: tr(n) }))}</option>`)
             .join('')}</select>`
         : span[1] > span[0]
           ? ''
-          : '<span class="muted">Shift+클릭으로 구간 선택</span>';
+          : `<span class="muted">${t('Shift+클릭으로 구간 선택')}</span>`;
     // Several at once: their moves' speed and blend, set together.
     const many =
       span[1] > span[0]
         ? `<span class="many-edit">
-            <label title="구간의 MoveJ 속도를 한꺼번에">J<input type="number" class="num" data-many="joint" min="1" max="100" step="5" placeholder="%"></label>
-            <label title="구간의 MoveL·MoveC 속도를 한꺼번에">L<input type="number" class="num" data-many="linear" min="1" max="5000" step="10" placeholder="mm/s"></label>
-            <label title="구간 이동의 블렌드 반경을 한꺼번에">R<input type="number" class="num" data-many="blend" min="0" max="200" step="5" placeholder="mm"></label>
+            <label title="${t('구간의 MoveJ 속도를 한꺼번에')}">J<input type="number" class="num" data-many="joint" min="1" max="100" step="5" placeholder="%"></label>
+            <label title="${t('구간의 MoveL·MoveC 속도를 한꺼번에')}">L<input type="number" class="num" data-many="linear" min="1" max="5000" step="10" placeholder="mm/s"></label>
+            <label title="${t('구간 이동의 블렌드 반경을 한꺼번에')}">R<input type="number" class="num" data-many="blend" min="0" max="200" step="5" placeholder="mm"></label>
           </span>`
         : '';
-    bar.innerHTML = `<span>${span[0] === span[1] ? `${span[0] + 1}단계` : `${span[0] + 1}–${span[1] + 1}단계`}</span>
-      <button class="icon-mini" data-act="shift-up" title="한 칸 위로 (끌어서 옮길 수도 있습니다)">↑</button>
-      <button class="icon-mini" data-act="shift-down" title="한 칸 아래로">↓</button>
-      <button class="icon-mini" data-act="steps-copy" title="복사 (Ctrl+C)">⧉</button>
-      <button class="icon-mini" data-act="steps-paste" title="뒤에 붙여넣기 (Ctrl+V). 다른 로봇의 프로그램에도 붙일 수 있습니다">⎘</button>
+    bar.innerHTML = `<span>${span[0] === span[1] ? t('{n}단계', { n: span[0] + 1 }) : t('{a}–{b}단계', { a: span[0] + 1, b: span[1] + 1 })}</span>
+      <button class="icon-mini" data-act="shift-up" title="${t('한 칸 위로 (끌어서 옮길 수도 있습니다)')}">↑</button>
+      <button class="icon-mini" data-act="shift-down" title="${t('한 칸 아래로')}">↓</button>
+      <button class="icon-mini" data-act="steps-copy" title="${t('복사 (Ctrl+C)')}">⧉</button>
+      <button class="icon-mini" data-act="steps-paste" title="${t('뒤에 붙여넣기 (Ctrl+V). 다른 로봇의 프로그램에도 붙일 수 있습니다')}">⎘</button>
       ${copy}${many}`;
   }
 
@@ -915,7 +918,7 @@ export class RobotPanel {
     const span = this.spanOf(r);
     if (!span) return false;
     this.programOp(r, { op: 'steps_copy', index: span[0], to: span[1] }, (a) =>
-      this.ctx.toast(`${a.copied}단계를 복사했습니다 (Ctrl+V로 붙여넣기)`),
+      this.ctx.toast(t('{n}단계를 복사했습니다 (Ctrl+V로 붙여넣기)', { n: a.copied })),
     );
     return true;
   }
@@ -929,7 +932,7 @@ export class RobotPanel {
       const first = after == null ? (this.programs[r.root]?.steps.length ?? 0) : after + 1;
       ui.cursor = first + a.pasted - 1;
       ui.anchor = a.pasted > 1 ? first : null;
-      this.ctx.toast(`${a.pasted}단계를 붙여 넣었습니다`);
+      this.ctx.toast(t('{n}단계를 붙여 넣었습니다', { n: a.pasted }));
       this.renderPrograms();
     });
   }
@@ -975,10 +978,10 @@ export class RobotPanel {
 
   // The cell's pallets, by identity and name.
   pallets() {
-    const side = { infeed: '투입', outfeed: '배출' };
+    const side = { infeed: t('투입'), outfeed: t('배출') };
     return this.cell.components
       .filter((c) => side[c.kind])
-      .map((c) => [c.object, `${side[c.kind]} ${c.name}`]);
+      .map((c) => [c.object, `${side[c.kind]} ${tr(c.name)}`]);
   }
 
   // The pallet a point stands over: the one with a place nearest it, seen
@@ -1101,10 +1104,10 @@ export class RobotPanel {
     this.queue = this.queue.then(async () => {
       try {
         const answer = await post(body);
-        if (!answer.ok) this.ctx.toast(answer.error || '요청을 처리하지 못했습니다');
+        if (!answer.ok) this.ctx.toast(tr(answer.error) || t('요청을 처리하지 못했습니다'));
         else then?.(answer);
       } catch (err) {
-        this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+        this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {e}', { e: err.message }));
       }
     });
   }
@@ -1118,10 +1121,10 @@ export class RobotPanel {
       for (const j of r.joints) {
         const row = section.querySelector(`.joint[data-uid="${j.uid}"]`);
         if (!row) continue;
-        row.querySelector('.jval').textContent = j.moves ? jointValue(j) + (j.out_of_limits ? ' ⚠' : '') : '고정';
+        row.querySelector('.jval').textContent = j.moves ? jointValue(j) + (j.out_of_limits ? ' ⚠' : '') : t('고정');
         row.classList.toggle('bad', j.out_of_limits);
         row.classList.toggle('selected', j.uid === selected);
-        row.title = j.out_of_limits ? '한계를 벗어났습니다' : '';
+        row.title = j.out_of_limits ? t('한계를 벗어났습니다') : '';
         const track = row.querySelector('.track');
         if (!track || track.dataset.dragging) continue;
         const { limited, lo, hi, a, b } = spanOf(j);
@@ -1145,7 +1148,7 @@ export class RobotPanel {
       for (const [k, text] of Object.entries(v)) box.querySelector(`[data-v="${k}"]`).textContent = text;
       for (const row of box.querySelectorAll('.grip-row')) {
         const g = this.cell.components.find((c) => c.object === row.dataset.gripper);
-        row.querySelector('.grip-state').textContent = g?.holding ? '부품 잡음' : '비어 있음';
+        row.querySelector('.grip-state').textContent = g?.holding ? t('부품 잡음') : t('비어 있음');
         row.classList.toggle('holding', !!g?.holding);
       }
       const ui = this.uiOf(r);
@@ -1157,8 +1160,8 @@ export class RobotPanel {
       const d = r.dexterity;
       sing.hidden = !d?.near;
       if (d?.near) {
-        sing.textContent = `⚠ 특이점 근접: ${d.joints.join('·')} 관절이 급하게 돌 수 있음`;
-        sing.title = `자코비안 최소 특이값 ${(d.least * 1000).toFixed(1)} mm/rad (경고 기준 10 mm/rad)`;
+        sing.textContent = t('⚠ 특이점 근접: {joints} 관절이 급하게 돌 수 있음', { joints: d.joints.map(tr).join('·') });
+        sing.title = t('자코비안 최소 특이값 {v} mm/rad (경고 기준 10 mm/rad)', { v: (d.least * 1000).toFixed(1) });
       }
       if (this.reach?.root === r.root) this.placeReach(r);
       if (this.handleRoot === r.root && !this.dragging) {
@@ -1192,11 +1195,11 @@ export class RobotPanel {
     try {
       answer = await post(request);
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {e}', { e: err.message }));
       return;
     }
     if (!answer.ok) {
-      this.ctx.toast(answer.error || '모서리를 찾지 못했습니다');
+      this.ctx.toast(tr(answer.error) || t('모서리를 찾지 못했습니다'));
       return;
     }
     if (this.edge.line) this.dropEdgeLine();
@@ -1209,11 +1212,11 @@ export class RobotPanel {
     const bar = this.host.querySelector(`.robot[data-root="${r.root}"] .edge-bar`);
     bar.hidden = false;
     bar.innerHTML = `
-      <span class="edge-what">모서리 ${(answer.length * 1000).toFixed(0)} mm${answer.closed ? ' (닫힘)' : ''}</span>
-      <label>속도 <input class="pspeed num" type="number" data-edge="speed" value="50" min="1" max="1000" step="5"><span class="unit">mm/s</span></label>
-      <label>접근 <input class="pspeed num" type="number" data-edge="approach" value="50" min="0" max="500" step="10"><span class="unit">mm</span></label>
-      <button class="text-btn" data-act="edge-add">프로그램에 추가</button>
-      <button class="text-btn quiet" data-act="edge-cancel">취소</button>`;
+      <span class="edge-what">${t('모서리 {n} mm', { n: (answer.length * 1000).toFixed(0) })}${answer.closed ? t(' (닫힘)') : ''}</span>
+      <label>${t('속도')} <input class="pspeed num" type="number" data-edge="speed" value="50" min="1" max="1000" step="5"><span class="unit">mm/s</span></label>
+      <label>${t('접근')} <input class="pspeed num" type="number" data-edge="approach" value="50" min="0" max="500" step="10"><span class="unit">mm</span></label>
+      <button class="text-btn" data-act="edge-add">${t('프로그램에 추가')}</button>
+      <button class="text-btn quiet" data-act="edge-cancel">${t('취소')}</button>`;
   }
 
   dropEdgeLine() {
@@ -1248,11 +1251,11 @@ export class RobotPanel {
     try {
       answer = await post({ op: 'reach', robot: r.root });
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {e}', { e: err.message }));
       return;
     }
     if (!answer.ok) {
-      this.ctx.toast(answer.error || '도달 범위를 구하지 못했습니다');
+      this.ctx.toast(tr(answer.error) || t('도달 범위를 구하지 못했습니다'));
       return;
     }
     const points = answer.section.map(([rr, z]) => new THREE.Vector2(rr, z));
@@ -1282,7 +1285,7 @@ export class RobotPanel {
     const offset = root ? new THREE.Matrix4().fromArray(root.matrix).invert().multiply(base) : new THREE.Matrix4();
     this.reach = { root: r.root, group, offset };
     this.placeReach(r);
-    this.ctx.toast(`도달 범위: 플랜지 최대 ${(answer.farthest * 1000).toFixed(0)} mm`);
+    this.ctx.toast(t('도달 범위: 플랜지 최대 {n} mm', { n: (answer.farthest * 1000).toFixed(0) }));
     this.host
       .querySelector(`.robot[data-root="${r.root}"] [data-act="reach"]`)
       ?.setAttribute('aria-pressed', 'true');
@@ -1347,20 +1350,20 @@ export class RobotPanel {
       const answer = await post(request);
       const ui = this.uiOf(r);
       if (!answer.ok) {
-        this.ctx.toast(answer.error || '요청을 처리하지 못했습니다');
+        this.ctx.toast(tr(answer.error) || t('요청을 처리하지 못했습니다'));
       } else if (request.op === 'ik') {
         ui.bad = !answer.reached;
         ui.status = answer.reached
-          ? '도달'
-          : `도달하지 못함 · 위치 ${mm(answer.position_error)} mm` +
-            (request.rotation ? ` · 자세 ${deg(answer.rotation_error)}°` : '');
+          ? t('도달')
+          : t('도달하지 못함 · 위치 {n} mm', { n: mm(answer.position_error) }) +
+            (request.rotation ? t(' · 자세 {n}°', { n: deg(answer.rotation_error) }) : '');
       } else if (request.op === 'release') {
         ui.status = '';
         ui.bad = false;
       }
       this.refresh();
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {e}', { e: err.message }));
     }
     lane.busy = false;
     if (lane.next) {
@@ -1583,7 +1586,7 @@ export class RobotPanel {
         this.stopEdge();
         this.edge = { root: r.root, picked: null, line: null };
         this.setEdgeButton(r.root, true);
-        this.ctx.toast('부품의 모서리 가까이를 누르세요');
+        this.ctx.toast(t('부품의 모서리 가까이를 누르세요'));
       }
     } else if (act === 'edge-cancel') {
       this.stopEdge();
@@ -1600,8 +1603,8 @@ export class RobotPanel {
           if (ui.cursor != null) ui.cursor += a.added;
           this.ctx.toast(
             a.missed
-              ? `모서리 경로 ${a.added}개 지점을 넣었습니다. ${a.missed}개는 닿지 않습니다`
-              : `모서리 경로 ${a.added}개 지점을 넣었습니다`,
+              ? t('모서리 경로 {n}개 지점을 넣었습니다. {m}개는 닿지 않습니다', { n: a.added, m: a.missed })
+              : t('모서리 경로 {n}개 지점을 넣었습니다', { n: a.added }),
           );
           this.stopEdge();
         },
@@ -1615,7 +1618,7 @@ export class RobotPanel {
     } else if (act === 'teach') {
       const kind = e.target.closest('[data-kind]').dataset.kind;
       this.programOp(r, { op: 'teach', kind, after: ui.cursor ?? undefined }, (a) => {
-        if (a.via) return this.ctx.toast('경유점을 저장했습니다. 끝 자세로 옮긴 뒤 + MoveC를 다시 누르세요');
+        if (a.via) return this.ctx.toast(t('경유점을 저장했습니다. 끝 자세로 옮긴 뒤 + MoveC를 다시 누르세요'));
         if (ui.cursor != null) ui.cursor += 1;
       });
     } else if (act === 'follow') {
@@ -1624,7 +1627,7 @@ export class RobotPanel {
         this.send(r, { op: 'follow', robot: r.root, host: '' });
       } else {
         const host = section.querySelector('[data-opt="follow-host"]').value.trim();
-        if (!host) return this.ctx.toast('실제 로봇의 IP 주소를 넣으세요');
+        if (!host) return this.ctx.toast(t('실제 로봇의 IP 주소를 넣으세요'));
         try {
           localStorage.setItem(`kynex.follow.${r.root}`, host);
         } catch {}
@@ -1642,24 +1645,24 @@ export class RobotPanel {
         link.download = answer.file;
         link.click();
         setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-        this.ctx.toast(`${answer.file}을(를) 내려받았습니다`);
+        this.ctx.toast(t('{file}을(를) 내려받았습니다', { file: answer.file }));
       });
     } else if (act === 'clear') {
-      if (confirm('이 로봇의 프로그램 지점을 모두 지울까요?')) this.programOp(r, { op: 'clear' });
+      if (confirm(t('이 로봇의 프로그램 지점을 모두 지울까요?'))) this.programOp(r, { op: 'clear' });
     } else if (act === 'routine-new') {
-      const name = prompt('새 서브루틴 이름', '');
+      const name = prompt(t('새 서브루틴 이름'), '');
       if (name === null) return;
       ui.cursor = null;
       ui.anchor = null;
       this.programOp(r, { op: 'routine_new', name });
     } else if (act === 'routine-rename') {
       const program = this.programs[r.root];
-      const name = prompt('프로그램 이름', program?.routines?.[program.active] ?? '');
+      const name = prompt(t('프로그램 이름'), program?.routines?.[program.active] ?? '');
       if (name) this.programOp(r, { op: 'routine_rename', name });
     } else if (act === 'routine-delete') {
       const program = this.programs[r.root];
       const name = program?.routines?.[program.active];
-      if (name && confirm(`서브루틴 ${name}을(를) 지울까요? 이것을 부르는 단계는 실행할 때 알람이 됩니다.`)) {
+      if (name && confirm(t('서브루틴 {name}을(를) 지울까요? 이것을 부르는 단계는 실행할 때 알람이 됩니다.', { name: tr(name) }))) {
         ui.cursor = null;
         ui.anchor = null;
         this.programOp(r, { op: 'routine_delete' });
@@ -1686,7 +1689,7 @@ export class RobotPanel {
         const machine = pallet ? null : this.machineNear(point.at);
         if (pallet) this.programOp(r, { op: 'edit', index, pallet });
         else if (machine) this.programOp(r, { op: 'edit', index, frame: machine });
-        else this.ctx.toast('이 지점 가까이에 CNC나 팔레트가 없습니다. 아래 줄에서 직접 고를 수도 있습니다');
+        else this.ctx.toast(t('이 지점 가까이에 CNC나 팔레트가 없습니다. 아래 줄에서 직접 고를 수도 있습니다'));
       }
     } else if ((act === 'goto-via' || act === 'retouch-via') && index != null) {
       this.programOp(r, { op: act === 'goto-via' ? 'goto' : 'retouch', index, via: true });
@@ -1740,10 +1743,10 @@ export class RobotPanel {
       if (!step) {
         return this.ctx.toast(
           type === 'call'
-            ? '부를 서브루틴이 없습니다. 프로그램 옆 + 로 서브루틴을 만드세요'
+            ? t('부를 서브루틴이 없습니다. 프로그램 옆 + 로 서브루틴을 만드세요')
             : type.startsWith('signal')
-              ? `${type === 'signal_set' ? 'KYNEX → PLC' : 'PLC → KYNEX'} 방향의 연결 없는 신호가 없습니다. 툴바의 PLC에서 신호를 만드세요`
-              : '이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요',
+              ? t('{dir} 방향의 연결 없는 신호가 없습니다. 툴바의 PLC에서 신호를 만드세요', { dir: type === 'signal_set' ? 'KYNEX → PLC' : 'PLC → KYNEX' })
+              : t('이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요'),
         );
       }
       this.programOp(r, { op: 'add', step, after: ui.cursor ?? undefined });
@@ -1780,13 +1783,13 @@ export class RobotPanel {
         many === 'blend'
           ? { op: 'edit', index: span[0], to: span[1], blend: v / 1000 }
           : { op: 'edit', index: span[0], to: span[1], only: many, speed: many === 'joint' ? v / 100 : v / 1000 };
-      this.programOp(r, request, (a) => this.ctx.toast(`${a.edited}개 이동을 바꿨습니다`));
+      this.programOp(r, request, (a) => this.ctx.toast(t('{n}개 이동을 바꿨습니다', { n: a.edited })));
       return;
     }
     if (opt === 'copyto' && e.target.value) {
       const [from, to] = [Math.min(ui.anchor, ui.cursor), Math.max(ui.anchor, ui.cursor)];
       this.programOp(r, { op: 'copy', from, to, machine: e.target.value }, (a) => {
-        this.ctx.toast(`${a.added}단계를 복제했습니다. 복제한 지점은 그 CNC를 기준으로 합니다`);
+        this.ctx.toast(t('{n}단계를 복제했습니다. 복제한 지점은 그 CNC를 기준으로 합니다', { n: a.added }));
         ui.anchor = null;
         ui.cursor = to + a.added;
         this.renderPrograms();

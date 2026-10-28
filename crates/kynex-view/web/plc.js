@@ -2,6 +2,10 @@
 // link is going (the `plc` event). The cell's machines are wired to its
 // coils in the inspector (cell.js).
 
+import { tFor, tr } from './i18n.js';
+
+const t = tFor('panels');
+
 async function post(request) {
   const response = await fetch('/robot', {
     method: 'POST',
@@ -34,7 +38,7 @@ export class PlcPanel {
     this.button.addEventListener('click', () => this.send(!this.state?.settings?.on));
     // The server certificate trusted forgotten: the next one met is.
     document.getElementById('plc-forget').addEventListener('click', () => {
-      if (confirm('믿던 서버 인증서를 잊을까요? 다음에 연결하는 서버의 인증서를 믿게 됩니다.')) this.send(this.state?.settings?.on ?? false, { trust: '' });
+      if (confirm(t('믿던 서버 인증서를 잊을까요? 다음에 연결하는 서버의 인증서를 믿게 됩니다.'))) this.send(this.state?.settings?.on ?? false, { trust: '' });
     });
     // OPC UA's usual port in place of Modbus's, as the protocol changes.
     this.protocol.addEventListener('change', () => {
@@ -62,8 +66,8 @@ export class PlcPanel {
   async send(on, more = {}) {
     const port = Number(this.port.value);
     const unit = Number(this.unit.value);
-    if (!(Number.isInteger(port) && port >= 1 && port <= 65535)) return this.ctx.toast('포트는 1–65535입니다');
-    if (!(Number.isInteger(unit) && unit >= 0 && unit <= 255)) return this.ctx.toast('유닛은 0–255입니다');
+    if (!(Number.isInteger(port) && port >= 1 && port <= 65535)) return this.ctx.toast(t('포트는 1–65535입니다'));
+    if (!(Number.isInteger(unit) && unit >= 0 && unit <= 255)) return this.ctx.toast(t('유닛은 0–255입니다'));
     try {
       const answer = await post({
         op: 'plc_link',
@@ -82,9 +86,9 @@ export class PlcPanel {
         ...more,
       });
       this.password.value = '';
-      if (!answer.ok) this.ctx.toast(answer.error || 'PLC 설정을 바꾸지 못했습니다');
+      if (!answer.ok) this.ctx.toast(tr(answer.error) || t('PLC 설정을 바꾸지 못했습니다'));
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
     }
   }
 
@@ -107,24 +111,24 @@ export class PlcPanel {
       if (document.activeElement !== input) input.value = v;
     }
     this.showFields();
-    this.button.textContent = s.on ? '끊기' : '연결';
-    let text = '연결 안 됨';
+    this.button.textContent = s.on ? t('끊기') : t('연결');
+    let text = t('연결 안 됨');
     let cls = '';
     if (s.on && state.connected) {
-      text = `연결됨 · 교환 ${state.exchanges}회`;
+      text = t('연결됨 · 교환 {n}회', { n: state.exchanges });
       cls = 'ok';
     } else if (s.on) {
-      text = state.error ? `연결 중… ${state.error}` : '연결 중…';
+      text = state.error ? t('연결 중… {error}', { error: tr(state.error) }) : t('연결 중…');
       cls = 'bad';
     }
-    if (state.problems?.length) text += ` · ${state.problems.join(', ')}`;
-    if (state.warning) text += ` · ${state.warning}`;
-    if (s.on && state.drops) text += ` · 끊김 ${state.drops}회 (${state.dropped})`;
+    if (state.problems?.length) text += ` · ${state.problems.map(tr).join(', ')}`;
+    if (state.warning) text += ` · ${tr(state.warning)}`;
+    if (s.on && state.drops) text += t(' · 끊김 {n}회 ({when})', { n: state.drops, when: tr(state.dropped) });
     this.status.textContent = text;
     this.status.className = `plc-status ${cls}`;
-    this.password.placeholder = state.has_password ? '기억함 (바꿀 때만 입력)' : '';
-    document.getElementById('plc-trust').textContent = s.trust || (state.server_thumbprint ?? '아직 없음 (처음 연결할 때 믿습니다)');
-    document.getElementById('plc-client').textContent = state.client_thumbprint ?? '보안 연결 때 만듭니다';
+    this.password.placeholder = state.has_password ? t('기억함 (바꿀 때만 입력)') : '';
+    document.getElementById('plc-trust').textContent = s.trust || (state.server_thumbprint ?? t('아직 없음 (처음 연결할 때 믿습니다)'));
+    document.getElementById('plc-client').textContent = state.client_thumbprint ?? t('보안 연결 때 만듭니다');
     document.getElementById('plc-pki').textContent = state.pki ? `· ${state.pki}` : '';
     this.dot.hidden = !s.on;
     this.dot.classList.toggle('ok', s.on && state.connected);
@@ -141,19 +145,19 @@ export class PlcPanel {
 
   // What a signal can be tied to, by its direction: [value, label].
   links(input) {
-    const robots = this.ctx.robots().map((r) => [r.root, r.name]);
+    const robots = this.ctx.robots().map((r) => [r.root, tr(r.name)]);
     const machines = (this.cell?.components ?? []).filter((c) => c.kind === 'cnc' || c.kind === 'molder');
     return input
       ? [
-          ['', '없음 (프로그램이 대기)'],
-          ...robots.map(([u, n]) => [`start:${u}`, `${n} 프로그램 시작`]),
-          ...robots.map(([u, n]) => [`stop:${u}`, `${n} 프로그램 정지`]),
+          ['', t('없음 (프로그램이 대기)')],
+          ...robots.map(([u, n]) => [`start:${u}`, t('{name} 프로그램 시작', { name: n })]),
+          ...robots.map(([u, n]) => [`stop:${u}`, t('{name} 프로그램 정지', { name: n })]),
         ]
       : [
-          ['', '없음 (프로그램이 씀)'],
-          ...robots.map(([u, n]) => [`running:${u}`, `${n} 실행 중`]),
-          ...robots.map(([u, n]) => [`done:${u}`, `${n} 끝남`]),
-          ...machines.map((c) => [`cycles:${c.object}`, `${c.name} 가공 횟수`]),
+          ['', t('없음 (프로그램이 씀)')],
+          ...robots.map(([u, n]) => [`running:${u}`, t('{name} 실행 중', { name: n })]),
+          ...robots.map(([u, n]) => [`done:${u}`, t('{name} 끝남', { name: n })]),
+          ...machines.map((c) => [`cycles:${c.object}`, t('{name} 가공 횟수', { name: tr(c.name) })]),
         ];
   }
 
@@ -161,21 +165,21 @@ export class PlcPanel {
     const { escapeHtml } = this.ctx;
     const options = (list, value) =>
       list.map(([v, label]) => `<option value="${escapeHtml(v)}"${v === value ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
-    const head = '<div class="plc-row head"><span>이름</span><span>방향</span><span>형식</span><span>PLC 주소</span><span>연결</span><span>값</span><span></span></div>';
+    const head = `<div class="plc-row head"><span>${t('이름')}</span><span>${t('방향')}</span><span>${t('형식')}</span><span>${t('PLC 주소')}</span><span>${t('연결')}</span><span>${t('값')}</span><span></span></div>`;
     const rows = signals.map((s, i) => {
       const links = this.links(s.input);
-      if (!links.some(([v]) => v === s.link)) links.push([s.link, `${s.link} (없음)`]);
+      if (!links.some(([v]) => v === s.link)) links.push([s.link, t('{link} (없음)', { link: s.link })]);
       return `<div class="plc-row" data-i="${i}">
         <input data-k="name" value="${escapeHtml(s.name)}" maxlength="40" spellcheck="false">
         <select data-k="input">${options([['1', 'PLC → KYNEX'], ['0', 'KYNEX → PLC']], s.input ? '1' : '0')}</select>
-        <select data-k="number">${options([['0', '비트'], ['1', '숫자']], s.number ? '1' : '0')}</select>
-        <input data-k="address" value="${escapeHtml(s.address)}" placeholder="코일·레지스터 번호 또는 노드 ID" spellcheck="false">
+        <select data-k="number">${options([['0', t('비트')], ['1', t('숫자')]], s.number ? '1' : '0')}</select>
+        <input data-k="address" value="${escapeHtml(s.address)}" placeholder="${escapeHtml(t('코일·레지스터 번호 또는 노드 ID'))}" spellcheck="false">
         <select data-k="link">${options(links, s.link)}</select>
         <span class="plc-value" data-value="${escapeHtml(s.name)}">${s.value ?? ''}</span>
-        <button class="icon-mini" data-del="${i}" title="이 신호 지우기">✕</button>
+        <button class="icon-mini" data-del="${i}" title="${escapeHtml(t('이 신호 지우기'))}">✕</button>
       </div>`;
     });
-    this.table.innerHTML = signals.length ? head + rows.join('') : '<span class="muted">신호가 없습니다</span>';
+    this.table.innerHTML = signals.length ? head + rows.join('') : `<span class="muted">${t('신호가 없습니다')}</span>`;
   }
 
   // Values as KYNEX has them, into the rows being edited.
@@ -205,12 +209,12 @@ export class PlcPanel {
   async applySignals() {
     try {
       const answer = await post({ op: 'signals', signals: this.readSignals() });
-      if (!answer.ok) return this.ctx.toast(answer.error || '신호를 바꾸지 못했습니다');
+      if (!answer.ok) return this.ctx.toast(tr(answer.error) || t('신호를 바꾸지 못했습니다'));
       this.draft = null;
       this.apply.disabled = true;
-      this.ctx.toast('PLC 신호를 적용했습니다');
+      this.ctx.toast(t('PLC 신호를 적용했습니다'));
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
     }
   }
 
@@ -220,8 +224,8 @@ export class PlcPanel {
     document.getElementById('plc-signal-add').addEventListener('click', () => {
       const signals = this.draft ?? this.readSignals();
       let n = signals.length + 1;
-      while (signals.some((s) => s.name === `신호${n}`)) n += 1;
-      this.edited([...signals, { name: `신호${n}`, input: true, number: false, address: '', link: '' }], true);
+      while (signals.some((s) => s.name === t('신호{n}', { n }))) n += 1;
+      this.edited([...signals, { name: t('신호{n}', { n }), input: true, number: false, address: '', link: '' }], true);
     });
     this.apply.addEventListener('click', () => this.applySignals());
     this.table.addEventListener('click', (e) => {

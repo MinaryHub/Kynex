@@ -6,6 +6,10 @@
 // `data-param`, its id —, by its role where the same name means something
 // else for another, or else by its own title.
 
+import { tFor, getLang } from './i18n.js';
+
+const t = tFor('panels');
+
 // By role and setting first (`station.speed`), then by setting alone.
 const HELP = {
   // ---- placing --------------------------------------------------------------
@@ -179,7 +183,8 @@ function nameOf(label) {
 }
 
 function explain(label) {
-  for (const k of keysOf(label)) if (HELP[k]) return HELP[k];
+  // Shown in the language chosen; looked up by what it sets.
+  for (const k of keysOf(label)) if (HELP[k]) return HELP[k].map((x) => t(x));
   const title = label.getAttribute('title') || label.querySelector('[title]')?.getAttribute('title');
   if (title) return [nameOf(label), title];
   return null;
@@ -199,7 +204,7 @@ function openCard(button, label) {
   closeCard();
   if (was) return;
   const said = explain(label);
-  const [title, text, tip] = said ?? [nameOf(label), '이 값에 대한 설명이 아직 없습니다.'];
+  const [title, text, tip] = said ?? [nameOf(label), t('이 값에 대한 설명이 아직 없습니다.')];
   card = document.createElement('div');
   card.className = 'help-card';
   card.setAttribute('role', 'dialog');
@@ -237,7 +242,7 @@ function decorate(label) {
   button.type = 'button';
   button.className = 'help-q';
   button.textContent = '?';
-  button.setAttribute('aria-label', '설명');
+  button.setAttribute('aria-label', t('설명'));
   button.tabIndex = -1;
   label.dataset.helpId ||= `h${++ids}`;
   // The name in a span of its own, so the row can be laid out as name, ?,
@@ -251,7 +256,8 @@ function decorate(label) {
     for (const n of [...label.childNodes]) if (n.nodeType === Node.TEXT_NODE) n.remove();
     label.prepend(span);
   }
-  label.classList.toggle('help-long', name.length > 2);
+  // English names are longer than Korean ones of the same weight.
+  label.classList.toggle('help-long', name.length > (getLang() === 'en' ? 8 : 2));
   // Right after the name, before its fields.
   const field = [...label.children].find((n) => n.matches('input, select, textarea'));
   label.insertBefore(button, field ?? null);

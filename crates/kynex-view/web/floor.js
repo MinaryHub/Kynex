@@ -2,6 +2,9 @@
 // under the scene at its true size, and the panel that loads it, sizes it,
 // places it and takes it away.
 import * as THREE from 'three';
+import { tFor, tr } from './i18n.js';
+
+const t = tFor('page');
 
 async function post(request) {
   const response = await fetch('/robot', {
@@ -27,7 +30,7 @@ export class FloorPanel {
     document.getElementById('floor-load').addEventListener('click', () => this.file.click());
     this.file.addEventListener('change', () => this.load());
     document.getElementById('floor-clear').addEventListener('click', async () => {
-      if (!confirm('부지 도면을 지웁니다.')) return;
+      if (!confirm(t('부지 도면을 지웁니다.'))) return;
       await this.send({ op: 'floor', action: 'clear' });
     });
     for (const k of FIELDS) {
@@ -42,10 +45,10 @@ export class FloorPanel {
   async send(request) {
     try {
       const a = await post(request);
-      if (!a.ok) this.ctx.toast(a.error || '도면을 바꾸지 못했습니다');
+      if (!a.ok) this.ctx.toast(tr(a.error) || t('도면을 바꾸지 못했습니다'));
       return a.ok;
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
       return false;
     }
   }
@@ -56,7 +59,7 @@ export class FloorPanel {
     const file = this.file.files?.[0];
     this.file.value = '';
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) return this.ctx.toast('도면 이미지는 8 MB까지입니다');
+    if (file.size > 8 * 1024 * 1024) return this.ctx.toast(t('도면 이미지는 8 MB까지입니다'));
     try {
       const response = await fetch(`/import?as=floor&name=${encodeURIComponent(file.name)}`, {
         method: 'POST',
@@ -64,11 +67,11 @@ export class FloorPanel {
         body: await file.arrayBuffer(),
       });
       const a = await response.json();
-      if (!a.ok) return this.ctx.toast(a.error || '도면을 불러오지 못했습니다');
+      if (!a.ok) return this.ctx.toast(tr(a.error) || t('도면을 불러오지 못했습니다'));
       this.framePending = true;
-      this.ctx.toast('도면을 깔았습니다. 실제 가로 길이(m)를 넣어 크기를 맞추세요');
+      this.ctx.toast(t('도면을 깔았습니다. 실제 가로 길이(m)를 넣어 크기를 맞추세요'));
     } catch (err) {
-      this.ctx.toast(`도면을 보내지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('도면을 보내지 못했습니다: {error}', { error: err.message }));
     }
   }
 
@@ -88,7 +91,7 @@ export class FloorPanel {
     const has = !!state.image;
     document.getElementById('floor-fields').hidden = !has;
     document.getElementById('floor-clear').hidden = !has;
-    document.getElementById('floor-load').textContent = has ? '다른 도면 불러오기' : '도면 이미지 불러오기';
+    document.getElementById('floor-load').textContent = has ? t('다른 도면 불러오기') : t('도면 이미지 불러오기');
     document.querySelector('[data-action="floor"]')?.classList.toggle('on', has);
     if (has) {
       const set = (k, x) => {

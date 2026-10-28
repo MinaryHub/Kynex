@@ -1537,6 +1537,16 @@ impl Library {
         if op == "place" {
             let key = req["template"].as_str().ok_or("no template")?;
             let named = self.template_name(key).ok_or("no such template")?;
+            // Named as the page says it, in its language — held to what a
+            // rename takes, with room for the number `free_name` adds —;
+            // else as the library has it.
+            let named = req["name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|n| {
+                    !n.is_empty() && n.chars().count() <= 50 && !n.chars().any(char::is_control)
+                })
+                .map_or(named, str::to_string);
             self.next += 1;
             let item = Item {
                 id: self.next,

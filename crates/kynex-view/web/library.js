@@ -6,6 +6,9 @@
 
 import * as THREE from 'three';
 import { TransformControls } from '/vendor/TransformControls.js';
+import { tFor, tr, getLang } from './i18n.js';
+
+const t = tFor('panels');
 
 async function post(request) {
   const response = await fetch('/robot', {
@@ -168,11 +171,11 @@ export class LibraryPanel {
       const gone = e.target.closest('[data-delete-custom]')?.dataset.deleteCustom;
       if (gone) {
         e.stopPropagation();
-        if (confirm('이 장비를 내 장비에서 지울까요?')) this.send({ op: 'delete_custom', key: gone });
+        if (confirm(t('이 장비를 내 장비에서 지울까요?'))) this.send({ op: 'delete_custom', key: gone });
         return;
       }
-      const t = e.target.closest('[data-template]');
-      if (t) return this.arm(this.armed === t.dataset.template ? null : t.dataset.template);
+      const tile = e.target.closest('[data-template]');
+      if (tile) return this.arm(this.armed === tile.dataset.template ? null : tile.dataset.template);
       const item = e.target.closest('[data-item]');
       const root = item && this.itemById(Number(item.dataset.item))?.root;
       // Ctrl or Shift: into the group, or out of it.
@@ -216,7 +219,7 @@ export class LibraryPanel {
       if (act === 'lock') {
         const items = this.groupItems();
         this.send({ op: 'lock', items: items.map((i) => i.id), locked: !item.locked }, () =>
-          this.ctx.toast(item.locked ? '잠금을 풀었습니다' : `장비 ${items.length}개를 잠갔습니다`),
+          this.ctx.toast(item.locked ? t('잠금을 풀었습니다') : t('장비 {n}개를 잠갔습니다', { n: items.length })),
         );
         if (!item.locked) this.showHandle(null);
       } else if (act === 'hide') {
@@ -251,10 +254,10 @@ export class LibraryPanel {
   async send(request, then) {
     try {
       const answer = await post(request);
-      if (!answer.ok) this.ctx.toast(answer.error || '요청을 처리하지 못했습니다');
+      if (!answer.ok) this.ctx.toast(tr(answer.error) || t('요청을 처리하지 못했습니다'));
       else then?.(answer);
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
     }
   }
 
@@ -300,13 +303,13 @@ export class LibraryPanel {
   async importModel(file) {
     const ext = file.name.split('.').pop().toLowerCase();
     if (!['step', 'stp', 'stl', 'obj', 'glb', 'gltf', '3mf', 'ply', 'fbx', 'zip', 'urdf'].includes(ext)) {
-      return this.ctx.toast('읽을 수 있는 파일: STEP, STL, OBJ, FBX, glTF·GLB, 3MF, PLY · 로봇은 URDF 폴더를 묶은 ZIP이나 URDF');
+      return this.ctx.toast(t('읽을 수 있는 파일: STEP, STL, OBJ, FBX, glTF·GLB, 3MF, PLY · 로봇은 URDF 폴더를 묶은 ZIP이나 URDF'));
     }
-    if (file.size > 256 * 1024 * 1024) return this.ctx.toast('파일이 너무 큽니다 (256 MB까지)');
+    if (file.size > 256 * 1024 * 1024) return this.ctx.toast(t('파일이 너무 큽니다 (256 MB까지)'));
     const unit = document.getElementById('import-unit').value;
     const keep = document.getElementById('import-keep').checked;
     const query = new URLSearchParams({ name: file.name, ...(unit ? { unit } : {}), ...(keep ? { keep: '1' } : {}) });
-    this.ctx.toast(`${file.name}을(를) 읽는 중…`);
+    this.ctx.toast(t('{name}을(를) 읽는 중…', { name: file.name }));
     try {
       const response = await fetch(`/import?${query}`, {
         method: 'POST',
@@ -315,16 +318,17 @@ export class LibraryPanel {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status} ${await response.text()}`);
       const a = await response.json();
-      if (!a.ok) return this.ctx.toast(`가져오지 못했습니다: ${a.error}`);
+      if (!a.ok) return this.ctx.toast(t('가져오지 못했습니다: {error}', { error: tr(a.error) }));
       const robot = ext === 'zip' || ext === 'urdf';
-      const where = keep && !robot ? '파일 안의 위치에' : '원점에';
-      this.ctx.toast(`"${a.name}"을(를) ${robot ? '내 로봇' : '내 장비'}으로 가져와 ${where} 놓았습니다${a.notes?.length ? ` (참고 ${a.notes.length}건)` : ''}`);
+      const where = keep && !robot ? t('파일 안의 위치에') : t('원점에');
+      const notes = a.notes?.length ? t(' (참고 {n}건)', { n: a.notes.length }) : '';
+      this.ctx.toast(t('"{name}"을(를) {kind}으로 가져와 {where} 놓았습니다{notes}', { name: tr(a.name), kind: robot ? t('내 로봇') : t('내 장비'), where, notes }));
       const item = a.item;
       const root = () => this.itemById(item)?.root;
       const pick = (tries = 40) => (root() && this.ctx.records.has(root()) ? this.ctx.select(root(), { frame: true }) : tries > 0 && setTimeout(() => pick(tries - 1), 50));
       pick();
     } catch (err) {
-      this.ctx.toast(`가져오지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('가져오지 못했습니다: {error}', { error: err.message }));
     }
   }
 
@@ -353,7 +357,7 @@ export class LibraryPanel {
     const items = this.groupItems();
     if (!primary || items.length < 2) return;
     const boxes = new Map(items.map((i) => [i.id, this.ctx.boxUnder(i.root)]));
-    if ([...boxes.values()].some((b) => b.isEmpty())) return this.ctx.toast('모양이 아직 없는 장비가 있습니다');
+    if ([...boxes.values()].some((b) => b.isEmpty())) return this.ctx.toast(t('모양이 아직 없는 장비가 있습니다'));
     const mid = (b) => (b.min[axis] + b.max[axis]) / 2;
     const shift = new Map();
     if (how === 'min' || how === 'mid' || how === 'max') {
@@ -365,7 +369,7 @@ export class LibraryPanel {
       const size = (i) => boxes.get(i.id).max[axis] - boxes.get(i.id).min[axis];
       let gap = 0;
       if (how === 'spread') {
-        if (items.length < 3) return this.ctx.toast('간격 맞추기는 장비 3개 이상일 때 합니다');
+        if (items.length < 3) return this.ctx.toast(t('간격 맞추기는 장비 3개 이상일 때 합니다'));
         const first = boxes.get(sorted[0].id);
         const last = boxes.get(sorted[sorted.length - 1].id);
         const used = sorted.reduce((s, i) => s + size(i), 0);
@@ -388,8 +392,8 @@ export class LibraryPanel {
         at[k] += shift.get(i.id);
         return { item: i.id, at };
       });
-    if (!moves.length) return this.ctx.toast('이미 그렇게 놓여 있습니다');
-    this.send({ op: 'move_many', moves }, () => this.ctx.toast(`장비 ${moves.length}개를 옮겼습니다`));
+    if (!moves.length) return this.ctx.toast(t('이미 그렇게 놓여 있습니다'));
+    this.send({ op: 'move_many', moves }, () => this.ctx.toast(t('장비 {n}개를 옮겼습니다', { n: moves.length })));
   }
 
   // Delete: the selected equipment, all of it. Whether there was any.
@@ -405,10 +409,10 @@ export class LibraryPanel {
   // Ctrl+D: the selected equipment copied beside itself, the copies
   // selected in its place.
   duplicate(ids = this.groupItems().map((i) => i.id), offset = [0.5, 0.5, 0]) {
-    if (!ids.length) return this.ctx.toast('복제할 장비를 고르세요 (라이브러리에서 놓은 장비)');
+    if (!ids.length) return this.ctx.toast(t('복제할 장비를 고르세요 (라이브러리에서 놓은 장비)'));
     this.send({ op: 'duplicate', items: ids, offset }, (a) => {
       const roots = a.made.map((m) => m.root);
-      this.ctx.toast(`장비 ${roots.length}개를 복제했습니다`);
+      this.ctx.toast(t('장비 {n}개를 복제했습니다', { n: roots.length }));
       this.selectWhenHere(roots);
     });
   }
@@ -431,16 +435,16 @@ export class LibraryPanel {
     const ids = this.groupItems().map((i) => i.id);
     if (!ids.length) return false;
     this.clipboard = { ids, pasted: 0 };
-    this.ctx.toast(`장비 ${ids.length}개를 복사했습니다 (Ctrl+V로 붙여넣기)`);
+    this.ctx.toast(t('장비 {n}개를 복사했습니다 (Ctrl+V로 붙여넣기)', { n: ids.length }));
     return true;
   }
 
   // Ctrl+V: what was copied, again, each paste a step further along.
   paste() {
     const clip = this.clipboard;
-    if (!clip) return this.ctx.toast('복사한 장비가 없습니다 (Ctrl+C)');
+    if (!clip) return this.ctx.toast(t('복사한 장비가 없습니다 (Ctrl+C)'));
     const ids = clip.ids.filter((id) => this.itemById(id));
-    if (!ids.length) return this.ctx.toast('복사한 장비가 지워졌습니다');
+    if (!ids.length) return this.ctx.toast(t('복사한 장비가 지워졌습니다'));
     clip.pasted += 1;
     this.duplicate(ids, [0.5 * clip.pasted, 0.5 * clip.pasted, 0]);
   }
@@ -477,21 +481,23 @@ export class LibraryPanel {
     this.armed = key;
     for (const el of this.list.querySelectorAll('[data-template]')) el.classList.toggle('armed', el.dataset.template === key);
     this.ctx.canvas.classList.toggle('placing', !!key);
-    if (key) this.ctx.toast('장면을 눌러 놓을 자리를 고르세요');
+    if (key) this.ctx.toast(t('장면을 눌러 놓을 자리를 고르세요'));
   }
 
   placeAt(key, x, y) {
     const hit = this.ctx.pick(x, y);
     if (!hit) return;
     // Placed unturned, whatever it is: turned afterwards in the inspector.
-    const t = this.library.templates.find((t) => t.key === key);
-    this.send({ op: 'place', template: key, at: this.onGrid(hit), yaw: 0, snap: !this.alt, settle: !this.alt }, (a) =>
-      this.ctx.toast(`${t?.name ?? key}을(를) 놓았습니다${a.snapped ? ` · ${a.snapped}에 맞붙였습니다` : ''}`),
+    const tpl = this.library.templates.find((x) => x.key === key);
+    // In English, the new equipment is named in English too.
+    const named = getLang() === 'en' && tpl?.name ? { name: tr(tpl.name) } : {};
+    this.send({ op: 'place', template: key, ...named, at: this.onGrid(hit), yaw: 0, snap: !this.alt, settle: !this.alt }, (a) =>
+      this.ctx.toast(t('{name}을(를) 놓았습니다', { name: tr(tpl?.name ?? key) }) + (a.snapped ? t(' · {name}에 맞붙였습니다', { name: tr(a.snapped) }) : '')),
     );
   }
 
   saySnapped(answer) {
-    if (answer.snapped) this.ctx.toast(`${answer.snapped}에 맞붙였습니다`);
+    if (answer.snapped) this.ctx.toast(t('{name}에 맞붙였습니다', { name: tr(answer.snapped) }));
   }
 
   itemById(id) {
@@ -551,28 +557,28 @@ export class LibraryPanel {
   renderList() {
     const { escapeHtml } = this.ctx;
     const groups = new Map();
-    for (const t of this.library.templates) {
-      if (!groups.has(t.group)) groups.set(t.group, []);
-      groups.get(t.group).push(t);
+    for (const tpl of this.library.templates) {
+      if (!groups.has(tpl.group)) groups.set(tpl.group, []);
+      groups.get(tpl.group).push(tpl);
     }
     let html = '';
     for (const [group, list] of groups) {
-      html += `<li class="lib-group">${escapeHtml(group)}</li><li class="lib-grid">`;
-      for (const t of list) {
-        const thumb = this.thumbs.get(t.key);
-        html += `<div class="lib-template${t.key === this.armed ? ' armed' : ''}" draggable="true" data-template="${escapeHtml(t.key)}" title="${escapeHtml(t.name)} · 장면으로 끌어 놓거나, 누른 뒤 장면을 누르세요">
+      html += `<li class="lib-group">${escapeHtml(tr(group))}</li><li class="lib-grid">`;
+      for (const tpl of list) {
+        const thumb = this.thumbs.get(tpl.key);
+        html += `<div class="lib-template${tpl.key === this.armed ? ' armed' : ''}" draggable="true" data-template="${escapeHtml(tpl.key)}" title="${escapeHtml(tr(tpl.name))} · ${escapeHtml(t('장면으로 끌어 놓거나, 누른 뒤 장면을 누르세요'))}">
           ${thumb ? `<img class="lib-thumb" src="${thumb}" alt="" draggable="false">` : '<span class="lib-thumb"></span>'}
-          <span class="lib-name">${escapeHtml(t.name)}</span>
-          ${t.custom ? `<button class="lib-del" data-delete-custom="${escapeHtml(t.key)}" title="내 장비에서 지우기">✕</button>` : ''}
+          <span class="lib-name">${escapeHtml(tr(tpl.name))}</span>
+          ${tpl.custom ? `<button class="lib-del" data-delete-custom="${escapeHtml(tpl.key)}" title="${escapeHtml(t('내 장비에서 지우기'))}">✕</button>` : ''}
         </div>`;
       }
       html += '</li>';
     }
     if (this.library.items.length) {
-      html += '<li class="lib-group">배치된 장비</li>';
+      html += `<li class="lib-group">${escapeHtml(t('배치된 장비'))}</li>`;
       for (const i of this.library.items) {
         const marks = `${i.locked ? '🔒 ' : ''}${this.hidden.has(i.id) ? '◌ ' : ''}`;
-        html += `<li class="lib-item${this.hidden.has(i.id) ? ' hidden-item' : ''}" data-item="${i.id}">${marks}${escapeHtml(i.name)}</li>`;
+        html += `<li class="lib-item${this.hidden.has(i.id) ? ' hidden-item' : ''}" data-item="${i.id}">${marks}${escapeHtml(tr(i.name))}</li>`;
       }
     }
     this.list.innerHTML = html;
@@ -585,22 +591,22 @@ export class LibraryPanel {
     const item = this.itemOf(uid);
     this.box.hidden = !item;
     if (!item) return;
-    const t = this.library.templates.find((t) => t.key === item.template);
-    const params = (t?.params || [])
+    const tpl = this.library.templates.find((x) => x.key === item.template);
+    const params = (tpl?.params || [])
       .map((p) => {
         const v = item.params[p.key] ?? p.default;
         if (p.choices?.length) {
-          const options = p.choices.map((name, i) => `<option value="${i}"${i === Math.round(v) ? ' selected' : ''}>${escapeHtml(name)}</option>`).join('');
-          return `<label class="insp-field">${escapeHtml(p.label)}<select data-param="${p.key}" data-choice>${options}</select></label>`;
+          const options = p.choices.map((name, i) => `<option value="${i}"${i === Math.round(v) ? ' selected' : ''}>${escapeHtml(tr(name))}</option>`).join('');
+          return `<label class="insp-field">${escapeHtml(tr(p.label))}<select data-param="${p.key}" data-choice>${options}</select></label>`;
         }
         // A length in millimetres; a time, an angle or a count as it is.
         if (p.unit && p.unit !== 'm') {
           // A time, a count or a speed is the cell role's too: a beginner
           // sets it there, once.
           const min = ['s', '개', 'm/s'].includes(p.unit) ? '' : '';
-          return `<label class="insp-field"${min}>${escapeHtml(p.label)}<input type="number" class="num" data-param="${p.key}" data-scale="1" value="${Math.round(v * 100) / 100}" min="${p.min}" max="${p.max}" step="${p.unit === '개' ? 1 : p.unit === '°' ? 15 : 1}"><span>${escapeHtml(p.unit)}</span></label>`;
+          return `<label class="insp-field"${min}>${escapeHtml(tr(p.label))}<input type="number" class="num" data-param="${p.key}" data-scale="1" value="${Math.round(v * 100) / 100}" min="${p.min}" max="${p.max}" step="${p.unit === '개' ? 1 : p.unit === '°' ? 15 : 1}"><span>${escapeHtml(tr(p.unit))}</span></label>`;
         }
-        return `<label class="insp-field">${escapeHtml(p.label)}<input type="number" class="num" data-param="${p.key}" value="${Math.round(v * 1000)}" min="${Math.round(p.min * 1000)}" max="${Math.round(p.max * 1000)}" step="10"><span>mm</span></label>`;
+        return `<label class="insp-field">${escapeHtml(tr(p.label))}<input type="number" class="num" data-param="${p.key}" value="${Math.round(v * 1000)}" min="${Math.round(p.min * 1000)}" max="${Math.round(p.max * 1000)}" step="10"><span>mm</span></label>`;
       })
       .join('');
     const [x, y, z] = item.at.map((v) => Math.round(v * 1000));
@@ -608,60 +614,60 @@ export class LibraryPanel {
     const lock = item.locked ? ' disabled' : '';
     const hidden = this.hidden.has(item.id);
     this.box.innerHTML = `
-      <div class="insp-item-head"><span class="insp-kind">장비</span><input class="insp-name" data-rename value="${escapeHtml(item.name)}" maxlength="60" spellcheck="false" title="이름 바꾸기 (프로그램은 이 이름으로 장비를 찾습니다)">
-        <button class="icon-mini${item.locked ? ' on' : ''}" data-item-act="lock" title="${item.locked ? '잠금 풀기' : '잠그기: 옮기거나 지울 수 없게'}">${item.locked ? '🔒' : '🔓'}</button>
-        <button class="icon-mini${hidden ? ' on' : ''}" data-item-act="hide" title="${hidden ? '다시 보이기' : '이 화면에서만 숨기기'}">${hidden ? '◌' : '◉'}</button></div>
+      <div class="insp-item-head"><span class="insp-kind">${t('장비')}</span><input class="insp-name" data-rename value="${escapeHtml(tr(item.name))}" maxlength="60" spellcheck="false" title="${t('이름 바꾸기 (프로그램은 이 이름으로 장비를 찾습니다)')}">
+        <button class="icon-mini${item.locked ? ' on' : ''}" data-item-act="lock" title="${item.locked ? t('잠금 풀기') : t('잠그기: 옮기거나 지울 수 없게')}">${item.locked ? '🔒' : '🔓'}</button>
+        <button class="icon-mini${hidden ? ' on' : ''}" data-item-act="hide" title="${hidden ? t('다시 보이기') : t('이 화면에서만 숨기기')}">${hidden ? '◌' : '◉'}</button></div>
       <fieldset class="insp-lockable"${lock}>
       <div class="insp-props">
         <label class="insp-field">X<input type="number" class="num" data-at="0" value="${x}" step="10"><span>mm</span></label>
         <label class="insp-field">Y<input type="number" class="num" data-at="1" value="${y}" step="10"><span>mm</span></label>
         <label class="insp-field">Z<input type="number" class="num" data-at="2" value="${z}" step="10"><span>mm</span></label>
-        <label class="insp-field">회전<input type="number" class="num" data-yaw value="${Math.round(deg(item.yaw))}" step="15"><span>°</span></label>
-        <label class="insp-field" title="X축으로 기울이기 (벽에 단 로봇은 90°, 천장에 거꾸로 단 로봇은 180°)">X축<input type="number" class="num" data-tilt="roll" value="${Math.round(deg(item.roll ?? 0))}" step="15"><span>°</span></label>
-        <label class="insp-field" title="Y축으로 기울이기">Y축<input type="number" class="num" data-tilt="pitch" value="${Math.round(deg(item.pitch ?? 0))}" step="15"><span>°</span></label>
+        <label class="insp-field">${t('회전')}<input type="number" class="num" data-yaw value="${Math.round(deg(item.yaw))}" step="15"><span>°</span></label>
+        <label class="insp-field" title="${t('X축으로 기울이기 (벽에 단 로봇은 90°, 천장에 거꾸로 단 로봇은 180°)')}">${t('X축')}<input type="number" class="num" data-tilt="roll" value="${Math.round(deg(item.roll ?? 0))}" step="15"><span>°</span></label>
+        <label class="insp-field" title="${t('Y축으로 기울이기')}">${t('Y축')}<input type="number" class="num" data-tilt="pitch" value="${Math.round(deg(item.pitch ?? 0))}" step="15"><span>°</span></label>
         ${params}
-        <label class="insp-field" title="장비 값과 설치비: 통계·시나리오의 투자비, 감가, 개당 원가, 회수 기간에 쓰입니다">투자비<input type="number" class="num" data-price value="${item.price ?? 0}" min="0" step="100"><span>만원</span></label>
+        <label class="insp-field" title="${t('장비 값과 설치비: 통계·시나리오의 투자비, 감가, 개당 원가, 회수 기간에 쓰입니다')}">${t('투자비')}<input type="number" class="num" data-price value="${item.price ?? 0}" min="0" step="100"><span>${t('만원')}</span></label>
       </div>
-      ${many > 1 ? `<div class="muted insp-group">함께 선택: 장비 ${many}개 · 핸들로 함께 옮기고 돌립니다</div>
-      <label class="insp-field wide insp-align">정렬<select data-align>
-        <option value="">고르기…</option>
-        <optgroup label="${escapeHtml(item.name)}에 맞추기">
-          <option value="x-min">X 왼쪽</option><option value="x-mid">X 가운데</option><option value="x-max">X 오른쪽</option>
-          <option value="y-min">Y 앞</option><option value="y-mid">Y 가운데</option><option value="y-max">Y 뒤</option>
-          <option value="z-min">바닥 높이</option>
+      ${many > 1 ? `<div class="muted insp-group">${t('함께 선택: 장비 {n}개 · 핸들로 함께 옮기고 돌립니다', { n: many })}</div>
+      <label class="insp-field wide insp-align">${t('정렬')}<select data-align>
+        <option value="">${t('고르기…')}</option>
+        <optgroup label="${escapeHtml(t('{name}에 맞추기', { name: tr(item.name) }))}">
+          <option value="x-min">${t('X 왼쪽')}</option><option value="x-mid">${t('X 가운데')}</option><option value="x-max">${t('X 오른쪽')}</option>
+          <option value="y-min">${t('Y 앞')}</option><option value="y-mid">${t('Y 가운데')}</option><option value="y-max">${t('Y 뒤')}</option>
+          <option value="z-min">${t('바닥 높이')}</option>
         </optgroup>
-        <optgroup label="맞붙여 늘어놓기">
-          <option value="x-chain">X 방향으로</option><option value="y-chain">Y 방향으로</option>
+        <optgroup label="${t('맞붙여 늘어놓기')}">
+          <option value="x-chain">${t('X 방향으로')}</option><option value="y-chain">${t('Y 방향으로')}</option>
         </optgroup>
-        <optgroup label="간격 같게 (3개 이상)">
-          <option value="x-spread">X 방향</option><option value="y-spread">Y 방향</option>
+        <optgroup label="${t('간격 같게 (3개 이상)')}">
+          <option value="x-spread">${t('X 방향')}</option><option value="y-spread">${t('Y 방향')}</option>
         </optgroup>
       </select></label>` : ''}
       <div class="insp-actions">
-        <button class="text-btn${this.gizmo ? ' on' : ''}" data-item-act="handle" title="장비를 고르면 기즈모(이동·회전 화살표)가 나와 마우스로 바로 끌 수 있습니다. R: 회전, T: 이동, Alt: 맞붙이지 않기">${this.gizmo ? '기즈모 끄기' : '기즈모 켜기'}</button>
-        ${this.gizmo ? `<span class="seg gizmo-mode"><button data-item-act="mode-move" class="${this.mode !== 'rotate' ? 'on' : ''}" title="화살표로 X·Y·Z 이동 (T)">이동</button><button data-item-act="mode-turn" class="${this.mode === 'rotate' ? 'on' : ''}" title="고리로 X·Y·Z축 회전 (R)">회전</button></span>` : ''}
-        <label class="insp-snap" title="핸들로 옮길 때 격자 간격, 돌릴 때 각도 단위">스냅<select data-snap="grid">${[0, 10, 50, 100, 500].map((v) => `<option value="${v}"${v === this.snap.grid ? ' selected' : ''}>${v ? `${v} mm` : '끔'}</option>`).join('')}</select><select data-snap="angle">${[0, 5, 15, 45, 90].map((v) => `<option value="${v}"${v === this.snap.angle ? ' selected' : ''}>${v ? `${v}°` : '끔'}</option>`).join('')}</select></label>
-        <button class="text-btn quiet" data-item-act="duplicate" title="옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V">복제</button>
-        <button class="text-btn quiet danger" data-item-act="remove" title="삭제 (Delete)">${many > 1 ? `${many}개 삭제` : '삭제'}</button>
+        <button class="text-btn${this.gizmo ? ' on' : ''}" data-item-act="handle" title="${t('장비를 고르면 기즈모(이동·회전 화살표)가 나와 마우스로 바로 끌 수 있습니다. R: 회전, T: 이동, Alt: 맞붙이지 않기')}">${this.gizmo ? t('기즈모 끄기') : t('기즈모 켜기')}</button>
+        ${this.gizmo ? `<span class="seg gizmo-mode"><button data-item-act="mode-move" class="${this.mode !== 'rotate' ? 'on' : ''}" title="${t('화살표로 X·Y·Z 이동 (T)')}">${t('이동')}</button><button data-item-act="mode-turn" class="${this.mode === 'rotate' ? 'on' : ''}" title="${t('고리로 X·Y·Z축 회전 (R)')}">${t('회전')}</button></span>` : ''}
+        <label class="insp-snap" title="${t('핸들로 옮길 때 격자 간격, 돌릴 때 각도 단위')}">${t('스냅')}<select data-snap="grid">${[0, 10, 50, 100, 500].map((v) => `<option value="${v}"${v === this.snap.grid ? ' selected' : ''}>${v ? `${v} mm` : t('끔')}</option>`).join('')}</select><select data-snap="angle">${[0, 5, 15, 45, 90].map((v) => `<option value="${v}"${v === this.snap.angle ? ' selected' : ''}>${v ? `${v}°` : t('끔')}</option>`).join('')}</select></label>
+        <button class="text-btn quiet" data-item-act="duplicate" title="${t('옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V')}">${t('복제')}</button>
+        <button class="text-btn quiet danger" data-item-act="remove" title="${t('삭제 (Delete)')}">${many > 1 ? t('{n}개 삭제', { n: many }) : t('삭제')}</button>
       </div>
       </fieldset>
       <details class="insp-array"${this.arrayOpen ? ' open' : ''}>
-        <summary>배열·대칭 복사 <span class="muted">${many > 1 ? `선택한 ${many}개` : '이 장비'}</span></summary>
-        <div class="array-row"><span>직선</span>
-          <label>개수<input type="number" class="num" data-array="n" value="${this.arrayVals.n ?? 3}" min="2" max="50"></label>
+        <summary>${t('배열·대칭 복사')} <span class="muted">${many > 1 ? t('선택한 {n}개', { n: many }) : t('이 장비')}</span></summary>
+        <div class="array-row"><span>${t('직선')}</span>
+          <label>${t('개수')}<input type="number" class="num" data-array="n" value="${this.arrayVals.n ?? 3}" min="2" max="50"></label>
           <label>X<input type="number" class="num" data-array="dx" value="${this.arrayVals.dx ?? 2000}" step="100"></label>
           <label>Y<input type="number" class="num" data-array="dy" value="${this.arrayVals.dy ?? 0}" step="100"></label><span class="muted">mm</span>
-          <button class="text-btn quiet" data-item-act="array-line">만들기</button></div>
-        <div class="array-row"><span>원형</span>
-          <label>개수<input type="number" class="num" data-array="m" value="${this.arrayVals.m ?? 4}" min="2" max="50"></label>
-          <label>중심 X<input type="number" class="num" data-array="cx" value="${this.arrayVals.cx ?? 0}" step="100"></label>
+          <button class="text-btn quiet" data-item-act="array-line">${t('만들기')}</button></div>
+        <div class="array-row"><span>${t('원형')}</span>
+          <label>${t('개수')}<input type="number" class="num" data-array="m" value="${this.arrayVals.m ?? 4}" min="2" max="50"></label>
+          <label>${t('중심 X')}<input type="number" class="num" data-array="cx" value="${this.arrayVals.cx ?? 0}" step="100"></label>
           <label>Y<input type="number" class="num" data-array="cy" value="${this.arrayVals.cy ?? 0}" step="100"></label><span class="muted">mm</span>
-          <button class="text-btn quiet" data-item-act="array-circle">만들기</button></div>
-        <div class="array-row"><span>대칭</span>
-          <select data-array="axis"><option value="x">X 방향으로 (YZ면)</option><option value="y">Y 방향으로 (XZ면)</option></select>
-          <button class="text-btn quiet" data-item-act="mirror" title="선택한 장비 상자의 끝에 붙여, 위치와 방향을 거울처럼 뒤집은 복사본을 놓습니다. 장비 형상 자체는 뒤집지 않습니다">만들기</button></div>
+          <button class="text-btn quiet" data-item-act="array-circle">${t('만들기')}</button></div>
+        <div class="array-row"><span>${t('대칭')}</span>
+          <select data-array="axis"><option value="x">${t('X 방향으로 (YZ면)')}</option><option value="y">${t('Y 방향으로 (XZ면)')}</option></select>
+          <button class="text-btn quiet" data-item-act="mirror" title="${t('선택한 장비 상자의 끝에 붙여, 위치와 방향을 거울처럼 뒤집은 복사본을 놓습니다. 장비 형상 자체는 뒤집지 않습니다')}">${t('만들기')}</button></div>
       </details>
-      <div class="muted insp-hint">Ctrl+클릭: 여러 개 · Alt+클릭: 안의 부품</div>`;
+      <div class="muted insp-hint">${t('Ctrl+클릭: 여러 개 · Alt+클릭: 안의 부품')}</div>`;
   }
 
   // The array and mirror numbers as typed.
@@ -674,20 +680,20 @@ export class LibraryPanel {
   placeCopies(n, place, said) {
     const items = this.groupItems();
     if (!items.length) return;
-    if (!(Number.isInteger(n) && n >= 2 && n <= 50)) return this.ctx.toast('개수는 2–50입니다');
+    if (!(Number.isInteger(n) && n >= 2 && n <= 50)) return this.ctx.toast(t('개수는 2–50입니다'));
     const copies = [];
     for (let k = 1; k < n; k++) for (const i of items) copies.push({ item: i.id, ...place(i, k) });
-    if (copies.length > 200) return this.ctx.toast('한 번에 200개까지 복사합니다');
+    if (copies.length > 200) return this.ctx.toast(t('한 번에 200개까지 복사합니다'));
     this.send({ op: 'duplicate', copies }, (a) => {
-      this.ctx.toast(`${said}: 장비 ${a.made.length}개를 놓았습니다`);
+      this.ctx.toast(t('{what}: 장비 {n}개를 놓았습니다', { what: said, n: a.made.length }));
       this.selectWhenHere(a.made.map((m) => m.root));
     });
   }
 
   arrayLine() {
     const [dx, dy] = [this.arrayValue('dx') / 1000, this.arrayValue('dy') / 1000];
-    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return this.ctx.toast('간격을 넣으세요');
-    this.placeCopies(this.arrayValue('n'), (i, k) => ({ at: [i.at[0] + k * dx, i.at[1] + k * dy, i.at[2]], yaw: i.yaw }), '직선 배열');
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return this.ctx.toast(t('간격을 넣으세요'));
+    this.placeCopies(this.arrayValue('n'), (i, k) => ({ at: [i.at[0] + k * dx, i.at[1] + k * dy, i.at[2]], yaw: i.yaw }), t('직선 배열'));
   }
 
   // Round a centre, the whole turn shared out: each copy turned with it.
@@ -698,11 +704,11 @@ export class LibraryPanel {
     this.placeCopies(
       n,
       (i, k) => {
-        const t = (2 * Math.PI * k) / n;
+        const turn = (2 * Math.PI * k) / n;
         const [x, y] = [i.at[0] - cx, i.at[1] - cy];
-        return { at: [cx + x * Math.cos(t) - y * Math.sin(t), cy + x * Math.sin(t) + y * Math.cos(t), i.at[2]], yaw: i.yaw + t };
+        return { at: [cx + x * Math.cos(turn) - y * Math.sin(turn), cy + x * Math.sin(turn) + y * Math.cos(turn), i.at[2]], yaw: i.yaw + turn };
       },
-      '원형 배열',
+      t('원형 배열'),
     );
   }
 
@@ -716,7 +722,7 @@ export class LibraryPanel {
     let edge = -Infinity;
     for (const i of items) {
       const b = this.ctx.boxUnder(i.root);
-      if (b.isEmpty()) return this.ctx.toast('모양이 아직 없는 장비가 있습니다');
+      if (b.isEmpty()) return this.ctx.toast(t('모양이 아직 없는 장비가 있습니다'));
       edge = Math.max(edge, b.max[key]);
     }
     this.placeCopies(
@@ -726,7 +732,7 @@ export class LibraryPanel {
         at[axis] = 2 * edge - at[axis];
         return { at, yaw: axis ? -i.yaw : Math.PI - i.yaw };
       },
-      '대칭 복사',
+      t('대칭 복사'),
     );
   }
 
@@ -739,12 +745,13 @@ export class LibraryPanel {
     }
     if (e.target.dataset.rename !== undefined) {
       const name = e.target.value.trim();
-      if (name && name !== item.name) {
-        this.send({ op: 'rename', item: item.id, name }, () => this.ctx.toast(`이름을 "${name}"(으)로 바꿨습니다`));
+      // Shown in the language chosen: a change is a name other than that.
+      if (name && name !== tr(item.name)) {
+        this.send({ op: 'rename', item: item.id, name }, () => this.ctx.toast(t('이름을 "{name}"(으)로 바꿨습니다', { name })));
         // Still hidden under its new name.
         if (this.hidden.has(item.id)) this.hidden.set(item.id, name);
       }
-      else e.target.value = item.name;
+      else e.target.value = tr(item.name);
       return;
     }
     if (e.target.dataset.align !== undefined) {
@@ -791,7 +798,7 @@ export class LibraryPanel {
       localStorage.setItem('kynex.gizmo', on ? '1' : '0');
     } catch {}
     this.selectionChanged(this.ctx.selected());
-    this.ctx.toast(on ? '장비를 고르면 기즈모가 나옵니다' : '기즈모를 껐습니다 (숫자 칸으로 옮길 수 있습니다)');
+    this.ctx.toast(on ? t('장비를 고르면 기즈모가 나옵니다') : t('기즈모를 껐습니다 (숫자 칸으로 옮길 수 있습니다)'));
   }
 
   showHandle(id) {

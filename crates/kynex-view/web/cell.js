@@ -4,32 +4,35 @@
 // parts, which arrive in the scene like any other object.
 
 import * as THREE from 'three';
+import { tFor, tr } from './i18n.js';
+
+const t = tFor('cell');
 
 // The flow's roles, as a menu offers them.
 const FLOW_KINDS = [
-  ['source', '소재 공급'],
-  ['station', '공정 스테이션'],
-  ['buffer', '버퍼'],
-  ['sink', '배출'],
+  ['source', t('소재 공급')],
+  ['station', t('공정 스테이션')],
+  ['buffer', t('버퍼')],
+  ['sink', t('배출')],
 ];
-const FLOW_NAME = { ...Object.fromEntries(FLOW_KINDS), conveyor: '컨베이어' };
+const FLOW_NAME = { ...Object.fromEntries(FLOW_KINDS), conveyor: t('컨베이어') };
 // What carries parts, or where it stops: never a place in the flow, and
 // why a link let go on it is not made there.
 const NOT_PLACES = {
-  amr_stop: 'AMR 정지 위치는 공정에 넣지 않습니다 — AMR이 서는 곳입니다',
-  operator: '작업자는 운반 수단입니다 — 화살표를 오른쪽 클릭해 운반: 작업자로 정하세요',
+  amr_stop: t('AMR 정지 위치는 공정에 넣지 않습니다 — AMR이 서는 곳입니다'),
+  operator: t('작업자는 운반 수단입니다 — 화살표를 오른쪽 클릭해 운반: 작업자로 정하세요'),
 };
 // Where the way splits, how parts are shared out (`rule`); where ways meet
 // at a station, how it takes them (`join`).
 const RULES = [
-  [0, '번갈아', '갈래마다 차례로, 자리 있는 곳으로'],
-  [1, '대기 적은 곳', '기다리는 부품이 적은 쪽으로'],
-  [2, '무작위', '자리 있는 곳 중 아무 데나'],
-  [3, '비율', '정한 비율대로 (자리가 날 때까지 기다림)'],
+  [0, t('번갈아'), t('갈래마다 차례로, 자리 있는 곳으로')],
+  [1, t('대기 적은 곳'), t('기다리는 부품이 적은 쪽으로')],
+  [2, t('무작위'), t('자리 있는 곳 중 아무 데나')],
+  [3, t('비율'), t('정한 비율대로 (자리가 날 때까지 기다림)')],
 ];
 const JOINS = [
-  [0, '도착 순', '먼저 온 부품부터, 투입 수만큼씩'],
-  [1, '조립', '들어오는 경로마다 1개씩 모아 하나로'],
+  [0, t('도착 순'), t('먼저 온 부품부터, 투입 수만큼씩')],
+  [1, t('조립'), t('들어오는 경로마다 1개씩 모아 하나로')],
 ];
 // Templates that are the building, not equipment of the flow.
 const STRUCTURE = new Set([
@@ -43,157 +46,157 @@ const STRUCTURE = new Set([
 // program's machines and pallets, not the flow's) said so — a robot cell's
 // 배출 팔레트 is no 배출 of the flow.
 const KINDS = [
-  ['', '없음'],
-  ['source', '공정 흐름: 소재 공급'],
-  ['station', '공정 흐름: 공정 스테이션'],
-  ['buffer', '공정 흐름: 버퍼'],
-  ['sink', '공정 흐름: 배출'],
-  ['conveyor', '컨베이어'],
+  ['', t('없음')],
+  ['source', t('공정 흐름: 소재 공급')],
+  ['station', t('공정 흐름: 공정 스테이션')],
+  ['buffer', t('공정 흐름: 버퍼')],
+  ['sink', t('공정 흐름: 배출')],
+  ['conveyor', t('컨베이어')],
   ['amr', 'AMR'],
-  ['amr_stop', 'AMR 정지 위치'],
-  ['operator', '작업자 (사람)'],
-  ['cnc', '로봇 셀: CNC 장비'],
-  ['molder', '로봇 셀: 사출 성형기'],
-  ['infeed', '로봇 셀: 투입 팔레트'],
-  ['outfeed', '로봇 셀: 배출 팔레트'],
-  ['gripper', '그리퍼'],
-  ['positioner', '포지셔너'],
-  ['fence', '안전 펜스'],
-  ['door', '문 (장비의 움직이는 부분)'],
-  ['connector', '연결점'],
-  ['sensor', '포토센서'],
-  ['actuator', '동작축 (스토퍼·리프터·직선·회전)'],
+  ['amr_stop', t('AMR 정지 위치')],
+  ['operator', t('작업자 (사람)')],
+  ['cnc', t('로봇 셀: CNC 장비')],
+  ['molder', t('로봇 셀: 사출 성형기')],
+  ['infeed', t('로봇 셀: 투입 팔레트')],
+  ['outfeed', t('로봇 셀: 배출 팔레트')],
+  ['gripper', t('그리퍼')],
+  ['positioner', t('포지셔너')],
+  ['fence', t('안전 펜스')],
+  ['door', t('문 (장비의 움직이는 부분)')],
+  ['connector', t('연결점')],
+  ['sensor', t('포토센서')],
+  ['actuator', t('동작축 (스토퍼·리프터·직선·회전)')],
 ];
 
 // What each I/O point is, in words: the robot's outputs and its inputs.
 const IO_LABELS = {
-  'gripper:close': '그리퍼 닫기',
-  'molder:open': '가드 열기',
-  'molder:close': '가드 닫기',
-  'molder:door_open': '가드 열림',
-  'molder:door_closed': '가드 닫힘',
-  close: '문 닫기',
-  closed: '닫힘 확인',
-  open: '문 열기',
-  clamp: '척 물림',
-  unclamp: '척 풀기',
-  start: '시작',
-  door_open: '문 열림',
-  door_closed: '문 닫힘',
-  clamped: '척 물림됨',
-  unclamped: '척 풀림됨',
-  idle: '대기 중',
-  done: '완료',
-  part_at_end: '부품 도착',
-  extend: '전진',
-  retract: '후진',
-  extended: '전진 끝',
-  retracted: '후진 끝',
-  detected: '감지',
+  'gripper:close': t('그리퍼 닫기'),
+  'molder:open': t('가드 열기'),
+  'molder:close': t('가드 닫기'),
+  'molder:door_open': t('가드 열림'),
+  'molder:door_closed': t('가드 닫힘'),
+  close: t('문 닫기'),
+  closed: t('닫힘 확인'),
+  open: t('문 열기'),
+  clamp: t('척 물림'),
+  unclamp: t('척 풀기'),
+  start: t('시작'),
+  door_open: t('문 열림'),
+  door_closed: t('문 닫힘'),
+  clamped: t('척 물림됨'),
+  unclamped: t('척 풀림됨'),
+  idle: t('대기 중'),
+  done: t('완료'),
+  part_at_end: t('부품 도착'),
+  extend: t('전진'),
+  retract: t('후진'),
+  extended: t('전진 끝'),
+  retracted: t('후진 끝'),
+  detected: t('감지'),
 };
 
 // An I/O number as the controller names it.
 const ioName = (n, output) => {
   const kind = output ? 'DO' : 'DI';
   if (n <= 7) return `${kind} ${n}`;
-  if (n <= 15) return `설정 ${kind} ${n - 8}`;
-  return `툴 ${kind} ${n - 16}`;
+  if (n <= 15) return t('설정 {kind} {n}', { kind, n: n - 8 });
+  return t('툴 {kind} {n}', { kind, n: n - 16 });
 };
 
 // Each kind's settings, as the inspector shows them: key, label, unit, and
 // how the shown number maps to KYNEX's.
 export const FIELDS = {
   cnc: [
-    ['cycle', '가공 시간', 's', 1],
-    ['door', '문 개폐', 's', 1],
-    ['chuck', '척 개폐', 's', 1],
+    ['cycle', t('가공 시간'), 's', 1],
+    ['door', t('문 개폐'), 's', 1],
+    ['chuck', t('척 개폐'), 's', 1],
   ],
   infeed: [
-    ['rows', '행', '', 1],
-    ['cols', '열', '', 1],
-    ['pitch', '간격', 'mm', 1000],
+    ['rows', t('행'), '', 1],
+    ['cols', t('열'), '', 1],
+    ['pitch', t('간격'), 'mm', 1000],
   ],
-  gripper: [['actuate', '개폐 시간', 's', 1]],
+  gripper: [['actuate', t('개폐 시간'), 's', 1]],
   molder: [
-    ['cycle', '성형 시간', 's', 1],
-    ['door', '가드 개폐', 's', 1],
+    ['cycle', t('성형 시간'), 's', 1],
+    ['door', t('가드 개폐'), 's', 1],
   ],
   conveyor: [
-    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
-    ['speed', '속도', 'mm/s', 1000],
-    ['feed', '공급 간격', 's', 1],
-    ['drain', '끝에서 치움', '', 1, [[0, '아니오'], [1, '예']]],
+    ['rule', t('분기 방식'), '', 1, RULES.map(([v, l]) => [v, l])],
+    ['speed', t('속도'), 'mm/s', 1000],
+    ['feed', t('공급 간격'), 's', 1],
+    ['drain', t('끝에서 치움'), '', 1, [[0, t('아니오')], [1, t('예')]]],
   ],
   amr: [
-    ['speed', '주행 속도', 'mm/s', 1000],
-    ['capacity', '적재량', '개', 1],
-    ['gather', '모아 싣기 최대 대기', 's', 1],
-    ['battery', '배터리', '분', 1],
-    ['charge', '충전 시간', '분', 1],
+    ['speed', t('주행 속도'), 'mm/s', 1000],
+    ['capacity', t('적재량'), t('개'), 1],
+    ['gather', t('모아 싣기 최대 대기'), 's', 1],
+    ['battery', t('배터리'), t('분'), 1],
+    ['charge', t('충전 시간'), t('분'), 1],
   ],
-  amr_stop: [['charger', '충전소', '', 1, [[0, '아님'], [1, '충전소']]]],
-  positioner: [['speed', '회전 속도', '°/s', 180 / Math.PI]],
+  amr_stop: [['charger', t('충전소'), '', 1, [[0, t('아님')], [1, t('충전소')]]]],
+  positioner: [['speed', t('회전 속도'), '°/s', 180 / Math.PI]],
   // A choice is a list of [value, label].
   door: [
-    ['swing', '동작', '', 1, [[0, '미닫이'], [1, '여닫이']]],
-    ['axis', '축', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
-    ['travel', '거리', 'mm', 1000],
-    ['angle', '각도', '°', 180 / Math.PI],
+    ['swing', t('동작'), '', 1, [[0, t('미닫이')], [1, t('여닫이')]]],
+    ['axis', t('축'), '', 1, [[0, t('부품 X')], [1, t('부품 Y')], [2, t('부품 Z')]]],
+    ['travel', t('거리'), 'mm', 1000],
+    ['angle', t('각도'), '°', 180 / Math.PI],
   ],
   source: [
-    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
-    ['feed', '공급 간격', 's', 1],
-    ['kanban', '칸반 한도', '개', 1],
-    ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
-    ['spread', '폭·σ', 's', 1],
-    ['capacity', '내보낼 자리', '개', 1],
-    ['speed', '이송 속도', 'mm/s', 1000],
+    ['rule', t('분기 방식'), '', 1, RULES.map(([v, l]) => [v, l])],
+    ['feed', t('공급 간격'), 's', 1],
+    ['kanban', t('칸반 한도'), t('개'), 1],
+    ['dist', t('시간 분포'), '', 1, [[0, t('고정')], [1, t('균등 ±폭')], [2, t('삼각 ±폭')], [3, t('정규 σ')], [4, t('지수')]]],
+    ['spread', t('폭·σ'), 's', 1],
+    ['capacity', t('내보낼 자리'), t('개'), 1],
+    ['speed', t('이송 속도'), 'mm/s', 1000],
   ],
   station: [
-    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
-    ['cycle', '처리 시간', 's', 1],
-    ['dist', '시간 분포', '', 1, [[0, '고정'], [1, '균등 ±폭'], [2, '삼각 ±폭'], [3, '정규 σ'], [4, '지수']]],
-    ['spread', '폭·σ', 's', 1],
-    ['setup', '품종 교체 시간', 's', 1],
-    ['mtbf', '고장 간격', 's', 1],
-    ['mttr', '수리 시간', 's', 1],
-    ['pm_every', '보전 간격', 's', 1],
-    ['pm_time', '보전 시간', 's', 1],
-    ['scrap', '불량률', '%', 100],
-    ['crew', '작업자', '', 1, [[0, '필요 없음'], [1, '작업자 필요']]],
-    ['holds', '동시 투입 가능 수', '개', 1],
-    ['capacity', '대기 자리', '개', 1],
-    ['join', '합류 방식', '', 1, JOINS.map(([v, l]) => [v, l])],
-    ['takes', '투입 수', '개', 1],
-    ['makes', '배출 수', '개', 1],
-    ['speed', '이송 속도', 'mm/s', 1000],
+    ['rule', t('분기 방식'), '', 1, RULES.map(([v, l]) => [v, l])],
+    ['cycle', t('처리 시간'), 's', 1],
+    ['dist', t('시간 분포'), '', 1, [[0, t('고정')], [1, t('균등 ±폭')], [2, t('삼각 ±폭')], [3, t('정규 σ')], [4, t('지수')]]],
+    ['spread', t('폭·σ'), 's', 1],
+    ['setup', t('품종 교체 시간'), 's', 1],
+    ['mtbf', t('고장 간격'), 's', 1],
+    ['mttr', t('수리 시간'), 's', 1],
+    ['pm_every', t('보전 간격'), 's', 1],
+    ['pm_time', t('보전 시간'), 's', 1],
+    ['scrap', t('불량률'), '%', 100],
+    ['crew', t('작업자'), '', 1, [[0, t('필요 없음')], [1, t('작업자 필요')]]],
+    ['holds', t('동시 투입 가능 수'), t('개'), 1],
+    ['capacity', t('대기 자리'), t('개'), 1],
+    ['join', t('합류 방식'), '', 1, JOINS.map(([v, l]) => [v, l])],
+    ['takes', t('투입 수'), t('개'), 1],
+    ['makes', t('배출 수'), t('개'), 1],
+    ['speed', t('이송 속도'), 'mm/s', 1000],
   ],
   buffer: [
-    ['rule', '분기 방식', '', 1, RULES.map(([v, l]) => [v, l])],
-    ['capacity', '용량', '개', 1],
-    ['policy', '꺼내는 순서', '', 1, [[0, '먼저 들어온 것 (FIFO)'], [1, '나중 들어온 것 (LIFO)']]],
-    ['speed', '이송 속도', 'mm/s', 1000],
+    ['rule', t('분기 방식'), '', 1, RULES.map(([v, l]) => [v, l])],
+    ['capacity', t('용량'), t('개'), 1],
+    ['policy', t('꺼내는 순서'), '', 1, [[0, t('먼저 들어온 것 (FIFO)')], [1, t('나중 들어온 것 (LIFO)')]]],
+    ['speed', t('이송 속도'), 'mm/s', 1000],
   ],
   operator: [
-    ['speed', '걷는 속도', 'm/s', 1],
-    ['capacity', '한 번에 드는 수', '개', 1],
-    ['wage', '임금', '원/시', 1],
-    ['shift_from', '근무 시작', '시', 1],
-    ['shift_to', '근무 끝', '시', 1],
+    ['speed', t('걷는 속도'), 'm/s', 1],
+    ['capacity', t('한 번에 드는 수'), t('개'), 1],
+    ['wage', t('임금'), t('원/시'), 1],
+    ['shift_from', t('근무 시작'), t('시'), 1],
+    ['shift_to', t('근무 끝'), t('시'), 1],
   ],
   sensor: [
-    ['axis', '빔 방향', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
-    ['travel', '빔 길이', 'mm', 1000],
+    ['axis', t('빔 방향'), '', 1, [[0, t('부품 X')], [1, t('부품 Y')], [2, t('부품 Z')]]],
+    ['travel', t('빔 길이'), 'mm', 1000],
   ],
   actuator: [
-    ['swing', '동작', '', 1, [[0, '직선'], [1, '회전']]],
-    ['axis', '축', '', 1, [[0, '부품 X'], [1, '부품 Y'], [2, '부품 Z']]],
-    ['travel', '행정', 'mm', 1000],
-    ['angle', '각도', '°', 180 / Math.PI],
-    ['door', '동작 시간', 's', 1],
+    ['swing', t('동작'), '', 1, [[0, t('직선')], [1, t('회전')]]],
+    ['axis', t('축'), '', 1, [[0, t('부품 X')], [1, t('부품 Y')], [2, t('부품 Z')]]],
+    ['travel', t('행정'), 'mm', 1000],
+    ['angle', t('각도'), '°', 180 / Math.PI],
+    ['door', t('동작 시간'), 's', 1],
   ],
   connector: [
-    ['plug', '종류', '', 1, [[0, '로봇 받침면'], [1, '컨베이어 입구'], [2, '컨베이어 출구'], [3, '받침면에 올라섬']]],
+    ['plug', t('종류'), '', 1, [[0, t('로봇 받침면')], [1, t('컨베이어 입구')], [2, t('컨베이어 출구')], [3, t('받침면에 올라섬')]]],
   ],
 };
 // Settings that may be below zero: a way back, a turn the other way.
@@ -211,7 +214,7 @@ async function post(request) {
 }
 
 // What carries along a link, by its number, and its arrow's colour.
-const CARRIER_NAMES = ['', 'AMR', '작업자', '로봇'];
+const CARRIER_NAMES = ['', 'AMR', t('작업자'), t('로봇')];
 const CARRIER_COLOURS = [0x5aa9ff, 0x3fcf8e, 0xf2b53c, 0xb57bff];
 
 export class CellPanel {
@@ -279,8 +282,8 @@ export class CellPanel {
           input.remove();
           const file = input.files?.[0];
           if (!file) return;
-          if (file.size > 2 * 1024 * 1024) return this.ctx.toast('주문표가 너무 큽니다 (2 MB까지)');
-          this.send({ op: 'flow_orders', object, csv: await file.text() }, () => this.ctx.toast('주문표를 넣었습니다'));
+          if (file.size > 2 * 1024 * 1024) return this.ctx.toast(t('주문표가 너무 큽니다 (2 MB까지)'));
+          this.send({ op: 'flow_orders', object, csv: await file.text() }, () => this.ctx.toast(t('주문표를 넣었습니다')));
         });
         input.click();
         return;
@@ -313,7 +316,7 @@ export class CellPanel {
       const v = e.target.value.trim();
       const port = v === '' ? null : Number(v);
       if (port != null && !(Number.isInteger(port) && port >= 0 && port <= 17)) {
-        return this.ctx.toast('I/O 번호는 0–17입니다 (0–7 표준, 8–15 설정 가능, 16–17 툴)');
+        return this.ctx.toast(t('I/O 번호는 0–17입니다 (0–7 표준, 8–15 설정 가능, 16–17 툴)'));
       }
       this.send({ op: 'io', object: this.ctx.selected(), key, port });
     });
@@ -327,8 +330,8 @@ export class CellPanel {
       if (value('mirror-kind') === 'mqtt') {
         const broker = value('mirror-broker');
         const topic = value('mirror-topic');
-        if (!broker) return this.ctx.toast('MQTT 브로커 주소를 넣으세요 (호스트:1883)');
-        if (!topic) return this.ctx.toast('AMR 상태 토픽을 넣으세요 (VDA 5050: uagv/v2/제조사/일련번호/state)');
+        if (!broker) return this.ctx.toast(t('MQTT 브로커 주소를 넣으세요 (호스트:1883)'));
+        if (!topic) return this.ctx.toast(t('AMR 상태 토픽을 넣으세요 (VDA 5050: uagv/v2/제조사/일련번호/state)'));
         const request = { op: 'mirror', object, kind: 'mqtt', broker, topic, user: value('mirror-mqtt-user') };
         const password = document.getElementById('mirror-mqtt-password').value;
         if (password) request.password = password;
@@ -338,8 +341,8 @@ export class CellPanel {
       if (value('mirror-kind') === 'umati') {
         const url = value('mirror-url');
         const node = value('mirror-node');
-        if (!url.startsWith('opc.tcp://')) return this.ctx.toast('서버 주소를 넣으세요 (opc.tcp://호스트:4840)');
-        if (!node) return this.ctx.toast('장비 노드를 넣으세요 (예: ns=3;s=Machine1)');
+        if (!url.startsWith('opc.tcp://')) return this.ctx.toast(t('서버 주소를 넣으세요 (opc.tcp://호스트:4840)'));
+        if (!node) return this.ctx.toast(t('장비 노드를 넣으세요 (예: ns=3;s=Machine1)'));
         const request = { op: 'mirror', object, kind: 'umati', url, node, security: value('mirror-security'), user: value('mirror-user') };
         const password = document.getElementById('mirror-password').value;
         if (password) request.password = password;
@@ -347,7 +350,7 @@ export class CellPanel {
         return this.send(request);
       }
       const agent = value('mirror-agent');
-      if (!agent) return this.ctx.toast('에이전트 주소를 넣으세요 (http://호스트:5000)');
+      if (!agent) return this.ctx.toast(t('에이전트 주소를 넣으세요 (http://호스트:5000)'));
       this.send({ op: 'mirror', object, agent, device: value('mirror-device') });
     });
     document.getElementById('mirror-kind').addEventListener('change', () => this.mirrorFields());
@@ -365,10 +368,10 @@ export class CellPanel {
   async send(request, then) {
     try {
       const answer = await post(request);
-      if (!answer.ok) this.ctx.toast(answer.error || '요청을 처리하지 못했습니다');
+      if (!answer.ok) this.ctx.toast(answer.error ? tr(answer.error) : t('요청을 처리하지 못했습니다'));
       else then?.(answer);
     } catch (err) {
-      this.ctx.toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+      this.ctx.toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
     }
   }
 
@@ -433,46 +436,46 @@ export class CellPanel {
     state.innerHTML = m ? this.machineHtml(m, c.kind) : '';
     let actions = '';
     if (c && (c.kind === 'infeed' || c.kind === 'outfeed')) {
-      actions = `<button class="text-btn" data-cell="fill">${c.kind === 'infeed' ? '소재 채우기' : '완성품 채우기'}</button><button class="text-btn quiet" data-cell="empty">비우기</button><span class="muted">${c.slots.length}칸</span>`;
+      actions = `<button class="text-btn" data-cell="fill">${c.kind === 'infeed' ? t('소재 채우기') : t('완성품 채우기')}</button><button class="text-btn quiet" data-cell="empty">${t('비우기')}</button><span class="muted">${t('{n}칸', { n: c.slots.length })}</span>`;
     } else if (c && c.kind === 'cnc') {
       if (!c.seat) {
-        actions = `<span class="warn-text">${escapeHtml('하위 물체에 chuck이 없습니다')}</span>`;
+        actions = `<span class="warn-text">${escapeHtml(t('하위 물체에 chuck이 없습니다'))}</span>`;
       } else {
         const busy = m?.progress != null;
         actions =
-          `<button class="text-btn" data-machine="${m?.opening ? 'close' : 'open'}"${busy ? ' disabled' : ''}>${m?.opening ? '문 닫기' : '문 열기'}</button>` +
-          `<button class="text-btn" data-machine="${m?.clamped ? 'unclamp' : 'clamp'}"${busy ? ' disabled' : ''}>${m?.clamped ? '척 풀기' : '척 물림'}</button>` +
-          `<button class="text-btn" data-machine="start"${busy ? ' disabled' : ''}>가공 시작</button>` +
-          `<button class="text-btn quiet" data-cell="empty"${busy || m?.clamped ? ' disabled' : ''}>척 비우기</button>`;
+          `<button class="text-btn" data-machine="${m?.opening ? 'close' : 'open'}"${busy ? ' disabled' : ''}>${m?.opening ? t('문 닫기') : t('문 열기')}</button>` +
+          `<button class="text-btn" data-machine="${m?.clamped ? 'unclamp' : 'clamp'}"${busy ? ' disabled' : ''}>${m?.clamped ? t('척 풀기') : t('척 물림')}</button>` +
+          `<button class="text-btn" data-machine="start"${busy ? ' disabled' : ''}>${t('가공 시작')}</button>` +
+          `<button class="text-btn quiet" data-cell="empty"${busy || m?.clamped ? ' disabled' : ''}>${t('척 비우기')}</button>`;
       }
     } else if (c && c.kind === 'molder') {
       if (!c.seat) {
-        actions = `<span class="warn-text">${escapeHtml('하위 물체에 mould가 없습니다')}</span>`;
+        actions = `<span class="warn-text">${escapeHtml(t('하위 물체에 mould가 없습니다'))}</span>`;
       } else {
         const busy = m?.progress != null;
         actions =
-          `<button class="text-btn" data-machine="${m?.opening ? 'close' : 'open'}"${busy ? ' disabled' : ''}>${m?.opening ? '가드 닫기' : '가드 열기'}</button>` +
-          `<button class="text-btn" data-machine="start"${busy ? ' disabled' : ''}>성형 시작</button>` +
-          `<button class="text-btn quiet" data-cell="empty"${busy ? ' disabled' : ''}>금형 비우기</button>`;
+          `<button class="text-btn" data-machine="${m?.opening ? 'close' : 'open'}"${busy ? ' disabled' : ''}>${m?.opening ? t('가드 닫기') : t('가드 열기')}</button>` +
+          `<button class="text-btn" data-machine="start"${busy ? ' disabled' : ''}>${t('성형 시작')}</button>` +
+          `<button class="text-btn quiet" data-cell="empty"${busy ? ' disabled' : ''}>${t('금형 비우기')}</button>`;
       }
     } else if (c && c.kind === 'amr') {
       const stops = this.cell.components.filter((s) => s.kind === 'amr_stop');
       actions = stops.length
         ? stops
-            .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(s.name)}</button>`)
+            .map((s) => `<button class="text-btn" data-drive="${escapeHtml(s.object)}"${c.amr?.driving ? ' disabled' : ''}>→ ${escapeHtml(tr(s.name))}</button>`)
             .join('') +
-          (c.amr?.driving ? '<span class="muted">주행 중</span>' : '') +
-          (c.amr?.battery != null ? `<span class="muted">배터리 ${Math.round(c.amr.battery * 100)}%${c.amr.charging ? ' · 충전하러 감/충전 중' : ''}</span>` : '')
-        : '<span class="muted">라이브러리에서 AMR 정지 위치를 놓으세요</span>';
+          (c.amr?.driving ? `<span class="muted">${t('주행 중')}</span>` : '') +
+          (c.amr?.battery != null ? `<span class="muted">${t('배터리 {pct}%', { pct: Math.round(c.amr.battery * 100) })}${c.amr.charging ? ` · ${t('충전하러 감/충전 중')}` : ''}</span>` : '')
+        : `<span class="muted">${t('라이브러리에서 AMR 정지 위치를 놓으세요')}</span>`;
     } else if (c && c.kind === 'operator') {
       // The stations this person may work at: none picked, any.
       const stations = this.cell.components.filter((s) => s.kind === 'station');
       const have = c.skills ?? [];
       actions = stations.length
-        ? `<span class="muted">맡는 공정</span>${stations
-            .map((s) => `<button class="text-btn${have.includes(s.object) ? ' on' : ''}" data-skill="${escapeHtml(s.object)}" aria-pressed="${have.includes(s.object)}">${have.includes(s.object) ? '✓ ' : ''}${escapeHtml(s.name)}</button>`)
-            .join('')}${have.length ? '' : '<span class="muted">(아무것도 고르지 않으면 모두)</span>'}`
-        : '<span class="muted">작업자 필요 스테이션이 생기면 맡을 곳을 고를 수 있습니다</span>';
+        ? `<span class="muted">${t('맡는 공정')}</span>${stations
+            .map((s) => `<button class="text-btn${have.includes(s.object) ? ' on' : ''}" data-skill="${escapeHtml(s.object)}" aria-pressed="${have.includes(s.object)}">${have.includes(s.object) ? '✓ ' : ''}${escapeHtml(tr(s.name))}</button>`)
+            .join('')}${have.length ? '' : `<span class="muted">${t('(아무것도 고르지 않으면 모두)')}</span>`}`
+        : `<span class="muted">${t('작업자 필요 스테이션이 생기면 맡을 곳을 고를 수 있습니다')}</span>`;
     } else if (c && c.kind === 'amr_stop') {
       // The lanes it has, each with its way: clicked, that stop selected.
       const goes = (x, y) => (this.componentOf(x)?.lanes ?? []).includes(y);
@@ -483,11 +486,11 @@ export class CellPanel {
         return goes(c.object, s.object) && goes(s.object, c.object) ? `${me} ↔ ${o}` : goes(c.object, s.object) ? `${me} → ${o}` : `${o} → ${me}`;
       };
       actions =
-        `<div class="flow-links"><span class="muted">AMR 길</span>${
+        `<div class="flow-links"><span class="muted">${t('AMR 길')}</span>${
           linked.length
-            ? linked.map((s) => `<button class="text-btn" data-select="${escapeHtml(s.object)}" title="${escapeHtml(s.name)} 선택">${way(s)}</button>`).join('')
-            : '<span class="muted">없음</span>'
-        }</div>` + '<span class="muted insp-hint">길 잇기: 연결 모드(Shift+C)에서 번호표를 다른 번호표로 끌기 · 방향·끊기: 길을 오른쪽 클릭</span>';
+            ? linked.map((s) => `<button class="text-btn" data-select="${escapeHtml(s.object)}" title="${t('{name} 선택', { name: escapeHtml(tr(s.name)) })}">${way(s)}</button>`).join('')
+            : `<span class="muted">${t('없음')}</span>`
+        }</div>` + `<span class="muted insp-hint">${t('길 잇기: 연결 모드(Shift+C)에서 번호표를 다른 번호표로 끌기 · 방향·끊기: 길을 오른쪽 클릭')}</span>`;
     } else if (c && c.flow) {
       const f = c.flow;
       // Where its parts come from and go: the links drawn, each with what
@@ -497,20 +500,20 @@ export class CellPanel {
         const k = this.carrierOf(from, to);
         return k.by ? ` <span class="muted">(${escapeHtml(this.carrierText(k.by, k.robot))})</span>` : '';
       };
-      const chip = (o, from, to) => `<button class="text-btn" data-select="${escapeHtml(o)}" title="${escapeHtml(this.nameOf(o))} 선택">${escapeHtml(this.nameOf(o))}${via(from, to)}</button>`;
+      const chip = (o, from, to) => `<button class="text-btn" data-select="${escapeHtml(o)}" title="${t('{name} 선택', { name: escapeHtml(this.nameOf(o)) })}">${escapeHtml(this.nameOf(o))}${via(from, to)}</button>`;
       const ins = this.insOf(c.object);
       const outs = this.outsOf(c.object);
       const nexts =
-        (c.kind === 'source' ? '' : `<div class="flow-links"><span class="muted">이전 공정</span>${ins.length ? ins.map((o) => chip(o, o, c.object)).join('') : '<span class="muted">없음</span>'}</div>`) +
-        (c.kind === 'sink' ? '' : `<div class="flow-links"><span class="muted">이후 공정</span>${outs.length ? outs.map((o) => chip(o, c.object, o)).join('') : '<span class="muted">없음</span>'}</div>`);
+        (c.kind === 'source' ? '' : `<div class="flow-links"><span class="muted">${t('이전 공정')}</span>${ins.length ? ins.map((o) => chip(o, o, c.object)).join('') : `<span class="muted">${t('없음')}</span>`}</div>`) +
+        (c.kind === 'sink' ? '' : `<div class="flow-links"><span class="muted">${t('이후 공정')}</span>${outs.length ? outs.map((o) => chip(o, c.object, o)).join('') : `<span class="muted">${t('없음')}</span>`}</div>`);
       const state =
         c.kind === 'sink'
-          ? `배출 ${f.made}개`
+          ? t('배출 {n}개', { n: f.made })
           : c.kind === 'station'
-            ? `${f.unreachable ? `⚠ 로봇이 닿지 않아 이 장비로는 보내지 않습니다 (${escapeHtml(f.unreachable)}) · ` : ''}${f.down ? '고장 · 수리 중' : f.maint ? '보전 중' : f.working ? `작업 중 ${Math.ceil(f.left ?? 0)} s` : f.out ? '막힘 (보낼 곳 없음)' : '대기'} · 장비 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}개 · 대기 ${f.queue} · 완료 ${f.made}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
+            ? `${f.unreachable ? `⚠ ${t('로봇이 닿지 않아 이 장비로는 보내지 않습니다 ({why})', { why: escapeHtml(tr(f.unreachable)) })} · ` : ''}${f.down ? t('고장 · 수리 중') : f.maint ? t('보전 중') : f.working ? t('작업 중 {s} s', { s: Math.ceil(f.left ?? 0) }) : f.out ? t('막힘 (보낼 곳 없음)') : t('대기')} · ${t('장비 안 {n}개', { n: `${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}` })} · ${t('대기 {n}', { n: f.queue })} · ${t('완료 {n}', { n: f.made })}${f.oee && f.oee.good + f.oee.bad ? ` · OEE ${Math.round(f.oee.oee * 100)}%` : ''}`
             : c.kind === 'conveyor'
-              ? `끝에서 기다림 ${f.out}`
-              : `${c.kind === 'source' ? `공급 ${f.made}개 · ` : ''}보관 ${f.out + f.queue + (f.waiting ?? 0)}${f.waiting ? ` (운반 대기 ${f.waiting})` : ''}`;
+              ? t('끝에서 기다림 {n}', { n: f.out })
+              : `${c.kind === 'source' ? `${t('공급 {n}개', { n: f.made })} · ` : ''}${t('보관 {n}', { n: f.out + f.queue + (f.waiting ?? 0) })}${f.waiting ? ` ${t('(운반 대기 {n})', { n: f.waiting })}` : ''}`;
       // Products: as many as any source mixes.
       const last = (m) => (m ?? []).reduce((k, w, i) => (w > 0 ? i + 1 : k), 0);
       const used = Math.max(1, ...this.cell.components.map((s) => last(s.flow?.mix)));
@@ -518,13 +521,13 @@ export class CellPanel {
       let products = '';
       if (c.kind === 'source') {
         const mix = f.mix ?? [];
-        products = `<div class="flow-products"><span class="muted">제품 비율</span>${names
+        products = `<div class="flow-products"><span class="muted">${t('제품 비율')}</span>${names
           .map((n, i) => `<label>${n}<input type="number" class="num" data-mix="${i}" value="${mix[i] ?? (i === 0 && !mix.length ? 1 : 0)}" min="0" step="1"></label>`)
           .join('')}</div>`;
-        products += `<div class="flow-products"><span class="muted">주문표${f.orders ? ` ${f.orders}건 (공급 간격 대신 주문대로)` : ''}</span><button class="text-btn" data-orders-load title="CSV: 시각(분), 제품(A–F), 수량, 납기(분) — 한 줄에 주문 하나">CSV 불러오기</button>${f.orders ? '<button class="text-btn quiet" data-orders-clear>지우기</button>' : ''}</div>`;
+        products += `<div class="flow-products"><span class="muted">${t('주문표')}${f.orders ? ` ${t('{n}건 (공급 간격 대신 주문대로)', { n: f.orders })}` : ''}</span><button class="text-btn" data-orders-load title="${t('CSV: 시각(분), 제품(A–F), 수량, 납기(분) — 한 줄에 주문 하나')}">${t('CSV 불러오기')}</button>${f.orders ? `<button class="text-btn quiet" data-orders-clear>${t('지우기')}</button>` : ''}</div>`;
       } else if (c.kind === 'station' && used > 1) {
         const cycles = f.cycles ?? [];
-        products = `<div class="flow-products"><span class="muted">품종별 처리 시간 (비우면 기본)</span>${names
+        products = `<div class="flow-products"><span class="muted">${t('품종별 처리 시간 (비우면 기본)')}</span>${names
           .slice(0, used)
           .map((n, i) => `<label>${n}<input type="number" class="num" data-cycle="${i}" value="${cycles[i] > 0 ? cycles[i] : ''}" min="0" step="1" placeholder="${c.props.cycle}"></label>`)
           .join('')}</div>`;
@@ -534,56 +537,56 @@ export class CellPanel {
       const host =
         c.kind === 'conveyor' || (!near.length && !c.host)
           ? ''
-          : `<div class="flow-products"><span class="muted" title="이 공정이 어느 장비의 공정인지: 그 장비를 눌러도 이 설정이 보입니다">공정 「${escapeHtml(c.name)}」의 장비</span><select data-flow-host><option value="">없음</option>${near
-              .map((q) => `<option value="${escapeHtml(q.root)}"${q.root === c.host ? ' selected' : ''}>${escapeHtml(q.name)}${q.d != null ? ` (${q.d.toFixed(1)} m)` : ''}</option>`)
+          : `<div class="flow-products"><span class="muted" title="${t('이 공정이 어느 장비의 공정인지: 그 장비를 눌러도 이 설정이 보입니다')}">${t('공정 「{name}」의 장비', { name: escapeHtml(tr(c.name)) })}</span><select data-flow-host><option value="">${t('없음')}</option>${near
+              .map((q) => `<option value="${escapeHtml(q.root)}"${q.root === c.host ? ' selected' : ''}>${escapeHtml(tr(q.name))}${q.d != null ? ` (${q.d.toFixed(1)} m)` : ''}</option>`)
               .join('')}</select></div>`;
       // Each link's products, where there are several.
       let routes = '';
       if (used > 1 && c.kind !== 'sink' && f.next.length) {
         routes = f.next
           .map((to) => {
-            const t = this.componentOf(to);
+            const target = this.componentOf(to);
             const have = f.routes?.[to] ?? [];
-            return `<div class="flow-route"><span class="muted">→ ${escapeHtml(t?.name ?? to)}</span>${names
+            return `<div class="flow-route"><span class="muted">→ ${escapeHtml(tr(target?.name ?? to))}</span>${names
               .slice(0, used)
-              .map((n, i) => `<button class="text-btn${have.includes(i) ? ' on' : ''}" data-route-to="${escapeHtml(to)}" data-product="${i}" title="이 길로 보낼 제품 (아무것도 고르지 않으면 모두)">${n}</button>`)
-              .join('')}${have.length ? '' : '<span class="muted">모두</span>'}</div>`;
+              .map((n, i) => `<button class="text-btn${have.includes(i) ? ' on' : ''}" data-route-to="${escapeHtml(to)}" data-product="${i}" title="${t('이 길로 보낼 제품 (아무것도 고르지 않으면 모두)')}">${n}</button>`)
+              .join('')}${have.length ? '' : `<span class="muted">${t('모두')}</span>`}</div>`;
           })
           .join('');
       }
       actions =
         `${nexts}<span class="muted">${state}</span>${host}${products}${routes}` +
-        '<span class="muted insp-hint">잇기·끊기: 연결 모드(Shift+C)에서 설비를 끌어 다른 설비에 놓기 · 화살촉을 끌어 옮기기(빈 곳: 끊기) · ⑂분기/⑃합류 표시를 눌러 방식 정하기</span>';
+        `<span class="muted insp-hint">${t('잇기·끊기: 연결 모드(Shift+C)에서 설비를 끌어 다른 설비에 놓기 · 화살촉을 끌어 옮기기(빈 곳: 끊기) · ⑂분기/⑃합류 표시를 눌러 방식 정하기')}</span>`;
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};
-      const at = a.out >= 1 ? '전진 끝' : a.out <= 0 ? '후진 끝' : a.extending ? '전진 중' : '후진 중';
+      const at = a.out >= 1 ? t('전진 끝') : a.out <= 0 ? t('후진 끝') : a.extending ? t('전진 중') : t('후진 중');
       actions =
-        `<button class="text-btn" data-machine="extend"${a.extending ? ' disabled' : ''}>전진</button>` +
-        `<button class="text-btn" data-machine="retract"${a.extending ? '' : ' disabled'}>후진</button>` +
+        `<button class="text-btn" data-machine="extend"${a.extending ? ' disabled' : ''}>${t('전진')}</button>` +
+        `<button class="text-btn" data-machine="retract"${a.extending ? '' : ' disabled'}>${t('후진')}</button>` +
         `<span class="muted">${at}</span>`;
     } else if (c && c.kind === 'sensor') {
-      actions = c.sensor?.detected ? '<span class="warn-text">감지</span>' : '<span class="muted">감지 없음</span>';
+      actions = c.sensor?.detected ? `<span class="warn-text">${t('감지')}</span>` : `<span class="muted">${t('감지 없음')}</span>`;
     } else if (c && c.kind === 'positioner') {
       const p = c.positioner;
       const angle = p?.angle != null ? Math.round((p.angle * 180) / Math.PI) : 0;
       actions =
         [0, 180]
           .map((a) => `<button class="text-btn" data-turn="${a}"${p?.turning ? ' disabled' : ''}>→ ${a}°</button>`)
-          .join('') + `<span class="muted">${p?.turning ? '회전 중' : `지금 ${angle}°`}</span>`;
+          .join('') + `<span class="muted">${p?.turning ? t('회전 중') : t('지금 {angle}°', { angle })}</span>`;
     } else if (c && (c.kind === 'door' || c.kind === 'connector')) {
       const mm = (c.point ?? []).map((v) => Math.round(v * 1000)).join(', ');
-      const what = c.kind === 'door' ? '회전 중심' : '연결점';
+      const what = c.kind === 'door' ? t('회전 중심') : t('연결점');
       actions =
         this.pickingFor === uid
-          ? `<span class="muted">${what}이 될 점을 3D 화면에서 누르세요 (Esc 취소)</span>`
-          : `<button class="text-btn" data-pick="1">${what} 찍기</button><span class="muted">${mm} mm</span>`;
+          ? `<span class="muted">${t('{what}이 될 점을 3D 화면에서 누르세요 (Esc 취소)', { what })}</span>`
+          : `<button class="text-btn" data-pick="1">${t('{what} 찍기', { what })}</button><span class="muted">${mm} mm</span>`;
       if (c.kind === 'door') {
         actions += c.machine_of
-          ? '<span class="muted">거리 0: 장비 X 방향으로 자기 폭만큼. 각도·거리가 음수면 반대로</span>'
-          : '<span class="warn-text">CNC·사출기 역할 물체 아래에 있어야 움직입니다</span>';
+          ? `<span class="muted">${t('거리 0: 장비 X 방향으로 자기 폭만큼. 각도·거리가 음수면 반대로')}</span>`
+          : `<span class="warn-text">${t('CNC·사출기 역할 물체 아래에 있어야 움직입니다')}</span>`;
       }
     } else if (c && c.kind === 'gripper' && !c.robot) {
-      actions = '<span class="warn-text">로봇의 링크가 아닙니다</span>';
+      actions = `<span class="warn-text">${t('로봇의 링크가 아닙니다')}</span>`;
     }
     if (actions !== this.drawn.actions) {
       this.drawn.actions = actions;
@@ -598,7 +601,7 @@ export class CellPanel {
       this.drawn.io = ioKey;
       const row = (key, output) => {
         const n = c.io[key];
-        return `<label class="insp-field">${output ? '→' : '←'} ${escapeHtml(IO_LABELS[`${c.kind}:${key}`] ?? IO_LABELS[key] ?? key)}<input type="number" class="num" data-io="${escapeHtml(key)}" value="${n ?? ''}" min="0" max="17" placeholder="없음"><span>${n != null ? ioName(n, output) : ''}</span></label>`;
+        return `<label class="insp-field">${output ? '→' : '←'} ${escapeHtml(IO_LABELS[`${c.kind}:${key}`] ?? IO_LABELS[key] ?? key)}<input type="number" class="num" data-io="${escapeHtml(key)}" value="${n ?? ''}" min="0" max="17" placeholder="${t('없음')}"><span>${n != null ? ioName(n, output) : ''}</span></label>`;
       };
       document.getElementById('cell-io').innerHTML =
         io.outputs.map((k) => row(k, true)).join('') + io.inputs.map((k) => row(k, false)).join('');
@@ -633,33 +636,33 @@ export class CellPanel {
       }
       for (const el of mirrorBox.querySelectorAll('input, select')) el.disabled = !!m;
       this.mirrorFields();
-      document.getElementById('mirror-go').textContent = m ? '그만 따라가기' : '따라가기';
+      document.getElementById('mirror-go').textContent = m ? t('그만 따라가기') : t('따라가기');
       const st = c.machine?.mirror;
       const fleet = c.amr?.follow;
       let text = '';
       if (m && amr && fleet) {
         const said = [
-          fleet.connected ? '연결됨' : '연결 안 됨',
-          fleet.driving != null ? (fleet.driving ? '주행 중' : '정지') : null,
-          fleet.battery != null ? `배터리 ${Math.round(fleet.battery)}%` : null,
-          fleet.age != null ? `${fleet.age}초 전` : '위치 기다리는 중',
-          ...(fleet.errors ?? []),
+          fleet.connected ? t('연결됨') : t('연결 안 됨'),
+          fleet.driving != null ? (fleet.driving ? t('주행 중') : t('정지')) : null,
+          fleet.battery != null ? t('배터리 {pct}%', { pct: Math.round(fleet.battery) }) : null,
+          fleet.age != null ? t('{n}초 전', { n: fleet.age }) : t('위치 기다리는 중'),
+          ...(fleet.errors ?? []).map(tr),
         ].filter(Boolean);
-        text = said.join(' · ') + (fleet.error ? ` · ${fleet.error}` : '');
+        text = said.join(' · ') + (fleet.error ? ` · ${tr(fleet.error)}` : '');
       } else if (m && st) {
         const last = st.last;
-        if (st.error) text = st.error;
+        if (st.error) text = tr(st.error);
         if (last) {
-          const said = [last.device, last.execution, last.door ? `문 ${last.door}` : null, last.part_count != null ? `생산 ${last.part_count}` : null, last.program]
+          const said = [last.device, last.execution, last.door ? t('문 {state}', { state: last.door }) : null, last.part_count != null ? t('생산 {n}', { n: last.part_count }) : null, last.program]
             .filter(Boolean)
             .join(' · ');
-          text = `${said} (${st.age ?? '?'}초 전)${st.error ? ` · ${st.error}` : ''}`;
+          text = `${said} (${t('{n}초 전', { n: st.age ?? '?' })})${st.error ? ` · ${tr(st.error)}` : ''}`;
         }
       } else if (m) {
-        text = '연결 중…';
+        text = t('연결 중…');
       }
       // A umati server's certificate, trusted on first meeting.
-      if (m?.kind === 'umati' && m.trust) text += `${text ? ' · ' : ''}서버 인증서 ${m.trust.slice(0, 16)}…`;
+      if (m?.kind === 'umati' && m.trust) text += `${text ? ' · ' : ''}${t('서버 인증서 {id}…', { id: m.trust.slice(0, 16) })}`;
       document.getElementById('mirror-state').textContent = text;
     }
     // Its PLC coils: commands the PLC gives it, states it gives the PLC.
@@ -673,7 +676,7 @@ export class CellPanel {
       const row = (key, command) => {
         const n = c.plc?.[key];
         const label = IO_LABELS[`${c.kind}:${key}`] ?? IO_LABELS[key] ?? key;
-        return `<label class="insp-field">${command ? 'PLC →' : '→ PLC'} ${escapeHtml(label)}<input type="text" class="num plc-address" data-plc="${escapeHtml(key)}" value="${escapeHtml(n ?? '')}" placeholder="없음" spellcheck="false"></label>`;
+        return `<label class="insp-field">${command ? 'PLC →' : '→ PLC'} ${escapeHtml(label)}<input type="text" class="num plc-address" data-plc="${escapeHtml(key)}" value="${escapeHtml(n ?? '')}" placeholder="${t('없음')}" spellcheck="false"></label>`;
       };
       document.getElementById('cell-plc').innerHTML =
         plcPoints.outputs.map((k) => row(k, true)).join('') + plcPoints.inputs.map((k) => row(k, false)).join('');
@@ -682,16 +685,17 @@ export class CellPanel {
 
   // A CNC machine's state, in words and a bar.
   machineHtml(m, kind) {
-    const door = m.door >= 1 ? '열림' : m.door <= 0 ? '닫힘' : m.opening ? '여는 중' : '닫는 중';
+    const door = m.door >= 1 ? t('열림') : m.door <= 0 ? t('닫힘') : m.opening ? t('여는 중') : t('닫는 중');
     const molder = kind === 'molder';
     const travel = m.chuck ?? (m.clamped ? 1 : 0);
-    const chuck = m.clamped ? (travel >= 1 ? '물림' : '무는 중') : travel <= 0 ? '풀림' : '푸는 중';
-    const part = m.part === 'raw' ? '소재' : m.part === 'finished' ? (molder ? '성형품' : '완성품') : '없음';
+    const chuck = m.clamped ? (travel >= 1 ? t('물림') : t('무는 중')) : travel <= 0 ? t('풀림') : t('푸는 중');
+    const part = m.part === 'raw' ? t('소재') : m.part === 'finished' ? (molder ? t('성형품') : t('완성품')) : t('없음');
     let html = molder
-      ? `<div class="machine-state"><span>가드 <b>${door}</b></span><span>금형 <b>${part}</b></span></div>`
-      : `<div class="machine-state"><span>문 <b>${door}</b></span><span>척 <b>${chuck}</b></span><span>척 안 <b>${part}</b></span></div>`;
+      ? `<div class="machine-state"><span>${t('가드')} <b>${door}</b></span><span>${t('금형')} <b>${part}</b></span></div>`
+      : `<div class="machine-state"><span>${t('문')} <b>${door}</b></span><span>${t('척')} <b>${chuck}</b></span><span>${t('척 안')} <b>${part}</b></span></div>`;
     if (m.progress != null) {
-      html += `<div class="machine-bar"><span style="width:${(m.progress * 100).toFixed(1)}%"></span><em>${molder ? '성형' : '가공'} 중 ${Math.round(m.progress * 100)}% · 남은 ${Math.ceil(m.left)} s</em></div>`;
+      const pct = Math.round(m.progress * 100);
+      html += `<div class="machine-bar"><span style="width:${(m.progress * 100).toFixed(1)}%"></span><em>${molder ? t('성형 중 {pct}%', { pct }) : t('가공 중 {pct}%', { pct })} · ${t('남은 {s} s', { s: Math.ceil(m.left) })}</em></div>`;
     }
     return html;
   }
@@ -717,7 +721,7 @@ export class CellPanel {
   }
 
   robotName(root) {
-    return this.ctx.robots?.().find((r) => r.root === root)?.name || this.ctx.nameOf?.(root) || '';
+    return tr(this.ctx.robots?.().find((r) => r.root === root)?.name || this.ctx.nameOf?.(root) || '');
   }
 
   // Each link's number in the flow, by "from>to": its step from the
@@ -782,7 +786,7 @@ export class CellPanel {
   setCarrier(link, by, robot = null) {
     const said = `${this.nameOf(link.from)} → ${this.nameOf(link.to)}`;
     const what =
-      by === 3 ? `로봇 ${robot ? this.robotName(robot) : '(닿는 로봇 자동)'}` : by === 1 && robot ? this.amrName(robot) : CARRIER_NAMES[by] || '직접 (운반 없음)';
+      by === 3 ? (robot ? t('로봇 {name}', { name: this.robotName(robot) }) : t('로봇 (닿는 로봇 자동)')) : by === 1 && robot ? this.amrName(robot) : CARRIER_NAMES[by] || t('직접 (운반 없음)');
     this.send({ op: 'flow_carrier', object: link.from, to: link.to, by, robot }, () => this.ctx.toast(`${said}: ${what}`));
   }
 
@@ -832,7 +836,7 @@ export class CellPanel {
   }
 
   carrierText(by, robot) {
-    return by === 3 ? `로봇 ${robot ? this.robotName(robot) : '(자동)'}` : CARRIER_NAMES[by] || '직접';
+    return by === 3 ? (robot ? t('로봇 {name}', { name: this.robotName(robot) }) : t('로봇 (자동)')) : CARRIER_NAMES[by] || t('직접');
   }
 
   // ---- Robots in the flow's picture ------------------------------------
@@ -860,7 +864,7 @@ export class CellPanel {
 
   // A robot's or an AMR's name, said as such.
   hubName(object) {
-    return this.isAmr(object) ? this.amrName(object) : `로봇 ${this.robotName(object)}`;
+    return this.isAmr(object) ? this.amrName(object) : t('로봇 {name}', { name: this.robotName(object) });
   }
 
   // Over a robot or an AMR, where its arrows meet: [x, y, z], or null.
@@ -880,7 +884,7 @@ export class CellPanel {
   hubLink(robot, { from = null, to = null, remove = false }, then = null) {
     const said = from != null ? `${this.nameOf(from)} → ${this.hubName(robot)}` : `${this.hubName(robot)} → ${this.nameOf(to)}`;
     this.send({ op: 'hub_link', robot, from: from ?? undefined, to: to ?? undefined, remove }, () => {
-      this.ctx.toast(remove ? `연결을 끊었습니다: ${said}` : `이었습니다: ${said}`);
+      this.ctx.toast(remove ? t('연결을 끊었습니다: {link}', { link: said }) : t('이었습니다: {link}', { link: said }));
       then?.();
     });
   }
@@ -889,7 +893,7 @@ export class CellPanel {
     this.link = { from: null };
     this.onLinking?.(true);
     this.drawMarkers();
-    this.ctx.toast('연결 모드: 설비를 눌러 다음 설비로 끌어 놓으세요 (Shift+C·Esc: 끝)');
+    this.ctx.toast(t('연결 모드: 설비를 눌러 다음 설비로 끌어 놓으세요 (Shift+C·Esc: 끝)'));
   }
 
   stopLinking() {
@@ -922,26 +926,26 @@ export class CellPanel {
         else this.hubLink(robot, { from });
       } else if (from != null && ((this.isAmr(from) && this.isRobot(robot)) || (this.isRobot(from) && this.isAmr(robot)))) {
         this.hubLink(from, { to: robot });
-      } else this.ctx.toast(`${this.hubName(robot)}에서 시작 · 부품을 내려놓을 설비를 누르세요`);
+      } else this.ctx.toast(t('{name}에서 시작 · 부품을 내려놓을 설비를 누르세요', { name: this.hubName(robot) }));
       if (this.link?.once) this.link = null;
       else if (this.link) this.link.from = null;
       this.drawMarkers();
       return null;
     }
     const piece = this.pieceOf(uids, root);
-    if (piece?.c?.flow) return this.linkOn(piece.c.object, piece.c.kind, piece.c.name);
+    if (piece?.c?.flow) return this.linkOn(piece.c.object, piece.c.kind, tr(piece.c.name));
     if (!piece || piece.structure) {
-      this.ctx.toast(piece?.why ?? '설비를 누르세요 (공정 흐름에 넣을 수 있는 것)');
+      this.ctx.toast(piece?.why ?? t('설비를 누르세요 (공정 흐름에 넣을 수 있는 것)'));
       return null;
     }
     const object = piece.object;
     const machine = piece.c && ['cnc', 'molder'].includes(piece.c.kind) ? piece.c : null;
-    if (machine && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return null;
+    if (machine && !confirm(t('{name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.', { name: tr(machine.name) }))) return null;
     const kind = !machine && !this.link.from ? 'source' : 'station';
     const props = machine ? { cycle: machine.props.cycle } : {};
     this.send({ op: 'role', object, kind, props }, () => {
       const made = this.componentOf(object);
-      this.linkOn(object, kind, made?.name ?? '', kind === 'source' ? '소재 공급으로 정했습니다' : '공정 스테이션으로 정했습니다 (공정 시간을 넣으세요)');
+      this.linkOn(object, kind, tr(made?.name ?? ''), kind === 'source' ? t('소재 공급으로 정했습니다') : t('공정 스테이션으로 정했습니다 (공정 시간을 넣으세요)'));
     });
     return object;
   }
@@ -981,13 +985,13 @@ export class CellPanel {
     const cs = uids.map((u) => this.componentOf(u));
     const carrier = cs.find((c) => c && (NOT_PLACES[c.kind] || c.kind === 'amr'));
     if (carrier) {
-      const why = NOT_PLACES[carrier.kind] ?? 'AMR은 운반 수단입니다';
-      return { object: carrier.object, c: carrier, name: carrier.name, structure: true, why };
+      const why = NOT_PLACES[carrier.kind] ?? t('AMR은 운반 수단입니다');
+      return { object: carrier.object, c: carrier, name: tr(carrier.name), structure: true, why };
     }
     const c = cs.find((c) => c?.flow);
-    if (c) return { object: c.object, c, name: c.name, structure: false };
+    if (c) return { object: c.object, c, name: tr(c.name), structure: false };
     const machine = cs.find((c) => c && ['cnc', 'molder'].includes(c.kind));
-    if (machine) return { object: machine.object, c: machine, name: machine.name, structure: false };
+    if (machine) return { object: machine.object, c: machine, name: tr(machine.name), structure: false };
     const item = this.ctx.itemOf?.(uids[0]);
     const object = root ?? item?.root ?? uids[uids.length - 1] ?? null;
     if (object == null) return null;
@@ -997,8 +1001,8 @@ export class CellPanel {
     // A flow piece standing on the equipment — a station set at a machine
     // — is what the equipment means to the flow.
     const on = structure ? null : this.flowOn(object);
-    if (on) return { object: on.object, c: on, name: on.name, structure: false };
-    return { object, c: this.componentOf(object) ?? null, name: this.ctx.nameOf?.(object) ?? '', structure };
+    if (on) return { object: on.object, c: on, name: tr(on.name), structure: false };
+    return { object, c: this.componentOf(object) ?? null, name: tr(this.ctx.nameOf?.(object) ?? ''), structure };
   }
 
   // The flow's piece standing within equipment `object`'s footprint (a
@@ -1024,8 +1028,8 @@ export class CellPanel {
     // A role on a part of placed equipment — a conveyor's belt, a table's
     // pallet —: the equipment's name, which tells two of them apart.
     const item = this.ctx.itemOf?.(object);
-    if (item && item.root !== object && item.name) return item.name;
-    return this.componentOf(object)?.name ?? this.ctx.nameOf?.(object) ?? '';
+    if (item && item.root !== object && item.name) return tr(item.name);
+    return tr(this.componentOf(object)?.name ?? this.ctx.nameOf?.(object) ?? '');
   }
 
   // Metres between two pieces of the flow, or null when either has no place.
@@ -1066,10 +1070,10 @@ export class CellPanel {
   linkDirect(from, to, then = null) {
     const have = this.componentOf(from)?.flow?.next ?? [];
     const said = `${this.nameOf(from)} → ${this.nameOf(to)}`;
-    if (have.includes(to)) return this.ctx.toast(`이미 이어져 있습니다: ${said}`);
-    if (this.componentOf(to)?.kind === 'source') return this.ctx.toast('소재 공급으로는 보낼 수 없습니다');
+    if (have.includes(to)) return this.ctx.toast(t('이미 이어져 있습니다: {link}', { link: said }));
+    if (this.componentOf(to)?.kind === 'source') return this.ctx.toast(t('소재 공급으로는 보낼 수 없습니다'));
     this.send({ op: 'flow_next', object: from, next: [...have, to] }, () => {
-      this.ctx.toast(`이었습니다: ${said}`);
+      this.ctx.toast(t('이었습니다: {link}', { link: said }));
       then?.();
     });
   }
@@ -1078,7 +1082,7 @@ export class CellPanel {
     const have = this.componentOf(from)?.flow?.next ?? [];
     if (this.chosenLink?.from === from && this.chosenLink?.to === to) this.chosenLink = null;
     this.send({ op: 'flow_next', object: from, next: have.filter((n) => n !== to) }, () => {
-      this.ctx.toast(`연결을 끊었습니다: ${this.nameOf(from)} → ${this.nameOf(to)}`);
+      this.ctx.toast(t('연결을 끊었습니다: {link}', { link: `${this.nameOf(from)} → ${this.nameOf(to)}` }));
       then?.();
     });
   }
@@ -1093,13 +1097,13 @@ export class CellPanel {
       this.send({ op: 'flow_next', object: from, next });
     }
     this.chosenLink = null;
-    this.ctx.toast(`${this.nameOf(object)}의 연결 ${links.length}개를 끊었습니다`);
+    this.ctx.toast(t('{name}의 연결 {n}개를 끊었습니다', { name: this.nameOf(object), n: links.length }));
   }
 
   // The link the other way round: `to` sends to `from` instead.
   reverseLink({ from, to }) {
-    if (!this.sends(to)) return this.ctx.toast(`${this.nameOf(to)}에서는 부품이 나가지 않습니다`);
-    if (this.componentOf(from)?.kind === 'source') return this.ctx.toast('소재 공급으로는 보낼 수 없습니다');
+    if (!this.sends(to)) return this.ctx.toast(t('{name}에서는 부품이 나가지 않습니다', { name: this.nameOf(to) }));
+    if (this.componentOf(from)?.kind === 'source') return this.ctx.toast(t('소재 공급으로는 보낼 수 없습니다'));
     this.unlink(from, to, () => this.linkDirect(to, from));
   }
 
@@ -1113,11 +1117,11 @@ export class CellPanel {
   joinAs(object, kind, then = null) {
     const c = this.componentOf(object);
     const machine = c && ['cnc', 'molder'].includes(c.kind) ? c : null;
-    if (machine && !confirm(`${machine.name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.`)) return;
+    if (machine && !confirm(t('{name}의 로봇 셀 역할(가공기)을 공정 스테이션으로 바꿉니다. 로봇 프로그램에서 쓰던 문·척 동작은 쓰지 않게 됩니다.', { name: tr(machine.name) }))) return;
     const props = machine ? { cycle: machine.props.cycle } : {};
     const name = this.nameOf(object);
     this.send({ op: 'role', object, kind, props }, () => {
-      this.ctx.toast(kind ? `${name}: ${FLOW_NAME[kind]}${kind === 'station' ? ' (공정 시간을 넣으세요)' : ''}` : `${name}: 공정 흐름에서 뺐습니다`);
+      this.ctx.toast(kind ? `${name}: ${FLOW_NAME[kind]}${kind === 'station' ? ` ${t('(공정 시간을 넣으세요)')}` : ''}` : `${name}: ${t('공정 흐름에서 뺐습니다')}`);
       then?.();
     });
   }
@@ -1129,29 +1133,29 @@ export class CellPanel {
     if (robot != null) {
       // An AMR to a robot: the robot takes the parts off the AMR's top
       // plate where it stops beside it.
-      if (this.isAmr(from) && this.isRobot(robot)) return { ok: true, text: `${this.hubName(from)} → ${this.hubName(robot)} (로봇이 AMR 위에서 집음)`, object: robot };
+      if (this.isAmr(from) && this.isRobot(robot)) return { ok: true, text: `${this.hubName(from)} → ${this.hubName(robot)} (${t('로봇이 AMR 위에서 집음')})`, object: robot };
       // A robot to an AMR: the robot puts the parts onto it, called to
       // stop beside it.
-      if (this.isRobot(from) && this.isAmr(robot)) return { ok: true, text: `${this.hubName(from)} → ${this.hubName(robot)} (로봇이 AMR 위에 놓음)`, object: robot };
-      if (robot === from || this.isHub(from)) return { ok: false, text: '로봇끼리, AMR끼리는 잇지 않습니다', object: robot };
-      const sink = this.componentOf(from)?.kind === 'sink' ? ' · 배출은 버퍼가 됩니다' : '';
-      return { ok: true, text: `${this.nameOf(from)} → ${this.hubName(robot)} (${this.isAmr(robot) ? 'AMR이 실어 감' : '로봇이 가져감'})${sink}`, object: robot };
+      if (this.isRobot(from) && this.isAmr(robot)) return { ok: true, text: `${this.hubName(from)} → ${this.hubName(robot)} (${t('로봇이 AMR 위에 놓음')})`, object: robot };
+      if (robot === from || this.isHub(from)) return { ok: false, text: t('로봇끼리, AMR끼리는 잇지 않습니다'), object: robot };
+      const sink = this.componentOf(from)?.kind === 'sink' ? ` · ${t('배출은 버퍼가 됩니다')}` : '';
+      return { ok: true, text: `${this.nameOf(from)} → ${this.hubName(robot)} (${this.isAmr(robot) ? t('AMR이 실어 감') : t('로봇이 가져감')})${sink}`, object: robot };
     }
     const piece = uids.length ? this.pieceOf(uids, root) : null;
-    if (!piece) return { ok: false, text: '다음 공정이 될 설비 위에 놓으세요', object: null };
+    if (!piece) return { ok: false, text: t('다음 공정이 될 설비 위에 놓으세요'), object: null };
     const { object, c, name } = piece;
     const fromName = this.isHub(from) ? this.hubName(from) : this.nameOf(from);
-    if (object === from || uids.includes(from)) return { ok: false, text: '같은 설비입니다', object };
-    if (piece.structure) return { ok: false, text: piece.why ? `${name}: ${piece.why}` : `${name}: 건물·구조물은 공정에 넣을 수 없습니다`, object };
+    if (object === from || uids.includes(from)) return { ok: false, text: t('같은 설비입니다'), object };
+    if (piece.structure) return { ok: false, text: piece.why ? `${name}: ${piece.why}` : `${name}: ${t('건물·구조물은 공정에 넣을 수 없습니다')}`, object };
     if (c?.flow) {
-      if (c.kind === 'source') return { ok: false, text: `${name}: 소재 공급으로는 보낼 수 없습니다`, object };
+      if (c.kind === 'source') return { ok: false, text: `${name}: ${t('소재 공급으로는 보낼 수 없습니다')}`, object };
       if (this.isHub(from)) {
-        return { ok: true, text: `${this.hubName(from)} → ${name} (${this.isAmr(from) ? 'AMR이 내려놓음' : '로봇이 넣음'})`, object };
+        return { ok: true, text: `${this.hubName(from)} → ${name} (${this.isAmr(from) ? t('AMR이 내려놓음') : t('로봇이 넣음')})`, object };
       }
-      if ((this.componentOf(from)?.flow?.next ?? []).includes(object)) return { ok: false, text: `이미 이어져 있습니다: ${fromName} → ${name}`, object };
+      if ((this.componentOf(from)?.flow?.next ?? []).includes(object)) return { ok: false, text: t('이미 이어져 있습니다: {link}', { link: `${fromName} → ${name}` }), object };
       return { ok: true, text: `${fromName} → ${name}`, object };
     }
-    return { ok: true, text: `${fromName} → ${name} · 놓으면 공정 스테이션이 됩니다`, object };
+    return { ok: true, text: `${fromName} → ${name} · ${t('놓으면 공정 스테이션이 됩니다')}`, object };
   }
 
   // The menu for a right click on equipment `uids` (and `root`): linking
@@ -1171,58 +1175,58 @@ export class CellPanel {
     if (c?.flow) {
       if (this.sends(object)) {
         const have = c.flow.next ?? [];
-        const targets = this.receivers(object).filter((t) => !have.includes(t.object));
+        const targets = this.receivers(object).filter((x) => !have.includes(x.object));
         entries.push({
-          label: '다음 공정으로 연결',
-          sub: targets.map((t) => ({ label: t.name, hint: hint(t), run: () => this.linkDirect(object, t.object) })),
+          label: t('다음 공정으로 연결'),
+          sub: targets.map((x) => ({ label: tr(x.name), hint: hint(x), run: () => this.linkDirect(object, x.object) })),
         });
       }
       if (c.kind !== 'source') {
         const from = this.senders(object).filter((s) => !(s.flow.next ?? []).includes(object));
         entries.push({
-          label: '앞 공정에서 연결 받기',
-          sub: from.map((s) => ({ label: s.name, hint: hint(s), run: () => this.linkDirect(s.object, object) })),
+          label: t('앞 공정에서 연결 받기'),
+          sub: from.map((s) => ({ label: tr(s.name), hint: hint(s), run: () => this.linkDirect(s.object, object) })),
         });
       }
       const links = this.linksOf(object);
       if (links.length) {
         entries.push({
-          label: '연결 끊기',
+          label: t('연결 끊기'),
           sub: [
             ...links.map((l) => ({ label: `${this.nameOf(l.from)} → ${this.nameOf(l.to)}`, danger: true, run: () => this.unlink(l.from, l.to) })),
-            ...(links.length > 1 ? [{ sep: true }, { label: `모두 끊기 (${links.length})`, danger: true, run: () => this.unlinkAll(object) }] : []),
+            ...(links.length > 1 ? [{ sep: true }, { label: t('모두 끊기 ({n})', { n: links.length }), danger: true, run: () => this.unlinkAll(object) }] : []),
           ],
         });
       }
       entries.push({
-        label: '역할 바꾸기',
+        label: t('역할 바꾸기'),
         sub: [
           ...FLOW_KINDS.map(([k, label]) => ({ label, checked: c.kind === k, disabled: c.kind === k, run: () => this.joinAs(object, k) })),
           { sep: true },
-          { label: '공정 흐름에서 빼기', danger: true, run: () => this.joinAs(object, null) },
+          { label: t('공정 흐름에서 빼기'), danger: true, run: () => this.joinAs(object, null) },
         ],
       });
     } else if (!piece.structure) {
       entries.push({
-        label: '공정 흐름에 넣기',
+        label: t('공정 흐름에 넣기'),
         sub: FLOW_KINDS.map(([k, label]) => ({ label, run: () => this.joinAs(object, k) })),
       });
       const from = this.senders(object);
       entries.push({
-        label: '앞 공정에서 연결 받기',
-        hint: '공정 스테이션이 됩니다',
-        sub: from.map((s) => ({ label: s.name, hint: hint(s), run: () => this.joinAs(object, 'station', () => this.linkDirect(s.object, object)) })),
+        label: t('앞 공정에서 연결 받기'),
+        hint: t('공정 스테이션이 됩니다'),
+        sub: from.map((s) => ({ label: tr(s.name), hint: hint(s), run: () => this.joinAs(object, 'station', () => this.linkDirect(s.object, object)) })),
       });
       const targets = this.receivers(object);
-      const kind = this.cell.components.some((t) => t.kind === 'source') ? 'station' : 'source';
+      const kind = this.cell.components.some((x) => x.kind === 'source') ? 'station' : 'source';
       entries.push({
-        label: '다음 공정으로 연결',
-        hint: `${FLOW_NAME[kind]}이 됩니다`,
-        sub: targets.map((t) => ({ label: t.name, hint: hint(t), run: () => this.joinAs(object, kind, () => this.linkDirect(object, t.object)) })),
+        label: t('다음 공정으로 연결'),
+        hint: t('{kind}이 됩니다', { kind: FLOW_NAME[kind] }),
+        sub: targets.map((x) => ({ label: tr(x.name), hint: hint(x), run: () => this.joinAs(object, kind, () => this.linkDirect(object, x.object)) })),
       });
     }
-    entries.push({ sep: true }, { label: '선택', run: () => this.ctx.select?.(object) }, { label: '화면 맞춤', hint: 'F', run: () => this.ctx.frame?.(object) });
-    if (this.ctx.remove) entries.push({ label: '삭제', hint: 'Delete', danger: true, run: () => this.ctx.remove(object) });
+    entries.push({ sep: true }, { label: t('선택'), run: () => this.ctx.select?.(object) }, { label: t('화면 맞춤'), hint: 'F', run: () => this.ctx.frame?.(object) });
+    if (this.ctx.remove) entries.push({ label: t('삭제'), hint: 'Delete', danger: true, run: () => this.ctx.remove(object) });
     return entries;
   }
 
@@ -1236,7 +1240,7 @@ export class CellPanel {
     return [
       { title: name },
       {
-        label: '가져올 곳 (설비 → 여기)',
+        label: t('가져올 곳 (설비 → 여기)'),
         sub: pieces
           .filter((c) => c.kind !== 'sink')
           .map((c) => ({
@@ -1246,7 +1250,7 @@ export class CellPanel {
           })),
       },
       {
-        label: '내려놓을 곳 (여기 → 설비)',
+        label: t('내려놓을 곳 (여기 → 설비)'),
         sub: pieces
           .filter((c) => c.kind !== 'source')
           .map((c) => ({
@@ -1256,8 +1260,8 @@ export class CellPanel {
           })),
       },
       { sep: true },
-      { label: '선택', run: () => this.ctx.select?.(robot) },
-      { label: '화면 맞춤', hint: 'F', run: () => this.ctx.frame?.(robot) },
+      { label: t('선택'), run: () => this.ctx.select?.(robot) },
+      { label: t('화면 맞춤'), hint: 'F', run: () => this.ctx.frame?.(robot) },
     ];
   }
 
@@ -1269,9 +1273,9 @@ export class CellPanel {
       const b = this.isHub(link.to) ? this.hubName(link.to) : this.nameOf(link.to);
       return [
         { title: `${a} → ${b}` },
-        { label: '연결 끊기', hint: 'Delete', danger: true, run: () => this.cutHub(link) },
+        { label: t('연결 끊기'), hint: 'Delete', danger: true, run: () => this.cutHub(link) },
         { sep: true },
-        { label: `${this.hubName(link.hub)} 메뉴…`, sub: this.robotMenu(link.hub).slice(1) },
+        { label: t('{name} 메뉴…', { name: this.hubName(link.hub) }), sub: this.robotMenu(link.hub).slice(1) },
       ];
     }
     const a = this.nameOf(link.from);
@@ -1283,38 +1287,38 @@ export class CellPanel {
     const reach = this.reachOf?.get(`${link.from}>${link.to}`);
     const robots = this.ctx.robots?.() ?? [];
     const carry = [
-      { label: '직접 (운반 없음)', checked: k.by === 0, run: () => this.setCarrier(link, 0) },
-      { label: 'AMR (빈 AMR 자동)', checked: k.by === 1 && !k.robot, run: () => this.setCarrier(link, 1) },
+      { label: t('직접 (운반 없음)'), checked: k.by === 0, run: () => this.setCarrier(link, 0) },
+      { label: t('AMR (빈 AMR 자동)'), checked: k.by === 1 && !k.robot, run: () => this.setCarrier(link, 1) },
       ...this.cell.components
         .filter((c) => c.kind === 'amr')
-        .map((a) => ({ label: `${this.amrName(a.object)}이 나름`, checked: k.by === 1 && k.robot === a.object, run: () => this.setCarrier(link, 1, a.object) })),
-      { label: '작업자', checked: k.by === 2, run: () => this.setCarrier(link, 2) },
+        .map((a) => ({ label: t('{name}이 나름', { name: this.amrName(a.object) }), checked: k.by === 1 && k.robot === a.object, run: () => this.setCarrier(link, 1, a.object) })),
+      { label: t('작업자'), checked: k.by === 2, run: () => this.setCarrier(link, 2) },
       { sep: true },
-      { label: '로봇 (닿는 로봇 자동)', checked: k.by === 3 && !k.robot, run: () => this.setCarrier(link, 3) },
+      { label: t('로봇 (닿는 로봇 자동)'), checked: k.by === 3 && !k.robot, run: () => this.setCarrier(link, 3) },
       // A robot by name: drawn through it — the arrow becomes two, into
       // the robot and out of it.
       ...robots.map((r) => {
         const got = reach?.get(r.root);
         return {
-          label: `로봇 ${r.name}을 거쳐`,
-          hint: got ? (got.reach ? '닿음' : '⚠ 안 닿음') : '도달 확인 중…',
+          label: t('로봇 {name}을 거쳐', { name: tr(r.name) }),
+          hint: got ? (got.reach ? t('닿음') : t('⚠ 안 닿음')) : t('도달 확인 중…'),
           run: () => this.unlink(link.from, link.to, () => this.hubLink(r.root, { from: link.from }, () => this.hubLink(r.root, { to: link.to }))),
         };
       }),
     ];
     return [
       { title: `${a} → ${b}` },
-      { label: '운반', hint: k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : k.by === 1 && k.robot ? this.amrName(k.robot) : CARRIER_NAMES[k.by] || '직접', sub: carry },
-      ...(k.reach ? [{ label: `⚠ ${k.reach}`, disabled: true }] : []),
-      { label: '연결 끊기', hint: 'Delete', danger: true, run: () => this.unlink(link.from, link.to) },
-      { label: '방향 뒤집기', hint: `${b} → ${a}`, run: () => this.reverseLink(link) },
+      { label: t('운반'), hint: k.by === 3 ? (k.robot ? t('로봇 {name}', { name: this.robotName(k.robot) }) : t('로봇 (자동)')) : k.by === 1 && k.robot ? this.amrName(k.robot) : CARRIER_NAMES[k.by] || t('직접'), sub: carry },
+      ...(k.reach ? [{ label: `⚠ ${tr(k.reach)}`, disabled: true }] : []),
+      { label: t('연결 끊기'), hint: 'Delete', danger: true, run: () => this.unlink(link.from, link.to) },
+      { label: t('방향 뒤집기'), hint: `${b} → ${a}`, run: () => this.reverseLink(link) },
       {
-        label: '사이에 끼우기',
-        sub: between.map((x) => ({ label: x.name, hint: FLOW_NAME[x.kind] ?? x.kind, run: () => this.insertBetween(link, x.object) })),
+        label: t('사이에 끼우기'),
+        sub: between.map((x) => ({ label: tr(x.name), hint: FLOW_NAME[x.kind] ?? x.kind, run: () => this.insertBetween(link, x.object) })),
       },
       { sep: true },
-      { label: `${a} 선택`, run: () => this.ctx.select?.(link.from) },
-      { label: `${b} 선택`, run: () => this.ctx.select?.(link.to) },
+      { label: t('{name} 선택', { name: a }), run: () => this.ctx.select?.(link.from) },
+      { label: t('{name} 선택', { name: b }), run: () => this.ctx.select?.(link.to) },
     ];
   }
 
@@ -1342,8 +1346,8 @@ export class CellPanel {
   // `a` (from), or none.
   setLane(a, b, way) {
     const [p, q] = [this.stopNumber(a), this.stopNumber(b)];
-    const said = { both: `${p} ↔ ${q} 양방향`, to: `${p} → ${q} 한 방향`, from: `${q} → ${p} 한 방향`, none: `${p} – ${q} 길을 끊었습니다` }[way];
-    this.send({ op: 'amr_lane', from: a, to: b, way }, () => this.ctx.toast(`AMR 길: ${said}`));
+    const said = { both: t('{p} ↔ {q} 양방향', { p, q }), to: t('{p} → {q} 한 방향', { p, q }), from: t('{p} → {q} 한 방향', { p: q, q: p }), none: t('{p} – {q} 길을 끊었습니다', { p, q }) }[way];
+    this.send({ op: 'amr_lane', from: a, to: b, way }, () => this.ctx.toast(t('AMR 길: {said}', { said })));
   }
 
   // A lane dragged from stop `a` onto stop `b`: one way, `a` to `b`; the
@@ -1352,7 +1356,7 @@ export class CellPanel {
     if (a === b) return;
     const back = (this.componentOf(b)?.lanes ?? []).includes(a);
     this.setLane(a, b, back ? 'both' : 'to');
-    if (!back) this.ctx.toast(`AMR 길: ${this.stopNumber(a)} → ${this.stopNumber(b)} 한 방향 · 반대로도 끌거나 길을 오른쪽 클릭하면 양방향`);
+    if (!back) this.ctx.toast(t('AMR 길: {p} → {q} 한 방향 · 반대로도 끌거나 길을 오른쪽 클릭하면 양방향', { p: this.stopNumber(a), q: this.stopNumber(b) }));
   }
 
   // The menu for a right click on a lane.
@@ -1361,12 +1365,12 @@ export class CellPanel {
     const ab = (this.componentOf(a)?.lanes ?? []).includes(b);
     const ba = (this.componentOf(b)?.lanes ?? []).includes(a);
     return [
-      { title: `AMR 길 ${p} – ${q}` },
-      { label: '양방향', hint: `${p} ↔ ${q}`, checked: ab && ba, run: () => this.setLane(a, b, 'both') },
-      { label: `${p} → ${q} 한 방향`, checked: ab && !ba, run: () => this.setLane(a, b, 'to') },
-      { label: `${q} → ${p} 한 방향`, checked: ba && !ab, run: () => this.setLane(a, b, 'from') },
+      { title: t('AMR 길 {p} – {q}', { p, q }) },
+      { label: t('양방향'), hint: `${p} ↔ ${q}`, checked: ab && ba, run: () => this.setLane(a, b, 'both') },
+      { label: t('{p} → {q} 한 방향', { p, q }), checked: ab && !ba, run: () => this.setLane(a, b, 'to') },
+      { label: t('{p} → {q} 한 방향', { p: q, q: p }), checked: ba && !ab, run: () => this.setLane(a, b, 'from') },
       { sep: true },
-      { label: '길 끊기', hint: 'Delete', danger: true, run: () => this.setLane(a, b, 'none') },
+      { label: t('길 끊기'), hint: 'Delete', danger: true, run: () => this.setLane(a, b, 'none') },
     ];
   }
 
@@ -1374,7 +1378,7 @@ export class CellPanel {
   chooseLane(lane) {
     this.chosenLane = lane;
     this.drawMarkers();
-    if (lane) this.ctx.toast(`AMR 길 ${this.stopNumber(lane.a)} – ${this.stopNumber(lane.b)} · Delete: 끊기 · 오른쪽 클릭: 방향`);
+    if (lane) this.ctx.toast(t('AMR 길 {p} – {q} · Delete: 끊기 · 오른쪽 클릭: 방향', { p: this.stopNumber(lane.a), q: this.stopNumber(lane.b) }));
   }
 
   // ---- Splits and merges --------------------------------------------------
@@ -1416,11 +1420,11 @@ export class CellPanel {
     const c = this.componentOf(object);
     const now = outs.map((t) => +(c.flow?.shares?.[t] ?? 1).toFixed(2)).join(':');
     const names = outs.map((t, i) => `${i + 1}. ${this.nameOf(t)}`).join('\n');
-    const text = prompt(`${this.nameOf(object)}에서 갈라지는 비율 (예: 7:3)\n${names}`, now);
+    const text = prompt(`${t('{name}에서 갈라지는 비율 (예: 7:3)', { name: this.nameOf(object) })}\n${names}`, now);
     if (text == null) return;
     const ws = text.split(/[:,\s/]+/).filter(Boolean).map(Number);
     if (ws.length !== outs.length || ws.some((v) => !Number.isFinite(v) || v < 0) || !ws.some((v) => v > 0)) {
-      return this.ctx.toast(`갈래 ${outs.length}개의 비율을 ${outs.map(() => 'n').join(':')} 꼴로 넣으세요`);
+      return this.ctx.toast(t('갈래 {n}개의 비율을 {form} 꼴로 넣으세요', { n: outs.length, form: outs.map(() => 'n').join(':') }));
     }
     const send = (k) => {
       if (k === outs.length) {
@@ -1442,19 +1446,19 @@ export class CellPanel {
       const outs = this.outsOf(object);
       const rule = c.props.rule ?? 0;
       const entries = [
-        { title: `⑂ ${name}에서 ${outs.length}갈래로 갈라짐` },
+        { title: t('⑂ {name}에서 {n}갈래로 갈라짐', { name, n: outs.length }) },
         ...RULES.map(([v, label, hint]) => ({
           label,
           hint,
           checked: rule === v,
-          run: () => (v === 3 ? this.askShares(object) : this.setProps(object, { rule: v }, `${name}: 갈라질 때 ${label}`)),
+          run: () => (v === 3 ? this.askShares(object) : this.setProps(object, { rule: v }, t('{name}: 갈라질 때 {rule}', { name, rule: label }))),
         })),
       ];
       if (rule === 3) {
         entries.push(
           { sep: true },
           ...outs.map((t) => ({ label: `→ ${this.nameOf(t)}`, hint: `${Math.round(100 * (this.shareOf(object, t) ?? 0))}%`, disabled: true })),
-          { label: '비율 바꾸기…', run: () => this.askShares(object) },
+          { label: t('비율 바꾸기…'), run: () => this.askShares(object) },
         );
       }
       return entries;
@@ -1462,12 +1466,12 @@ export class CellPanel {
     const ins = this.insOf(object);
     const join = c.props.join ?? 0;
     return [
-      { title: `⑃ ${ins.length}갈래가 ${name}로 모임` },
+      { title: t('⑃ {n}갈래가 {name}로 모임', { n: ins.length, name }) },
       ...JOINS.map(([v, label, hint]) => ({
         label,
-        hint: v === 1 ? `경로마다 1개 · ${ins.length}개 → 1개` : hint,
+        hint: v === 1 ? t('경로마다 1개 · {n}개 → 1개', { n: ins.length }) : hint,
         checked: join === v,
-        run: () => this.setProps(object, { join: v }, `${name}: ${v === 1 ? `경로마다 1개씩 ${ins.length}개를 하나로 조립` : '먼저 온 부품부터'}`),
+        run: () => this.setProps(object, { join: v }, `${name}: ${v === 1 ? t('경로마다 1개씩 {n}개를 하나로 조립', { n: ins.length }) : t('먼저 온 부품부터')}`),
       })),
       { sep: true },
       ...ins.map((f) => ({ label: `← ${this.nameOf(f)}`, disabled: true })),
@@ -1555,7 +1559,7 @@ export class CellPanel {
       const next = have.map((n) => (n === link.to ? piece.object : n));
       if (this.chosenLink?.from === link.from && this.chosenLink?.to === link.to) this.chosenLink = null;
       this.send({ op: 'flow_next', object: link.from, next }, () => {
-        this.ctx.toast(`옮겼습니다: ${this.nameOf(link.from)} → ${this.nameOf(piece.object)} (전: ${this.nameOf(link.to)})`);
+        this.ctx.toast(t('옮겼습니다: {from} → {to} (전: {was})', { from: this.nameOf(link.from), to: this.nameOf(piece.object), was: this.nameOf(link.to) }));
         if (k.by > 0) this.send({ op: 'flow_carrier', object: link.from, to: piece.object, by: k.by, robot: k.robot ?? null });
         if (share != null) this.send({ op: 'flow_share', object: link.from, to: piece.object, share });
       });
@@ -1591,11 +1595,11 @@ export class CellPanel {
     if (!this.link) return null;
     // The parts end there: linking ends with it.
     const done = !['source', 'station', 'buffer', 'conveyor'].includes(kind);
-    const more = [note, done ? '배출까지 이었습니다' : ''].filter(Boolean).join(' · ');
+    const more = [note, done ? t('배출까지 이었습니다') : ''].filter(Boolean).join(' · ');
     const tail = more ? ` · ${more}` : '';
     if (from && from !== object) {
       if (kind === 'source') {
-        this.ctx.toast('소재 공급으로는 보낼 수 없습니다');
+        this.ctx.toast(t('소재 공급으로는 보낼 수 없습니다'));
         return null;
       }
       const have = this.componentOf(from)?.flow?.next ?? [];
@@ -1605,15 +1609,15 @@ export class CellPanel {
       } else if (!have.includes(object)) {
         this.send({ op: 'flow_next', object: from, next: [...have, object] }, () => this.ctx.toast(said));
       } else {
-        this.ctx.toast(`이미 이어져 있습니다: ${said}`);
+        this.ctx.toast(t('이미 이어져 있습니다: {link}', { link: said }));
       }
     } else if (!from && done) {
-      this.ctx.toast('보내는 쪽(공급·공정·버퍼·컨베이어)부터 누르세요');
+      this.ctx.toast(t('보내는 쪽(공급·공정·버퍼·컨베이어)부터 누르세요'));
       return null;
     } else if (note) {
       this.ctx.toast(`${name}: ${note}`);
     } else if (!from) {
-      this.ctx.toast(`${name}에서 시작 · 다음 설비를 누르세요 (로봇이 나르게 하려면 로봇을 먼저)`);
+      this.ctx.toast(t('{name}에서 시작 · 다음 설비를 누르세요 (로봇이 나르게 하려면 로봇을 먼저)', { name }));
     }
     // One arrow a drag: nothing carried on to the next, and link mode
     // stays on until it is ended.
@@ -1647,7 +1651,7 @@ export class CellPanel {
   pickPoint(p) {
     const object = this.pickingFor;
     this.pickingFor = null;
-    this.send({ op: 'point', object, at: [p.x, p.y, p.z] }, () => this.ctx.toast('점을 정했습니다'));
+    this.send({ op: 'point', object, at: [p.x, p.y, p.z] }, () => this.ctx.toast(t('점을 정했습니다')));
   }
 
   // The role as the inspector has it now, to KYNEX.
@@ -1687,7 +1691,7 @@ export class CellPanel {
       disc.renderOrder = 7;
       this.markers.add(disc);
       // Its name with its load, in one: two labels would cover each other.
-      const text = c === top && stations.length > 1 ? `${c.name} · 병목` : c.name;
+      const text = c === top && stations.length > 1 ? t('{name} · 병목', { name: tr(c.name) }) : tr(c.name);
       const size = this.signSize(at);
       if (this.showLabels) {
         this.markers.add(this.label(text, x, y, z + 0.3 + size, c === top && stations.length > 1 ? 'bottleneck' : 'load', size));
@@ -1712,7 +1716,7 @@ export class CellPanel {
     if (!this.showLabels) return;
     for (const c of named) {
       const [x, y, z] = at.get(c.object);
-      this.names.add(this.label(c.name, x, y, z + 0.3 + size, 'name', size));
+      this.names.add(this.label(tr(c.name), x, y, z + 0.3 + size, 'name', size));
     }
   }
 
@@ -1732,14 +1736,14 @@ export class CellPanel {
       if (c.kind === 'station') {
         state = f.down ? 'down' : f.maint ? 'maint' : f.working ? 'run' : f.out ? 'blocked' : f.unreachable ? 'unreach' : 'idle';
         const busy = Math.round((f.oee?.busy ?? 0) * 100);
-        text = `가동 ${busy}% · 처리 ${f.made ?? 0} · 안 ${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}`;
+        text = t('가동 {busy}% · 처리 {made} · 안 {inside}', { busy, made: f.made ?? 0, inside: `${f.inside ?? 0}${f.holds ? `/${f.holds}` : ''}` });
       } else if (c.kind === 'sink') {
         // What has arrived: a sink keeps no parts, it counts them.
-        text = `배출 ${f.made ?? 0}개`;
+        text = t('배출 {n}개', { n: f.made ?? 0 });
       } else {
         // On it now: those it holds, and those sent on but still standing
         // here for a carrier to take.
-        text = `보관 ${(f.queue ?? 0) + (f.out ?? 0) + (f.waiting ?? 0)}${c.props?.capacity ? `/${c.props.capacity}` : ''}`;
+        text = t('보관 {n}', { n: `${(f.queue ?? 0) + (f.out ?? 0) + (f.waiting ?? 0)}${c.props?.capacity ? `/${c.props.capacity}` : ''}` });
       }
       const sign = this.label(text, x, y, z + 0.3 + size * 2.15, `status:${state}`, size);
       this.markers.add(sign);
@@ -1926,9 +1930,9 @@ export class CellPanel {
       run: ['RUN', '#2fbf71'],
       idle: ['IDLE', '#6b7480'],
       down: ['DOWN', '#d9534f'],
-      maint: ['보전', '#3d7fd9'],
+      maint: [t('보전'), '#3d7fd9'],
       blocked: ['BLOCKED', '#d99a2b'],
-      unreach: ['로봇 안 닿음', '#b8443c'],
+      unreach: [t('로봇 안 닿음'), '#b8443c'],
     };
     const chip = STATES[state];
     const canvas = document.createElement('canvas');
@@ -2083,8 +2087,8 @@ export class CellPanel {
     this.chosenLink = link;
     this.drawMarkers();
     if (link) {
-      const name = (u) => this.componentOf(u)?.name ?? '';
-      this.ctx.toast(`연결 ${name(link.from)} → ${name(link.to)} · Delete 키로 끊기`);
+      const name = (u) => tr(this.componentOf(u)?.name ?? '');
+      this.ctx.toast(t('연결 {from} → {to} · Delete 키로 끊기', { from: name(link.from), to: name(link.to) }));
     }
   }
 
@@ -2112,9 +2116,9 @@ export class CellPanel {
     }
     this.chosenLink = null;
     const have = this.componentOf(link.from)?.flow?.next ?? [];
-    const name = (u) => this.componentOf(u)?.name ?? '';
+    const name = (u) => tr(this.componentOf(u)?.name ?? '');
     this.send({ op: 'flow_next', object: link.from, next: have.filter((n) => n !== link.to) }, () =>
-      this.ctx.toast(`연결을 끊었습니다: ${name(link.from)} → ${name(link.to)}`),
+      this.ctx.toast(t('연결을 끊었습니다: {link}', { link: `${name(link.from)} → ${name(link.to)}` })),
     );
     this.drawMarkers();
     return true;
@@ -2171,7 +2175,7 @@ export class CellPanel {
       drawn.push(entry);
     };
     const what = (k) =>
-      k.by === 3 ? `로봇 ${k.robot ? this.robotName(k.robot) : '(자동)'}` : k.by === 1 && k.robot ? this.amrName(k.robot) : CARRIER_NAMES[k.by] ?? '';
+      k.by === 3 ? (k.robot ? t('로봇 {name}', { name: this.robotName(k.robot) }) : t('로봇 (자동)')) : k.by === 1 && k.robot ? this.amrName(k.robot) : CARRIER_NAMES[k.by] ?? '';
     // By AMR: drawn through the AMR that carries it — the one the link
     // names, or the only one there is —, over its top, where it is now.
     const amrs = this.cell.components.filter((c) => c.kind === 'amr');
@@ -2295,7 +2299,7 @@ export class CellPanel {
         arrows.push(arrow);
       }
       // Its number, and by what it goes when not by itself.
-      const text = [num, by, bad ? '⚠ 안 닿음' : ''].filter(Boolean).join(' · ');
+      const text = [num, by, bad ? t('⚠ 안 닿음') : ''].filter(Boolean).join(' · ');
       if (text && placed.length) {
         // Three quarters along its own leg: the numbers of two arrows
         // going either way along one leg stand apart.
@@ -2325,7 +2329,7 @@ export class CellPanel {
         if (outs.length > 1) {
           const rule = RULES.find(([v]) => v === (c.props.rule ?? 0))?.[1] ?? '';
           const q = toward(p, outs);
-          const sign = this.label(`⑂ 분기 · ${rule}`, q.x, q.y, q.z + size * 0.9, 'split', size * 0.8);
+          const sign = this.label(t('⑂ 분기 · {rule}', { rule }), q.x, q.y, q.z + size * 0.9, 'split', size * 0.8);
           sign.userData.badge = { kind: 'split', object: c.object };
           sign.renderOrder = 11;
           arrows.push(sign);
@@ -2335,7 +2339,7 @@ export class CellPanel {
         if (ins.length > 1) {
           const assembles = c.kind === 'station' && c.props.join === 1;
           const q = toward(p, ins);
-          const text = assembles ? `⑃ 조립 · ${ins.length}→1` : `⑃ 합류${c.kind === 'station' ? ' · 도착 순' : ''}`;
+          const text = assembles ? t('⑃ 조립 · {n}→1', { n: ins.length }) : `${t('⑃ 합류')}${c.kind === 'station' ? ` · ${t('도착 순')}` : ''}`;
           const sign = this.label(text, q.x, q.y, q.z + size * 0.9, 'join', size * 0.8);
           if (c.kind === 'station') sign.userData.badge = { kind: 'join', object: c.object };
           sign.renderOrder = 11;
@@ -2352,7 +2356,7 @@ export class CellPanel {
         const top = this.ctx.robotTop?.(r.root);
         if (!top) continue;
         const chosen = this.link.from === r.root;
-        const sign = this.label(`로봇 ${r.name}`, top[0], top[1], top[2] + 0.6, chosen ? 'robotchosen' : 'robotpick', 0.3);
+        const sign = this.label(t('로봇 {name}', { name: tr(r.name) }), top[0], top[1], top[2] + 0.6, chosen ? 'robotchosen' : 'robotpick', 0.3);
         sign.userData.robotPick = r.root;
         sign.renderOrder = 12;
         this.markers.add(sign);

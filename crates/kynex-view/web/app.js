@@ -17,6 +17,20 @@ import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
 import { showMenu } from '/menu.js';
 import { mountHelp } from '/help.js';
+import { tFor, tr, getLang, setLang, translatePage } from './i18n.js';
+
+const t = tFor('page');
+
+// The page's own words in the language chosen, before the panels add theirs;
+// the header's button for the other language.
+translatePage(document.body);
+{
+  const langBtn = document.getElementById('lang-toggle');
+  if (langBtn) {
+    langBtn.textContent = getLang() === 'en' ? '한국어' : 'English';
+    langBtn.addEventListener('click', () => setLang(getLang() === 'en' ? 'ko' : 'en'));
+  }
+}
 
 // ---- state ------------------------------------------------------------------
 
@@ -585,7 +599,7 @@ function onScene(data) {
     requestAnimationFrame(() => frame(null, 'iso', false));
   }
   fitShadows();
-  toast(`장면을 받았습니다 · 물체 ${data.objects.length}개 · 로봇 ${data.robots.length}대`);
+  toast(t('장면을 받았습니다 · 물체 {objects}개 · 로봇 {robots}대', { objects: data.objects.length, robots: data.robots.length }));
 }
 
 function onUpdate(data) {
@@ -715,11 +729,11 @@ function showJointPreview() {
 }
 
 const STATUS_TEXT = {
-  live: (s) => `Kreate 연결됨 · ${s.address}${s.peers?.length ? ' · ' + s.peers.join(', ') : ''}`,
-  waiting: (s) => `세션에 장면이 아직 없습니다 · ${s.address}`,
-  offline: (s) => `Kreate 연결 안 됨 · ${s.address} · 다시 시도 중`,
-  file: (s) => `파일 · ${s.address}`,
-  alone: () => 'KYNEX 단독 실행',
+  live: (s) => t('Kreate 연결됨 · {address}', { address: s.address }) + (s.peers?.length ? ' · ' + s.peers.join(', ') : ''),
+  waiting: (s) => t('세션에 장면이 아직 없습니다 · {address}', { address: s.address }),
+  offline: (s) => t('Kreate 연결 안 됨 · {address} · 다시 시도 중', { address: s.address }),
+  file: (s) => t('파일 · {address}', { address: s.address }),
+  alone: () => t('KYNEX 단독 실행'),
 };
 
 // A scene shown while nothing keeps it in step says so, and how old it is.
@@ -735,22 +749,22 @@ function setStale(stale, why) {
 
 function onStatus(s) {
   if (s.state === 'live' || s.state === 'file' || s.state === 'alone') setStale(false);
-  else if (s.state === 'offline') setStale(true, 'Kreate와 연결이 끊겼습니다 · 마지막으로 받은 장면입니다');
-  else if (s.state === 'waiting') setStale(true, 'Kreate 세션에 장면이 없습니다 · 마지막으로 받은 장면입니다');
+  else if (s.state === 'offline') setStale(true, t('Kreate와 연결이 끊겼습니다 · 마지막으로 받은 장면입니다'));
+  else if (s.state === 'waiting') setStale(true, t('Kreate 세션에 장면이 없습니다 · 마지막으로 받은 장면입니다'));
   const el = document.getElementById('status');
   el.dataset.state = s.state;
   const text = STATUS_TEXT[s.state]?.(s) ?? s.state;
   document.getElementById('status-text').textContent = text;
-  el.title = s.reason ? `${text}\n${s.reason}` : text;
+  el.title = s.reason ? `${text}\n${tr(s.reason)}` : text;
   if (!records.size) {
     const title = document.getElementById('empty-title');
     const body = document.getElementById('empty-body');
     if (s.state === 'offline') {
-      title.textContent = 'Kreate에 연결할 수 없습니다';
-      body.textContent = `${s.address}에 세션이 열려 있는지, 세션 키가 맞는지 확인하세요. 계속 다시 시도합니다.`;
+      title.textContent = t('Kreate에 연결할 수 없습니다');
+      body.textContent = t('{address}에 세션이 열려 있는지, 세션 키가 맞는지 확인하세요. 계속 다시 시도합니다.', { address: s.address });
     } else if (s.state === 'waiting') {
-      title.textContent = 'Kreate 세션을 기다리는 중';
-      body.innerHTML = 'Kreate에서 <b>파일 ▸ 공동 편집 세션 ▸ 이 장면으로 세션 열기</b>를 누르면 장면이 여기에 나타납니다.';
+      title.textContent = t('Kreate 세션을 기다리는 중');
+      body.innerHTML = t('Kreate에서 <b>파일 ▸ 공동 편집 세션 ▸ 이 장면으로 세션 열기</b>를 누르면 장면이 여기에 나타납니다.');
     }
   }
 }
@@ -763,7 +777,7 @@ function connect() {
     fetching = true;
     fetchScene(v, performance.now()).catch((err) => {
       console.error('scene', v, err);
-      toast(`장면을 읽지 못했습니다: ${err.message}`);
+      toast(t('장면을 읽지 못했습니다: {error}', { error: err.message }));
       // Nothing to apply the waiting updates to: the next notice starts over.
       fetching = false;
       waiting.length = 0;
@@ -811,8 +825,8 @@ function connect() {
   source.onerror = () => {
     const el = document.getElementById('status');
     el.dataset.state = 'lost';
-    document.getElementById('status-text').textContent = 'KYNEX 서버와 연결이 끊겼습니다 · 다시 시도 중';
-    setStale(true, 'KYNEX 서버와 연결이 끊겼습니다 · 마지막으로 받은 장면입니다');
+    document.getElementById('status-text').textContent = t('KYNEX 서버와 연결이 끊겼습니다 · 다시 시도 중');
+    setStale(true, t('KYNEX 서버와 연결이 끊겼습니다 · 마지막으로 받은 장면입니다'));
   };
 }
 
@@ -863,7 +877,7 @@ function renderTree() {
   if (query) {
     keep = new Set();
     const mark = (rec) => {
-      let any = rec.name.toLowerCase().includes(query);
+      let any = rec.name.toLowerCase().includes(query) || (getLang() === 'en' && String(tr(rec.name)).toLowerCase().includes(query));
       for (const kid of children.get(rec.uid) || []) any = mark(kid) || any;
       if (any) keep.add(rec.uid);
       return any;
@@ -906,7 +920,7 @@ function drawTreeWindow() {
       `<li class="${cls.join(' ')}" role="treeitem" data-uid="${escapeHtml(rec.uid)}" style="padding-left:${4 + depth * 10}px">` +
         `<span class="twist" data-twist="${kids ? escapeHtml(rec.uid) : ''}">${kids ? CHEVRON : ''}</span>` +
         glyph +
-        `<span class="label">${escapeHtml(rec.name)}</span>` +
+        `<span class="label">${escapeHtml(tr(rec.name))}</span>` +
         (rec.role ? `<span class="tag">${rec.role}</span>` : kids && folded ? `<span class="tag">${kids}</span>` : '') +
         `</li>`,
     );
@@ -1105,7 +1119,7 @@ const cellPanel = new CellPanel({
   equipmentNear: (uid, host) => equipmentNear(uid, host),
   remove: (uid) => {
     select(uid);
-    if (!libraryPanel.removeSelected()) toast('라이브러리에서 놓은 장비만 지울 수 있습니다');
+    if (!libraryPanel.removeSelected()) toast(t('라이브러리에서 놓은 장비만 지울 수 있습니다'));
   },
 });
 // The signs over the flow as last chosen in this browser.
@@ -1238,7 +1252,7 @@ function setGroup(roots) {
 // one selected stays the one the inspector and the handle are for.
 function toggleGroup(uid) {
   const item = libraryPanel.itemOf(uid);
-  if (!item) return toast('여러 개 선택은 라이브러리에서 놓은 장비만 됩니다');
+  if (!item) return toast(t('여러 개 선택은 라이브러리에서 놓은 장비만 됩니다'));
   const primary = libraryPanel.selectedItem();
   if (!primary) return select(uid);
   if (primary.root === item.root) return;
@@ -1294,7 +1308,7 @@ const ROLE_LABEL = { joint: '관절', link: '링크', collision: '충돌', rig: 
 // equipment of the user's own (see library.rs, `save_custom`).
 document.getElementById('save-custom').addEventListener('click', async () => {
   if (selected == null) return;
-  const name = prompt('내 장비 이름', records.get(selected)?.name ?? '');
+  const name = prompt(t('내 장비 이름'), records.get(selected)?.name ?? '');
   if (!name) return;
   try {
     const response = await fetch('/robot', {
@@ -1303,9 +1317,9 @@ document.getElementById('save-custom').addEventListener('click', async () => {
       body: JSON.stringify({ op: 'save_custom', object: selected, name }),
     });
     const answer = await response.json();
-    toast(answer.ok ? `"${name}"을(를) 라이브러리의 내 장비에 저장했습니다` : answer.error || '저장하지 못했습니다');
+    toast(answer.ok ? t('"{name}"을(를) 라이브러리의 내 장비에 저장했습니다', { name }) : tr(answer.error) || t('저장하지 못했습니다'));
   } catch (err) {
-    toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+    toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
   }
 });
 
@@ -1317,11 +1331,11 @@ function showInspector(uid) {
   m.decompose(p, q, s);
   const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
   const deg = (r) => ((r * 180) / Math.PI).toFixed(1);
-  document.getElementById('insp-kind').textContent = ROLE_LABEL[rec.role] || KIND_LABEL[rec.kind] || rec.kind;
-  document.getElementById('insp-name').textContent = rec.name;
+  document.getElementById('insp-kind').textContent = t(ROLE_LABEL[rec.role] || KIND_LABEL[rec.kind] || rec.kind);
+  document.getElementById('insp-name').textContent = tr(rec.name);
   document.getElementById('insp-pos').textContent = `${(p.x * 1000).toFixed(1)}, ${(p.y * 1000).toFixed(1)}, ${(p.z * 1000).toFixed(1)}`;
   document.getElementById('insp-rot').textContent = `${deg(e.x)}, ${deg(e.y)}, ${deg(e.z)}`;
-  document.getElementById('insp-parent').textContent = rec.parent != null ? records.get(rec.parent)?.name ?? '—' : '—';
+  document.getElementById('insp-parent').textContent = rec.parent != null ? tr(records.get(rec.parent)?.name) ?? '—' : '—';
   cellPanel.showFor(roleObject(uid));
   libraryPanel.showFor(uid);
   // Placed equipment: its own section heads the inspector.
@@ -1440,9 +1454,9 @@ async function sendDoor(request) {
     doorLane.next = null;
     try {
       const a = await (await fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) })).json();
-      if (!a.ok) toast(a.error);
+      if (!a.ok) toast(tr(a.error));
     } catch (e) {
-      toast(`KYNEX에 요청하지 못했습니다: ${e.message}`);
+      toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: e.message }));
     }
     next = doorLane.next;
   }
@@ -1518,7 +1532,7 @@ document.getElementById('interact-reset').addEventListener('click', async () => 
   interacted.doors.clear();
   interacted.robots.clear();
   document.getElementById('interact-reset').hidden = true;
-  toast('움직인 문과 관절을 처음 상태로 되돌렸습니다');
+  toast(t('움직인 문과 관절을 처음 상태로 되돌렸습니다'));
 });
 
 // Linking by dragging: from the handle over the equipment under the pointer
@@ -1710,7 +1724,7 @@ window.addEventListener('pointerup', (e) => {
   if (drag.lane) {
     if (!drag.moved) return;
     const onto = markerAt(e.clientX, e.clientY)?.stop ?? cellPanel.stopOfUids(chainOf(partAt(e.clientX, e.clientY)?.uid ?? ''));
-    if (onto == null || onto === drag.object) return toast('다른 AMR 정지 위치(번호표)에 놓으세요');
+    if (onto == null || onto === drag.object) return toast(t('다른 AMR 정지 위치(번호표)에 놓으세요'));
     cellPanel.dragLane(drag.object, onto);
     return;
   }
@@ -1737,7 +1751,7 @@ window.addEventListener('pointerup', (e) => {
     return;
   }
   const hit = partAt(e.clientX, e.clientY);
-  if (!hit) return toast('다음 공정이 될 설비 위에 놓으세요');
+  if (!hit) return toast(t('다음 공정이 될 설비 위에 놓으세요'));
   const uids = chainOf(hit.uid);
   if (uids.some((u) => drag.uids.includes(u))) return;
   const root = libraryPanel.itemOf(uids[0])?.root ?? null;
@@ -1773,12 +1787,12 @@ function previewLink(from, point = null, x = 0, y = 0, rewire = null) {
   const stopTo = cellPanel.isStop(from) ? (markerAt(x, y)?.stop ?? cellPanel.stopOfUids(uids)) : null;
   let preview = cellPanel.isStop(from)
     ? stopTo != null && stopTo !== from
-      ? { ok: true, text: `AMR 길 ${cellPanel.stopNumber(from)} → ${cellPanel.stopNumber(stopTo)}`, object: stopTo }
-      : { ok: false, text: '다른 AMR 정지 위치(번호표)에 놓으세요', object: null }
+      ? { ok: true, text: t('AMR 길 {from} → {to}', { from: cellPanel.stopNumber(from), to: cellPanel.stopNumber(stopTo) }), object: stopTo }
+      : { ok: false, text: t('다른 AMR 정지 위치(번호표)에 놓으세요'), object: null }
     : cellPanel.dropPreview(from, uids, uids.length && sign == null ? (libraryPanel.itemOf(uids[0])?.root ?? null) : null);
-  if (rewire && !uids.length) preview = { ok: false, text: `여기 놓으면 연결을 끊습니다: ${cellPanel.nameOf(rewire.from)} → ${cellPanel.nameOf(rewire.to)}`, object: null };
-  else if (rewire && preview.object === rewire.to) preview = { ok: false, text: '그대로 둡니다', object: null };
-  else if (rewire && preview.ok) preview = { ...preview, text: `연결 옮기기: ${preview.text}` };
+  if (rewire && !uids.length) preview = { ok: false, text: t('여기 놓으면 연결을 끊습니다: {from} → {to}', { from: tr(cellPanel.nameOf(rewire.from)), to: tr(cellPanel.nameOf(rewire.to)) }), object: null };
+  else if (rewire && preview.object === rewire.to) preview = { ok: false, text: t('그대로 둡니다'), object: null };
+  else if (rewire && preview.ok) preview = { ...preview, text: t('연결 옮기기: {text}', { text: preview.text }) };
   if (to) {
     linkLine.geometry.setFromPoints([point, to]);
     linkLine.computeLineDistances();
@@ -1848,12 +1862,12 @@ function sceneMenu(x, y) {
   }
   showMenu(x, y, [
     {
-      label: cellPanel.linking() ? '연결 모드 끝' : '연결 모드 시작',
-      hint: '설비를 차례로 눌러 잇기',
+      label: cellPanel.linking() ? t('연결 모드 끝') : t('연결 모드 시작'),
+      hint: t('설비를 차례로 눌러 잇기'),
       run: () => (cellPanel.linking() ? cellPanel.stopLinking() : cellPanel.startLinking(selected)),
     },
-    { label: view.labels ? '이름표 숨기기' : '이름표 보이기', hint: 'L', run: () => setToggle('labels', !view.labels) },
-    { label: '화면 맞춤', hint: 'F', run: () => frame() },
+    { label: view.labels ? t('이름표 숨기기') : t('이름표 보이기'), hint: 'L', run: () => setToggle('labels', !view.labels) },
+    { label: t('화면 맞춤'), hint: 'F', run: () => frame() },
   ]);
 }
 // The tree's rows too.
@@ -2058,7 +2072,7 @@ function measureAt(point) {
   const out = document.getElementById('measure');
   out.hidden = false;
   if (measured.points.length === 1) {
-    out.textContent = '두 번째 점을 누르세요';
+    out.textContent = t('두 번째 점을 누르세요');
     return;
   }
   const [a, b] = measured.points;
@@ -2070,7 +2084,7 @@ function measureAt(point) {
   measured.group.add(line);
   const d = b.clone().sub(a);
   const f = (v) => (v * 1000).toFixed(1);
-  out.textContent = `거리 ${f(d.length())} mm · ΔX ${f(d.x)} · ΔY ${f(d.y)} · ΔZ ${f(d.z)} · 세 번째 점: 각도`;
+  out.textContent = t('거리 {d} mm · ΔX {x} · ΔY {y} · ΔZ {z} · 세 번째 점: 각도', { d: f(d.length()), x: f(d.x), y: f(d.y), z: f(d.z) });
 }
 
 function measureAngle(point) {
@@ -2086,12 +2100,12 @@ function measureAngle(point) {
   const [u, v] = [a.clone().sub(b), point.clone().sub(b)];
   const out = document.getElementById('measure');
   if (u.length() < 1e-9 || v.length() < 1e-9) {
-    out.textContent = '두 번째 점과 같은 점입니다';
+    out.textContent = t('두 번째 점과 같은 점입니다');
     return;
   }
   const angle = THREE.MathUtils.radToDeg(u.angleTo(v));
   const f = (x) => (x * 1000).toFixed(1);
-  out.textContent = `각도 ${angle.toFixed(2)}° · 첫 선 ${f(u.length())} mm · 둘째 선 ${f(v.length())} mm`;
+  out.textContent = t('각도 {angle}° · 첫 선 {a} mm · 둘째 선 {b} mm', { angle: angle.toFixed(2), a: f(u.length()), b: f(v.length()) });
 }
 
 function setToggle(name, on) {
@@ -2122,13 +2136,13 @@ function setToggle(name, on) {
     // The parts, not the equipment: its gizmo away meanwhile.
     libraryPanel.selectionChanged(on ? null : selected);
     if (!on) canvas.style.cursor = '';
-    toast(on ? '상호작용: 문이나 로봇 관절을 끌어 움직입니다 (I로 끄기)' : '상호작용을 껐습니다');
+    toast(on ? t('상호작용: 문이나 로봇 관절을 끌어 움직입니다 (I로 끄기)') : t('상호작용을 껐습니다'));
   }
   if (name === 'measure') {
     clearMeasure();
     if (on) {
       document.getElementById('measure').hidden = false;
-      document.getElementById('measure').textContent = '첫 번째 점을 누르세요';
+      document.getElementById('measure').textContent = t('첫 번째 점을 누르세요');
     }
   }
 }
@@ -2142,7 +2156,7 @@ function report() {
     scene,
     escapeHtml,
     toast,
-    project: document.getElementById('status-text').textContent.replace(/^파일 · /, ''),
+    project: document.getElementById('status-text').textContent.replace(/^(파일|File) · /, ''),
     bounds: () => {
       const all = new THREE.Box3();
       const one = new THREE.Box3();
@@ -2173,7 +2187,7 @@ function record(button) {
     return;
   }
   const type = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
-  if (!type) return toast('이 브라우저는 화면 녹화를 지원하지 않습니다');
+  if (!type) return toast(t('이 브라우저는 화면 녹화를 지원하지 않습니다'));
   const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: type, videoBitsPerSecond: 8_000_000 });
   const chunks = [];
   const started = performance.now();
@@ -2194,14 +2208,14 @@ function record(button) {
     link.download = `kynex-${stamp}.webm`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    toast(`${link.download}을(를) 내려받았습니다`);
+    toast(t('{file}을(를) 내려받았습니다', { file: link.download }));
   };
   recorder.start(1000);
   recording = { recorder };
   button.classList.add('on', 'recording');
   time.textContent = '0:00';
   time.hidden = false;
-  toast('녹화를 시작했습니다. 녹화 버튼을 다시 누르면 끝납니다');
+  toast(t('녹화를 시작했습니다. 녹화 버튼을 다시 누르면 끝납니다'));
 }
 
 // The toolbar's 보기 and 도구: menus over their buttons, each entry ticked
@@ -2211,28 +2225,28 @@ function viewMenu(b) {
   const r = b.getBoundingClientRect();
   const item = (key, label, hint) => ({ label, hint, checked: !!view[key], run: () => setToggle(key, !view[key]) });
   showMenu(r.left, r.top - 8, [
-    { title: '보기' },
-    item('arrows', '공정 흐름 화살표', 'A'),
-    item('labels', '이름표·가동률', 'L'),
-    item('contacts', '충돌 표시', 'K'),
-    item('grid', '그리드', 'G'),
+    { title: t('보기') },
+    item('arrows', t('공정 흐름 화살표'), 'A'),
+    item('labels', t('이름표·가동률'), 'L'),
+    item('contacts', t('충돌 표시'), 'K'),
+    item('grid', t('그리드'), 'G'),
     { sep: true },
-    item('joints', '관절·링크', 'J'),
-    item('wire', '와이어프레임', 'W'),
+    item('joints', t('관절·링크'), 'J'),
+    item('wire', t('와이어프레임'), 'W'),
   ]);
 }
 function toolsMenu(b) {
   const r = b.getBoundingClientRect();
   showMenu(r.left, r.top - 8, [
-    { title: '도구' },
-    { label: '측정', hint: 'M', checked: !!view.measure, run: () => setToggle('measure', !view.measure) },
-    { label: '상호작용 (문·관절 끌기)', hint: 'I', checked: !!view.interact, run: () => setToggle('interact', !view.interact) },
+    { title: t('도구') },
+    { label: t('측정'), hint: 'M', checked: !!view.measure, run: () => setToggle('measure', !view.measure) },
+    { label: t('상호작용 (문·관절 끌기)'), hint: 'I', checked: !!view.interact, run: () => setToggle('interact', !view.interact) },
     { sep: true },
-    { label: '배치 보고서 (인쇄·PDF)', run: () => report() },
-    { label: recording ? '화면 녹화 끝 (내려받기)' : '화면 녹화 시작', checked: !!recording, run: () => record(b) },
+    { label: t('배치 보고서 (인쇄·PDF)'), run: () => report() },
+    { label: recording ? t('화면 녹화 끝 (내려받기)') : t('화면 녹화 시작'), checked: !!recording, run: () => record(b) },
     { sep: true },
     {
-      label: 'PLC 연결',
+      label: t('PLC 연결'),
       run: () => {
         projectPanel.panel.hidden = true;
         floorPanel.panel.hidden = true;
@@ -2279,9 +2293,9 @@ async function history(op) {
       body: JSON.stringify({ op }),
     });
     const answer = await response.json();
-    toast(answer.ok ? `${op === 'undo' ? '되돌림' : '다시 함'}: ${answer.edit}` : answer.error);
+    toast(answer.ok ? `${op === 'undo' ? t('되돌림') : t('다시 함')}: ${tr(answer.edit)}` : tr(answer.error));
   } catch (e) {
-    toast(`${op === 'undo' ? '되돌리기' : '다시 하기'}: ${e.message}`);
+    toast(`${op === 'undo' ? t('되돌리기') : t('다시 하기')}: ${e.message}`);
   }
 }
 
@@ -2290,8 +2304,8 @@ function setHistory(h) {
   const redo = document.getElementById('redo-btn');
   undo.disabled = !h.undo;
   redo.disabled = !h.redo;
-  undo.title = h.undo ? `되돌리기: ${h.undo} (Ctrl+Z)` : '되돌리기 (Ctrl+Z)';
-  redo.title = h.redo ? `다시 하기: ${h.redo} (Ctrl+Y)` : '다시 하기 (Ctrl+Y)';
+  undo.title = h.undo ? t('되돌리기: {edit} (Ctrl+Z)', { edit: tr(h.undo) }) : t('되돌리기 (Ctrl+Z)');
+  redo.title = h.redo ? t('다시 하기: {edit} (Ctrl+Y)', { edit: tr(h.redo) }) : t('다시 하기 (Ctrl+Y)');
 }
 
 // Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z — but in a field, the field's own.
@@ -2350,14 +2364,20 @@ function playPause() {
   if (going) {
     if (flow?.on) timelinePanel.flowOp('stop');
     robotPanel.playAll(false);
-    toast('정지했습니다 (스페이스: 다시 실행)');
+    toast(t('정지했습니다 (스페이스: 다시 실행)'));
     return;
   }
   const flows = (cellPanel.cell.components ?? []).some((c) => c.flow);
   if (flows) timelinePanel.flowOp('start');
   const robots = robotPanel.playAll(true);
-  if (!flows && !robots) return toast('실행할 공정 흐름도, 프로그램이 있는 로봇도 없습니다');
-  toast(`실행합니다${flows ? ' · 공정 흐름' : ''}${robots ? ` · 로봇 ${robots}대` : ''} (스페이스: 정지, +/−: 배속)`);
+  if (!flows && !robots) return toast(t('실행할 공정 흐름도, 프로그램이 있는 로봇도 없습니다'));
+  toast(
+    t('실행합니다') +
+      (flows ? ' · ' + t('공정 흐름') : '') +
+      (robots ? ' · ' + t('로봇 {n}대', { n: robots }) : '') +
+      ' ' +
+      t('(스페이스: 정지, +/−: 배속)'),
+  );
 }
 
 // Back to the start: the run stopped, every product taken away, the robots
@@ -2367,16 +2387,16 @@ async function resetRun() {
     const answer = await (
       await fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'reset_run' }) })
     ).json();
-    if (!answer.ok) return toast(answer.error || '처음으로 되돌리지 못했습니다');
+    if (!answer.ok) return toast(tr(answer.error) || t('처음으로 되돌리지 못했습니다'));
     // What was gliding drawn where it was last told, and as told from now.
     for (const [uid, track] of tracks) {
       batch.move(uid, track.rec.matrix);
       if (gizmos.has(uid)) setGizmo(track.rec);
     }
     tracks.clear();
-    toast('처음으로 되돌렸습니다: 실행 정지, 로봇은 실행 전 자세, 제품은 모두 지움');
+    toast(t('처음으로 되돌렸습니다: 실행 정지, 로봇은 실행 전 자세, 제품은 모두 지움'));
   } catch (err) {
-    toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+    toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
   }
 }
 
@@ -2410,17 +2430,17 @@ async function stepSpeed(up) {
   const now = robotPanel.clock?.speed ?? 1;
   // The next of the list past where it is now, either way.
   const speed = up ? SPEEDS.find((s) => s > now + 1e-9) : [...SPEEDS].reverse().find((s) => s < now - 1e-9);
-  if (speed === undefined) return toast(`배속 ${now}배 (${up ? '가장 빠름' : '가장 느림'})`);
+  if (speed === undefined) return toast(t('배속 {speed}배 ({limit})', { speed: now, limit: up ? t('가장 빠름') : t('가장 느림') }));
   try {
     const answer = await fetch('/robot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ op: 'speed', speed }),
     }).then((r) => r.json());
-    if (!answer.ok) return toast(answer.error || '배속을 바꾸지 못했습니다');
-    toast(`배속 ${speed}배`);
+    if (!answer.ok) return toast(tr(answer.error) || t('배속을 바꾸지 못했습니다'));
+    toast(t('배속 {speed}배', { speed }));
   } catch (err) {
-    toast(`KYNEX에 요청하지 못했습니다: ${err.message}`);
+    toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
   }
 }
 
@@ -2434,7 +2454,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'c' && e.shiftKey) {
     if (cellPanel.linking()) {
       cellPanel.stopLinking();
-      toast('연결 모드를 끝냈습니다');
+      toast(t('연결 모드를 끝냈습니다'));
     } else cellPanel.startLinking();
   } else if (k === '+' || k === '=') stepSpeed(true);
   else if (k === '-' || k === '_') stepSpeed(false);
@@ -2520,7 +2540,7 @@ setInterval(() => {
   const el = document.getElementById('updated');
   if (!lastUpdate) return;
   const s = (performance.now() - lastUpdate) / 1000;
-  el.textContent = s < 1 ? '방금 갱신' : s < 60 ? `${Math.floor(s)}초 전` : `${Math.floor(s / 60)}분 전`;
+  el.textContent = s < 1 ? t('방금 갱신') : s < 60 ? t('{n}초 전', { n: Math.floor(s) }) : t('{n}분 전', { n: Math.floor(s / 60) });
 }, 500);
 
 // ---- loop -------------------------------------------------------------------
@@ -2767,7 +2787,7 @@ function showPlay() {
   const badge = document.getElementById('run-badge');
   if (!badge) return;
   badge.classList.toggle('on', on);
-  badge.querySelector('.run-word').textContent = on ? '실행 중' : '정지';
+  badge.querySelector('.run-word').textContent = on ? t('실행 중') : t('정지');
   const sp = badge.querySelector('.run-speed');
   sp.textContent = `${speed}×`;
   sp.classList.toggle('fast', speed !== 1);
@@ -2842,12 +2862,12 @@ function gpuName() {
 // measuring what each costs.
 if (BENCH) window.__kynex = { renderer, batch, outline, sun, controls, camera };
 
-async function runBench(t) {
+async function runBench(timing) {
   // A tab in the background draws no frames: say so rather than measure
   // nothing until the benchmark gives up.
   if (document.hidden) {
     await fetch('/bench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'hidden' }) });
-    toast('벤치마크: 이 탭이 화면에 보여야 측정할 수 있습니다');
+    toast(t('벤치마크: 이 탭이 화면에 보여야 측정할 수 있습니다'));
     benchStarted = false;
     return;
   }
@@ -2896,11 +2916,11 @@ async function runBench(t) {
     gpu: gpuName(),
     user_agent: navigator.userAgent,
     pixels: [renderer.domElement.width, renderer.domElement.height],
-    scene_bytes: t.bytes,
-    fetch_ms: t.fetched - t.arrived,
-    parse_ms: t.parsed - t.fetched,
-    build_ms: t.built - t.parsed,
-    first_frame_ms: firstFrame - t.arrived,
+    scene_bytes: timing.bytes,
+    fetch_ms: timing.fetched - timing.arrived,
+    parse_ms: timing.parsed - timing.fetched,
+    build_ms: timing.built - timing.parsed,
+    first_frame_ms: firstFrame - timing.arrived,
     // From the page being asked for to the scene first drawn.
     load_total_ms: firstFrame,
     frames: far.frames,
@@ -2928,7 +2948,7 @@ async function runBench(t) {
   // the same way.
   benchStarted = false;
   await fetch('/bench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(report) });
-  toast(`벤치마크 완료 · ${report.fps.toFixed(1)} fps`);
+  toast(t('벤치마크 완료 · {fps} fps', { fps: report.fps.toFixed(1) }));
 }
 
 connect();

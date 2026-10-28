@@ -260,6 +260,18 @@ pub const TEMPLATES: &[Template] = &[
         ],
     },
     Template {
+        key: "corner_conveyor",
+        name: "코너형 컨베이어",
+        group: "물류",
+        params: &[
+            p("radius", "회전 반경", 0.8, 0.4, 3.0),
+            p("width", "벨트 폭", 0.5, 0.2, 1.5),
+            p("height", "높이", 0.8, 0.3, 1.5),
+            q("angle", "회전 각도", 90.0, 30.0, 180.0, "°"),
+            c("turn", "도는 쪽", 0.0, &["왼쪽", "오른쪽"]),
+        ],
+    },
+    Template {
         key: "amr",
         name: "AMR (자율 이동 로봇)",
         group: "물류",
@@ -1216,6 +1228,16 @@ impl Item {
                     (Plug::BeltOut, DVec3::new(l / 2.0 + 0.05, 0.0, h)),
                 ]
             }
+            "corner_conveyor" => {
+                let c = self.corner();
+                let h = self.param("height");
+                let (a, b) = (c.point(0.0), c.point(1.0));
+                let (da, db) = (c.heading(0.0), c.heading(1.0));
+                vec![
+                    (Plug::BeltIn, a - da * 0.05 + DVec3::Z * h),
+                    (Plug::BeltOut, b + db * 0.05 + DVec3::Z * h),
+                ]
+            }
             t if template(t).is_some_and(|t| t.group == "로봇") => {
                 vec![(Plug::Foot, DVec3::ZERO)]
             }
@@ -1232,12 +1254,37 @@ impl Item {
             .collect()
     }
 
+    /// A corner conveyor's way round, from its parameters.
+    fn corner(&self) -> Corner {
+        Corner {
+            radius: self.param("radius"),
+            angle: self.param("angle").to_radians(),
+            left: self.param("turn") < 0.5,
+        }
+    }
+
+    /// Which way a belt's end runs, about Z from its own X: a corner's out
+    /// end turned by its angle; a straight belt's ends and others' along X.
+    fn belt_heading(&self, plug: Plug) -> f64 {
+        match (self.template.as_str(), plug) {
+            ("corner_conveyor", Plug::BeltOut) => {
+                let c = self.corner();
+                if c.left { c.angle } else { -c.angle }
+            }
+            _ => 0.0,
+        }
+    }
+
     /// Moved so its connection point `mine` stands on `at`, `other`'s: a
     /// robot on its mount, as it was turned; a conveyor on in line with
     /// the other, flowing the same way, its belt as high.
     fn snapped_to(&self, mine: Plug, other: &Item, at: DVec3, customs: &[Custom]) -> (DVec3, f64) {
+        // A belt's end on another's, flowing on the way the other's goes
+        // there (a corner's out end turned from its in end).
         let yaw = match mine {
             Plug::Foot => self.yaw,
+            Plug::BeltIn => other.yaw + other.belt_heading(Plug::BeltOut) - self.belt_heading(Plug::BeltIn),
+            Plug::BeltOut => other.yaw + other.belt_heading(Plug::BeltIn) - self.belt_heading(Plug::BeltOut),
             _ => other.yaw,
         };
         let mut moved = self.clone();
@@ -2518,6 +2565,17 @@ fn build(item: &Item) -> Result<Built, String> {
             );
             roles.push((belt, Kind::Conveyor));
         }
+        "corner_conveyor" => {
+            let c = Colours::new(&mut doc);
+            let belt = corner_conveyor(
+                &mut doc,
+                &c,
+                item.corner(),
+                item.param("width"),
+                item.param("height"),
+            );
+            roles.push((belt, Kind::Conveyor));
+        }
         "injection_molder" => {
             let c = Colours::new(&mut doc);
             let machine = molder(
@@ -3078,6 +3136,124 @@ fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId
             c.dark,
             None,
         );
+    }
+    belt
+}
+
+/// A corner conveyor's way round: the radius to its belt's middle, how far
+/// it turns, and which way. Laid out about its own middle: in along +X, at
+/// the start, turning left (towards +Y) or right.
+#[derive(Clone, Copy, Debug)]
+struct Corner {
+    radius: f64,
+    angle: f64,
+    left: bool,
+}
+
+impl Corner {
+    /// Which side it turns to: 1 left, −1 right.
+    fn side(&self) -> f64 {
+        if self.left { 1.0 } else { -1.0 }
+    }
+
+    /// Where it turns about, the in end, before it is set about its middle.
+    fn raw(&self, t: f64) -> DVec3 {
+        let s = self.side();
+        let a = t * self.angle;
+        DVec3::new(self.radius * a.sin(), s * self.radius * (1.0 - a.cos()), 0.0)
+    }
+
+    /// Its middle: halfway between its ends, so it is placed by that.
+    fn middle(&self) -> DVec3 {
+        (self.raw(0.0) + self.raw(1.0)) / 2.0
+    }
+
+    /// The point on its belt's middle `t` of the way round, 0 to 1, on the
+    /// floor.
+    fn point(&self, t: f64) -> DVec3 {
+        self.raw(t) - self.middle()
+    }
+
+    /// Where it turns about, on the floor.
+    fn pivot(&self) -> DVec3 {
+        DVec3::new(0.0, self.side() * self.radius, 0.0) - self.middle()
+    }
+
+    /// Which way it runs `t` of the way round.
+    fn heading(&self, t: f64) -> DVec3 {
+        let a = t * self.angle;
+        DVec3::new(a.cos(), self.side() * a.sin(), 0.0)
+    }
+}
+
+/// A corner conveyor, its belt's top at `h` and `w` wide, turning as
+/// `corner` says: the curved belt — named for the way it turns, about its
+/// own origin where it turns about (see `Cell::belt_arc`) —, a curved frame
+/// each side, legs, and a drum at each end. Returns the belt.
+fn corner_conveyor(doc: &mut Document, c: &Colours, corner: Corner, w: f64, h: f64) -> ObjectId {
+    let pivot = corner.pivot();
+    let steps = ((corner.angle.to_degrees() / 6.0).ceil() as usize).max(4);
+    // A ring's sector between radii `r0` and `r1`, `z0` to `z1` high, about
+    // the pivot.
+    let sector = |r0: f64, r1: f64, z0: f64, z1: f64| {
+        let mut positions = Vec::new();
+        for k in 0..=steps {
+            let t = k as f64 / steps as f64;
+            // From the pivot, out to radius r the way the point lies.
+            let rel = |r: f64| (corner.point(t) - pivot).normalize() * r;
+            for (r, z) in [(r0, z0), (r1, z0), (r1, z1), (r0, z1)] {
+                let q = rel(r);
+                positions.push(kreate_math::Vec3::new(q.x as f32, q.y as f32, z as f32));
+            }
+        }
+        let mut faces: Vec<Vec<u32>> = Vec::new();
+        for k in 0..steps as u32 {
+            let (a, b) = (4 * k, 4 * (k + 1));
+            for j in 0..4u32 {
+                let (j0, j1) = (j, (j + 1) % 4);
+                faces.push(vec![a + j0, a + j1, b + j1, b + j0]);
+            }
+        }
+        let end = 4 * steps as u32;
+        faces.push(vec![3, 2, 1, 0]);
+        faces.push(vec![end, end + 1, end + 2, end + 3]);
+        // Wound the same way round whichever way it turns.
+        if !corner.left {
+            for f in &mut faces {
+                f.reverse();
+            }
+        }
+        kreate_mesh::MeshData::from_faces(positions, &faces)
+    };
+    let r = corner.radius;
+    let name = if corner.left { "belt_corner_left" } else { "belt_corner_right" };
+    let belt = doc.add_mesh_object(name, sector(r - w / 2.0, r + w / 2.0, -0.02, 0.0));
+    paint(doc, belt, c.belt);
+    doc.object_mut(belt).unwrap().transform.translation = DVec3::new(pivot.x, pivot.y, h);
+    for (side, r) in [("inner", r - w / 2.0 - 0.04), ("outer", r + w / 2.0)] {
+        let frame = doc.add_mesh_object(&format!("frame_{side}"), sector(r, r + 0.04, -0.14, 0.0));
+        paint(doc, frame, c.steel);
+        doc.object_mut(frame).unwrap().transform.translation = DVec3::new(pivot.x, pivot.y, h + 0.01);
+        let legs = ((r * corner.angle / 1.5).ceil() as usize).max(1);
+        for i in 0..=legs {
+            let t = 0.05 + 0.9 * i as f64 / legs as f64;
+            let at = pivot + (corner.point(t) - pivot).normalize() * (r + 0.02);
+            block(
+                doc,
+                &format!("leg_{side}{i}"),
+                [0.05, 0.05, h - 0.12],
+                [at.x, at.y, (h - 0.12) / 2.0],
+                c.steel,
+                None,
+            );
+        }
+    }
+    for (end, t) in [("in", 0.0), ("out", 1.0)] {
+        let at = corner.point(t);
+        let id = bar(doc, &format!("drum_{end}"), 0.05, w + 0.02, [at.x, at.y, h - 0.05], false, c.dark, None);
+        let turn = corner.heading(t);
+        doc.object_mut(id).unwrap().transform.rotation =
+            DQuat::from_rotation_z(turn.y.atan2(turn.x)) * doc.object(id).unwrap().transform.rotation;
     }
     belt
 }

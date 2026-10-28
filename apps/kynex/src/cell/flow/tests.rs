@@ -1180,3 +1180,52 @@ fn a_station_that_assembles_takes_one_from_each_way_into_it() {
     };
     assert!(from(u[0]) <= 2 && from(u[1]) <= 2, "{waiting:?}");
 }
+
+/// A corner conveyor carries the flow's parts round its curve, from its
+/// in end to its out end, as long as its middle's arc, and hands them on.
+#[test]
+fn a_corner_conveyor_carries_parts_round_its_curve() {
+    for turn in [0.0, 1.0] {
+        let (doc, mut cell, u) = line(&[
+            ("corner_conveyor", 0.0, json!({"speed": 0.5, "turn": turn})),
+            ("flow_source", -1.5, json!({"feed": 4.0})),
+            ("flow_sink", 3.0, json!({})),
+        ]);
+        let (belt, source, sink) = (u[0], u[1], u[2]);
+        let b = cell.belts(&doc).into_iter().find(|b| b.object == belt).expect("the belt");
+        let arc = b.arc.expect("a curved belt");
+        // Left turns towards +Y, right towards −Y.
+        assert_eq!(arc.sweep > 0.0, turn == 0.0, "{arc:?}");
+        // Radius 0.8 m to its middle, a quarter turn: 1.26 m along it.
+        assert!((b.length - 0.8 * std::f64::consts::FRAC_PI_2).abs() < 0.01, "{}", b.length);
+        assert!((arc.radius - 0.8).abs() < 0.01 && (b.width - 0.5).abs() < 0.01, "{arc:?} {}", b.width);
+        // Its ends a quarter turn apart, and every point on it 0.8 m from
+        // where it turns about.
+        let (a, z) = (b.point(-b.length / 2.0), b.point(b.length / 2.0));
+        assert!(((a - arc.pivot).truncate().length() - 0.8).abs() < 1e-6);
+        assert!(((a - z).truncate().length() - 0.8 * 2f64.sqrt()).abs() < 0.01);
+        let (x, y, _) = b.local(b.point(0.3));
+        assert!((x - 0.3).abs() < 1e-6 && y.abs() < 1e-6, "{x} {y}");
+        link(&mut cell, &doc, source, &[belt]);
+        link(&mut cell, &doc, belt, &[sink]);
+        ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+        let start = Instant::now();
+        let mut t = 0.0;
+        let mut far = 0.0f64;
+        while t < 120.0 {
+            t += 0.1;
+            cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+            for p in cell.parts() {
+                if matches!(p.flow, Some(Place::Belt(x)) if x == belt) {
+                    // On the curve, never off it.
+                    let (_, y, _) = b.local(p.world.translation - DVec3::Z * (p.size().1 / 2.0));
+                    assert!(y.abs() < b.width / 2.0, "off the belt: {y}");
+                    far = far.max(b.along_of(p).unwrap_or(-9.0));
+                }
+            }
+        }
+        assert!(far > b.length / 2.0 - 0.1, "round to its end: {far}");
+        let sunk = cell.flow_summary()["sunk"].as_u64().unwrap();
+        assert!(sunk >= 25, "{sunk}");
+    }
+}

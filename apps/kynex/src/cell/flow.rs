@@ -1072,7 +1072,7 @@ impl Cell {
                         .belts(doc)
                         .into_iter()
                         .find(|b| b.object == to)
-                        .map(|b| b.centre + b.along * (-b.length / 2.0 + RAW.0));
+                        .map(|b| b.point(-b.length / 2.0 + RAW.0));
                     if let (Some(i), Some(start)) = (self.part_index(uid), start) {
                         let half = self.parts[i].size().1 / 2.0;
                         self.parts[i].world = DAffine3::from_translation(start + DVec3::Z * half);

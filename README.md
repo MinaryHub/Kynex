@@ -1046,6 +1046,11 @@ not change the session's scene.
     comparison included, so only the steady state counts.
   - The flow bar and summary count parts out by product.
 - **Conveyors, batches and racks** in a process flow:
+  - **코너형 컨베이어** (물류): a curved belt turning left or right by
+    its 회전 각도 (90° unless set, 30–180°) at its 회전 반경 to the belt's
+    middle. Its ends snap onto straight conveyors' as theirs do, the next
+    turned the way the corner's end runs. Parts ride round the curve at
+    the belt's pace, turned with it, as long as its middle's arc.
   - A conveyor can be picked as a 다음 공정. Its parts go onto the belt at
     its start, one at a time, and ride it with the belt's own pace and
     queueing. At its end they go on to the conveyor's own 다음 공정, so

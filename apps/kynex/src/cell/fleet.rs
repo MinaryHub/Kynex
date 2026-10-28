@@ -866,7 +866,7 @@ impl Cell {
                 let deck = j.handoff.and_then(|a| decks.iter().find(|d| d.object == a));
                 let top = match (deck, belts.iter().find(|b| b.object == j.to)) {
                     (Some(d), _) => d.pose.transform_point3((d.lo + d.hi) / 2.0 * DVec3::new(1.0, 1.0, 0.0) + DVec3::Z * d.hi.z),
-                    (None, Some(b)) => b.centre + b.along * (-b.length / 2.0 + super::RAW.0),
+                    (None, Some(b)) => b.point(-b.length / 2.0 + super::RAW.0),
                     (None, None) => Self::dock(doc, to)?.0,
                 };
                 Some((
@@ -1016,11 +1016,11 @@ impl Cell {
         let belts = self.belts(doc);
         let comp = |o: u64| self.components.iter().find(|c| c.object == o);
         let at = match belts.iter().find(|b| b.object == from) {
-            Some(b) => b.centre + b.along * (b.length / 2.0 - super::RAW.0),
+            Some(b) => b.point(b.length / 2.0 - super::RAW.0),
             None => Self::dock(doc, comp(from)?)?.0,
         };
         let put = match belts.iter().find(|b| b.object == to) {
-            Some(b) => b.centre + b.along * (-b.length / 2.0 + super::RAW.0),
+            Some(b) => b.point(-b.length / 2.0 + super::RAW.0),
             None => Self::dock(doc, comp(to)?)?.0,
         };
         let up = DVec3::Z * (super::RAW.1 / 2.0 + 0.002);

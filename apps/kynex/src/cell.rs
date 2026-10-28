@@ -1119,18 +1119,62 @@ struct Belt {
     centre: DVec3,
     along: DVec3,
     across: DVec3,
+    /// Along its way, and across: for a curved belt, along its middle.
     length: f64,
     width: f64,
+    /// A curved belt (a corner conveyor's): about which point, at what
+    /// radius to its middle, from what angle and turning how far (to the
+    /// left positive). Straight, none.
+    arc: Option<Arc>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Arc {
+    pivot: DVec3,
+    radius: f64,
+    from: f64,
+    sweep: f64,
 }
 
 impl Belt {
+    /// The point on its middle, on its top, `s` along it from its middle.
+    fn point(&self, s: f64) -> DVec3 {
+        match self.arc {
+            None => self.centre + self.along * s,
+            Some(a) => {
+                let t = a.from + a.sweep.signum() * (s + self.length / 2.0) / a.radius;
+                a.pivot + DVec3::new(t.cos(), t.sin(), 0.0) * a.radius
+            }
+        }
+    }
+
+    /// Where `at` stands on it, along it from its middle and across from
+    /// its middle, and how far above its top.
+    fn local(&self, at: DVec3) -> (f64, f64, f64) {
+        match self.arc {
+            None => {
+                let d = at - self.centre;
+                (d.dot(self.along), d.dot(self.across), d.z)
+            }
+            Some(a) => {
+                let d = at - a.pivot;
+                let r = d.truncate().length();
+                // The angle from where it begins, the way it turns, kept
+                // within half a turn either side.
+                let mut t = (d.y.atan2(d.x) - a.from) * a.sweep.signum();
+                let tau = std::f64::consts::TAU;
+                t = (t + tau / 2.0).rem_euclid(tau) - tau / 2.0;
+                (t * a.radius - self.length / 2.0, r - a.radius, d.z)
+            }
+        }
+    }
+
     /// How far along the belt from its middle part `p` stands, if it
     /// stands on it.
     fn along_of(&self, p: &Part) -> Option<f64> {
         let foot = p.world.translation - DVec3::Z * (p.size().1 / 2.0);
-        let d = foot - self.centre;
-        let (x, y) = (d.dot(self.along), d.dot(self.across));
-        (x.abs() <= self.length / 2.0 + 1e-6 && y.abs() <= self.width / 2.0 && d.z.abs() < 0.01)
+        let (x, y, z) = self.local(foot);
+        (x.abs() <= self.length / 2.0 + 1e-6 && y.abs() <= self.width / 2.0 && z.abs() < 0.01)
             .then_some(x)
     }
 
@@ -1145,9 +1189,8 @@ impl Belt {
     /// Its top's height under `at`, a part's centre `half` its height up,
     /// if `at` is over the belt and not far above it.
     fn top_under(&self, at: DVec3, half: f64) -> Option<f64> {
-        let d = at - self.centre;
-        let (x, y) = (d.dot(self.along), d.dot(self.across));
-        let above = d.z - half;
+        let (x, y, z) = self.local(at);
+        let above = z - half;
         (x.abs() <= self.length / 2.0
             && y.abs() <= self.width / 2.0
             && (-0.01..0.1).contains(&above))
@@ -4522,9 +4565,24 @@ impl Cell {
             .iter()
             .filter(|c| c.kind == Kind::Conveyor)
             .filter_map(|c| {
-                let world = doc.world_transform(id_of(doc, c.object)?);
+                let id = id_of(doc, c.object)?;
+                let world = doc.world_transform(id);
                 let along = world.matrix3.x_axis;
                 let across = world.matrix3.y_axis;
+                if let Some(arc) = Self::belt_arc(doc, id) {
+                    let (lo, hi, a) = arc;
+                    let radius = (lo + hi) / 2.0;
+                    return Some(Belt {
+                        object: c.object,
+                        props: c.props,
+                        centre: a.pivot,
+                        along: DVec3::X,
+                        across: DVec3::Y,
+                        length: a.sweep.abs() * radius,
+                        width: hi - lo,
+                        arc: Some(Arc { radius, ..a }),
+                    });
+                }
                 Some(Belt {
                     object: c.object,
                     props: c.props,
@@ -4533,9 +4591,57 @@ impl Cell {
                     across: across.normalize_or_zero(),
                     length: along.length(),
                     width: across.length(),
+                    arc: None,
                 })
             })
             .collect()
+    }
+
+    /// A corner conveyor's curved belt (named `belt_corner_left` or
+    /// `…_right`), from its mesh: an annulus' sector about its own origin,
+    /// its top at it. Its inner and outer radius, and where it turns about,
+    /// from what angle and how far — the way its name says.
+    fn belt_arc(doc: &Document, id: kreate_scene::ObjectId) -> Option<(f64, f64, Arc)> {
+        let o = doc.object(id)?;
+        let left = match o.name.as_str() {
+            "belt_corner_left" => true,
+            "belt_corner_right" => false,
+            _ => return None,
+        };
+        let world = doc.world_transform(id);
+        let pivot = world.translation;
+        let mut lo = f64::INFINITY;
+        let mut hi = 0.0f64;
+        let (mut t0, mut t1) = (f64::INFINITY, f64::NEG_INFINITY);
+        for p in doc.mesh(o.mesh()?)?.positions() {
+            let w = world.transform_point3(p.as_dvec3()) - pivot;
+            let r = w.truncate().length();
+            if r < 1e-6 {
+                continue;
+            }
+            lo = lo.min(r);
+            hi = hi.max(r);
+            let t = w.y.atan2(w.x);
+            t0 = t0.min(t);
+            t1 = t1.max(t);
+        }
+        // A quarter turn or so: within half a turn, so atan2's range holds
+        // it unless it crosses the −X axis; then measured from +X's other side.
+        if t1 - t0 > std::f64::consts::PI {
+            let (mut a, mut b) = (f64::INFINITY, f64::NEG_INFINITY);
+            for p in doc.mesh(o.mesh()?)?.positions() {
+                let w = world.transform_point3(p.as_dvec3()) - pivot;
+                if w.truncate().length() < 1e-6 {
+                    continue;
+                }
+                let t = w.y.atan2(w.x).rem_euclid(std::f64::consts::TAU);
+                a = a.min(t);
+                b = b.max(t);
+            }
+            (t0, t1) = (a, b);
+        }
+        let (from, sweep) = if left { (t0, t1 - t0) } else { (t1, t0 - t1) };
+        (hi > lo).then_some((lo, hi, Arc { pivot, radius: 0.0, from, sweep }))
     }
 
     /// Carries the parts on each belt on by `dt` seconds, each up to the
@@ -4553,6 +4659,7 @@ impl Cell {
             // stopper raised — and how far along the belt it begins.
             let stops: Vec<f64> = boxes
                 .iter()
+                .filter(|_| belt.arc.is_none())
                 .filter_map(|&(_, lo, hi)| {
                     let corners = (0..8).map(|k| {
                         DVec3::new(
@@ -4614,7 +4721,16 @@ impl Cell {
                     .fold(limit, f64::min);
                 let to = (x + belt.props.speed * dt).min(held).max(x);
                 if to > x + 1e-9 {
-                    self.parts[i].world.translation += belt.along * (to - x);
+                    // Along its way: on a curve, round it, turned with it.
+                    let p = &mut self.parts[i].world;
+                    let up = p.translation.z - belt.point(x).z;
+                    let turn = belt.point(to + 1e-3) - belt.point(to - 1e-3);
+                    let was = belt.point(x + 1e-3) - belt.point(x - 1e-3);
+                    let yaw = turn.y.atan2(turn.x) - was.y.atan2(was.x);
+                    p.translation = belt.point(to) + DVec3::Z * up;
+                    if belt.arc.is_some() {
+                        p.matrix3 = kreate_math::DMat3::from_rotation_z(yaw) * p.matrix3;
+                    }
                     moved = true;
                     if to >= end - 1e-9 {
                         arrived = true;
@@ -4647,7 +4763,7 @@ impl Cell {
                     .any(|x| x < start + gap);
                 if *since >= belt.props.feed && room {
                     *since = 0.0;
-                    let at = belt.centre + belt.along * start + DVec3::Z * RAW.1 / 2.0;
+                    let at = belt.point(start) + DVec3::Z * RAW.1 / 2.0;
                     self.add_part(at, false);
                     arrived = true;
                 }

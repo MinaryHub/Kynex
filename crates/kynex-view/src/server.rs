@@ -619,7 +619,12 @@ fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         let mut hub = hub.lock().expect("viewer hub");
         let mut opening = frame(
             "hello",
-            &format!("{{\"build\":\"{}\"}}", assets::build_id()),
+            &format!(
+                "{{\"build\":\"{}\",\"version\":\"{}\",\"commit\":\"{}\"}}",
+                assets::build_id(),
+                assets::VERSION,
+                assets::COMMIT
+            ),
         );
         opening.push_str(&frame("status", &hub.status));
         for (event, json) in &hub.states {

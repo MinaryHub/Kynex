@@ -1269,7 +1269,11 @@ impl Item {
         match (self.template.as_str(), plug) {
             ("corner_conveyor", Plug::BeltOut) => {
                 let c = self.corner();
-                if c.left { c.angle } else { -c.angle }
+                if c.left {
+                    c.angle
+                } else {
+                    -c.angle
+                }
             }
             _ => 0.0,
         }
@@ -1283,8 +1287,12 @@ impl Item {
         // there (a corner's out end turned from its in end).
         let yaw = match mine {
             Plug::Foot => self.yaw,
-            Plug::BeltIn => other.yaw + other.belt_heading(Plug::BeltOut) - self.belt_heading(Plug::BeltIn),
-            Plug::BeltOut => other.yaw + other.belt_heading(Plug::BeltIn) - self.belt_heading(Plug::BeltOut),
+            Plug::BeltIn => {
+                other.yaw + other.belt_heading(Plug::BeltOut) - self.belt_heading(Plug::BeltIn)
+            }
+            Plug::BeltOut => {
+                other.yaw + other.belt_heading(Plug::BeltIn) - self.belt_heading(Plug::BeltOut)
+            }
             _ => other.yaw,
         };
         let mut moved = self.clone();
@@ -3153,14 +3161,22 @@ struct Corner {
 impl Corner {
     /// Which side it turns to: 1 left, −1 right.
     fn side(&self) -> f64 {
-        if self.left { 1.0 } else { -1.0 }
+        if self.left {
+            1.0
+        } else {
+            -1.0
+        }
     }
 
     /// Where it turns about, the in end, before it is set about its middle.
     fn raw(&self, t: f64) -> DVec3 {
         let s = self.side();
         let a = t * self.angle;
-        DVec3::new(self.radius * a.sin(), s * self.radius * (1.0 - a.cos()), 0.0)
+        DVec3::new(
+            self.radius * a.sin(),
+            s * self.radius * (1.0 - a.cos()),
+            0.0,
+        )
     }
 
     /// Its middle: halfway between its ends, so it is placed by that.
@@ -3226,14 +3242,19 @@ fn corner_conveyor(doc: &mut Document, c: &Colours, corner: Corner, w: f64, h: f
         kreate_mesh::MeshData::from_faces(positions, &faces)
     };
     let r = corner.radius;
-    let name = if corner.left { "belt_corner_left" } else { "belt_corner_right" };
+    let name = if corner.left {
+        "belt_corner_left"
+    } else {
+        "belt_corner_right"
+    };
     let belt = doc.add_mesh_object(name, sector(r - w / 2.0, r + w / 2.0, -0.02, 0.0));
     paint(doc, belt, c.belt);
     doc.object_mut(belt).unwrap().transform.translation = DVec3::new(pivot.x, pivot.y, h);
     for (side, r) in [("inner", r - w / 2.0 - 0.04), ("outer", r + w / 2.0)] {
         let frame = doc.add_mesh_object(&format!("frame_{side}"), sector(r, r + 0.04, -0.14, 0.0));
         paint(doc, frame, c.steel);
-        doc.object_mut(frame).unwrap().transform.translation = DVec3::new(pivot.x, pivot.y, h + 0.01);
+        doc.object_mut(frame).unwrap().transform.translation =
+            DVec3::new(pivot.x, pivot.y, h + 0.01);
         let legs = ((r * corner.angle / 1.5).ceil() as usize).max(1);
         for i in 0..=legs {
             let t = 0.05 + 0.9 * i as f64 / legs as f64;
@@ -3250,10 +3271,20 @@ fn corner_conveyor(doc: &mut Document, c: &Colours, corner: Corner, w: f64, h: f
     }
     for (end, t) in [("in", 0.0), ("out", 1.0)] {
         let at = corner.point(t);
-        let id = bar(doc, &format!("drum_{end}"), 0.05, w + 0.02, [at.x, at.y, h - 0.05], false, c.dark, None);
+        let id = bar(
+            doc,
+            &format!("drum_{end}"),
+            0.05,
+            w + 0.02,
+            [at.x, at.y, h - 0.05],
+            false,
+            c.dark,
+            None,
+        );
         let turn = corner.heading(t);
         doc.object_mut(id).unwrap().transform.rotation =
-            DQuat::from_rotation_z(turn.y.atan2(turn.x)) * doc.object(id).unwrap().transform.rotation;
+            DQuat::from_rotation_z(turn.y.atan2(turn.x))
+                * doc.object(id).unwrap().transform.rotation;
     }
     belt
 }

@@ -25,6 +25,19 @@ Kreate ──patch──▶ relay (kreate-collab, TCP 7878) ──patch──▶
 If KYNEX starts before Kreate opens the session, it waits and connects once
 the scene is there. It never seeds the session with an empty scene.
 
+## Version and releases
+
+Each build is numbered: `major.minor.<build>`, the build being the commits
+on the way to it (`git rev-list --count HEAD`), so it goes up with every
+commit and is the same on every machine (`tools/version.rs`;
+`KYNEX_BUILD` in the environment gives the number instead). A build from
+a tree with changes not committed says `-dev` after it. `kynex --version`
+prints it, and the viewer shows it by its name.
+
+Every push to `main` releases that build (`.github/workflows/release.yml`)
+as `v<version>`: for Windows the installer, the MSI and a zip of the
+programs (`tools/package.ps1`), for Linux x64 and macOS arm64 a tar.gz.
+
 ## 3D viewer
 
 ```

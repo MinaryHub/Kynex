@@ -1192,13 +1192,25 @@ fn a_corner_conveyor_carries_parts_round_its_curve() {
             ("flow_sink", 3.0, json!({})),
         ]);
         let (belt, source, sink) = (u[0], u[1], u[2]);
-        let b = cell.belts(&doc).into_iter().find(|b| b.object == belt).expect("the belt");
+        let b = cell
+            .belts(&doc)
+            .into_iter()
+            .find(|b| b.object == belt)
+            .expect("the belt");
         let arc = b.arc.expect("a curved belt");
         // Left turns towards +Y, right towards −Y.
         assert_eq!(arc.sweep > 0.0, turn == 0.0, "{arc:?}");
         // Radius 0.8 m to its middle, a quarter turn: 1.26 m along it.
-        assert!((b.length - 0.8 * std::f64::consts::FRAC_PI_2).abs() < 0.01, "{}", b.length);
-        assert!((arc.radius - 0.8).abs() < 0.01 && (b.width - 0.5).abs() < 0.01, "{arc:?} {}", b.width);
+        assert!(
+            (b.length - 0.8 * std::f64::consts::FRAC_PI_2).abs() < 0.01,
+            "{}",
+            b.length
+        );
+        assert!(
+            (arc.radius - 0.8).abs() < 0.01 && (b.width - 0.5).abs() < 0.01,
+            "{arc:?} {}",
+            b.width
+        );
         // Its ends a quarter turn apart, and every point on it 0.8 m from
         // where it turns about.
         let (a, z) = (b.point(-b.length / 2.0), b.point(b.length / 2.0));

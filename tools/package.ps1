@@ -1,5 +1,7 @@
 # Builds KYNEX's installers into target\dist: KYNEX-<version>-setup.exe (Inno
-# Setup, for this user or all) and KYNEX-<version>.msi (WiX v5, for IT).
+# Setup, for this user or all), KYNEX-<version>.msi (WiX v5, for IT) and
+# KYNEX-<version>-windows-x64.zip (the programs alone). The version is the
+# build's (tools/version.rs): commit first.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\package.ps1
 #
@@ -11,13 +13,14 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-Write-Host "KYNEX $version"
-
 cargo build --release -p kynex
 if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
 $bin = Join-Path $root 'target\release'
+# The version the programs were built as (tools/version.rs): x.y.<build>.
+$version = ((& (Join-Path $bin 'kynex.exe') --version) -split ' ')[1]
+if ($version -like '*-dev') { throw "KYNEX ${version}: commit first, a release is built from a commit" }
+Write-Host "KYNEX $version"
 $out = Join-Path $root 'target\dist'
 New-Item -ItemType Directory -Force $out | Out-Null
 
@@ -36,5 +39,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'WiX failed' }
 } finally { Pop-Location }
 
-Get-ChildItem $out -File | Where-Object { $_.Extension -in '.exe', '.msi' } |
+# And the programs on their own, to run without installing.
+$zip = Join-Path $out "KYNEX-$version-windows-x64.zip"
+Compress-Archive -Force -Path (Join-Path $bin 'kynex.exe'), (Join-Path $bin 'kynex-studio.exe') -DestinationPath $zip
+
+Get-ChildItem $out -File | Where-Object { $_.Extension -in '.exe', '.msi', '.zip' } |
     Select-Object Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }

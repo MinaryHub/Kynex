@@ -84,6 +84,10 @@ pub fn cli() {
             println!("{USAGE}");
             Ok(())
         }
+        Some("-V" | "--version" | "version") => {
+            println!("KYNEX {} ({})", env!("KYNEX_VERSION"), env!("KYNEX_COMMIT"));
+            Ok(())
+        }
         Some(other) => Err(format!("unknown command {other:?}\n{USAGE}")),
     };
     if let Err(e) = result {

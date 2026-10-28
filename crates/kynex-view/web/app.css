@@ -199,6 +199,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   place-items: center;
 }
 .toolbar button svg { width: 17px; height: 17px; }
+.brand-version { margin-left: 6px; font-size: 11px; color: var(--muted, #8a93a0); }
 .toolbar button:hover { background: var(--panel-2); color: var(--text); }
 .toolbar button.on { color: var(--accent); background: var(--accent-soft); }
 .toolbar button.menu-btn { display: inline-flex; align-items: center; gap: 4px; width: auto; padding: 0 8px; font-size: 12px; }

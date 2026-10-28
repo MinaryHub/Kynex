@@ -798,7 +798,13 @@ function connect() {
   // A page served by one KYNEX that reconnects to a newer one would read
   // its stream wrongly: it reloads instead.
   source.addEventListener('hello', (e) => {
-    const { build } = JSON.parse(e.data);
+    const { build, version, commit } = JSON.parse(e.data);
+    // Which KYNEX this is, by the brand.
+    const shown = document.getElementById('version');
+    if (shown && version) {
+      shown.textContent = `v${version}`;
+      shown.title = `KYNEX ${version}${commit ? ` (${commit})` : ''}`;
+    }
     if (servedBy && servedBy !== build) location.reload();
     servedBy = build;
   });

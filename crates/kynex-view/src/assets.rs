@@ -1,6 +1,11 @@
 //! The viewer's files, built into the binary: one executable carries the
 //! whole viewer, and a machine with no internet draws the same page.
 
+/// KYNEX's version, and the commit it was built from (see
+/// `tools/version.rs`).
+pub const VERSION: &str = env!("KYNEX_VERSION");
+pub const COMMIT: &str = env!("KYNEX_COMMIT");
+
 /// Names this build of the viewer's files: a page that reconnects and is
 /// told another name was served by an older KYNEX, and reloads itself.
 pub fn build_id() -> String {

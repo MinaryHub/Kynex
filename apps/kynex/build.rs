@@ -1,12 +1,18 @@
-//! The programs' icon and version, as Windows shows them (`assets/kynex.rc`).
+//! The programs' version (see `tools/version.rs`), and their icon and
+//! version as Windows shows them (`assets/kynex.rc`).
+
+include!("../../tools/version.rs");
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/kynex.rc");
     println!("cargo:rerun-if-changed=assets/kynex.ico");
+    println!("cargo:rerun-if-changed=../../tools/version.rs");
+    let (version, commit) = kynex_version();
+    println!("cargo:rustc-env=KYNEX_VERSION={version}");
+    println!("cargo:rustc-env=KYNEX_COMMIT={commit}");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
     let mut parts: Vec<String> = version
         .split(['.', '-', '+'])
         .take(3)

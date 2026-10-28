@@ -4641,7 +4641,16 @@ impl Cell {
             (t0, t1) = (a, b);
         }
         let (from, sweep) = if left { (t0, t1 - t0) } else { (t1, t0 - t1) };
-        (hi > lo).then_some((lo, hi, Arc { pivot, radius: 0.0, from, sweep }))
+        (hi > lo).then_some((
+            lo,
+            hi,
+            Arc {
+                pivot,
+                radius: 0.0,
+                from,
+                sweep,
+            },
+        ))
     }
 
     /// Carries the parts on each belt on by `dt` seconds, each up to the

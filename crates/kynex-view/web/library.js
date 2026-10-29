@@ -163,6 +163,11 @@ export class LibraryPanel {
         }
       }
     };
+    // Both hear the same press: the arrows taken first (their listener runs
+    // first), the rings sit it out, or a ring behind a plane's square, seen
+    // aslant, would turn it as it moves.
+    this.handle.addEventListener('mouseDown', () => (this.turner.enabled = false));
+    this.handle.addEventListener('mouseUp', () => (this.turner.enabled = true));
     this.handle.addEventListener('dragging-changed', dragged('translate'));
     this.turner.addEventListener('dragging-changed', dragged('rotate'));
     // Alt held: let go where it is, connected to nothing.

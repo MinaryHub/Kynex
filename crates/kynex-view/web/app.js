@@ -1634,7 +1634,7 @@ canvas.addEventListener(
     if (!cellPanel.linking()) return;
     // A selected item's gizmo stands over its body: only its arrows and
     // rings (an axis) move or turn it there; its middle is the body's.
-    const gizmoAxis = ['X', 'Y', 'Z'].includes(libraryPanel.handle?.axis);
+    const gizmoAxis = libraryPanel.gizmoAxis();
     if (view.interact || view.measure || cellPanel.picking() || libraryPanel.dragging || gizmoAxis || robotPanel.ownsPointer() || libraryPanel.armed) return;
     const hit = partAt(e.clientX, e.clientY);
     const uids = hit ? chainOf(hit.uid) : [];
@@ -2472,7 +2472,6 @@ window.addEventListener('keydown', (e) => {
   else if (k === '7') frame(selected, 'top');
   else if (k === '1') frame(selected, 'front');
   else if (k === '3') frame(selected, 'right');
-  else if (libraryPanel.key(k)) return e.preventDefault();
   else if ((k === 'delete' || k === 'backspace') && cellPanel.cutChosenLink()) return e.preventDefault();
   else if (k === 'delete' && libraryPanel.removeSelected()) return e.preventDefault();
   else if (k === 'escape') {

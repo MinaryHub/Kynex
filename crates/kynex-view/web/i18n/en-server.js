@@ -247,7 +247,6 @@ export default {
   '벨트 폭': 'Belt width',
   '회전 반경': 'Turn radius',
   '회전 각도': 'Turn angle',
-  '도는 쪽': 'Turn side',
   '지름': 'Diameter',
   '공급 간격': 'Feed interval',
   '부품 모양': 'Part look',
@@ -290,8 +289,6 @@ export default {
   '칸': 'bays',
 
   // --- Library: choices ---
-  '왼쪽': 'Left',
-  '오른쪽': 'Right',
   '작업대': 'Workbench',
   '바닥 표시': 'Floor marking',
   '로드 포트': 'Load port',

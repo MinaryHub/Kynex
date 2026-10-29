@@ -1288,6 +1288,9 @@ pub struct Cell {
     recipes: BTreeMap<u64, Vec<u64>>,
     stations: BTreeMap<u64, flow::Station>,
     flow_on: bool,
+    /// Whether the run was stopped: the belts stand, none feeding, until
+    /// it starts again.
+    belts_held: bool,
     flow_stats: flow::Stats,
     /// What last kept the flow from going on as it should, for the page.
     flow_problem: Option<String>,
@@ -4135,10 +4138,11 @@ impl Cell {
         self.flow_on
             || self.conveying
             || self.rovers.values().any(|r| !r.legs.is_empty())
-            || self
-                .components
-                .iter()
-                .any(|c| c.kind == Kind::Conveyor && c.props.feed > 0.0)
+            || (!self.belts_held
+                && self
+                    .components
+                    .iter()
+                    .any(|c| c.kind == Kind::Conveyor && c.props.feed > 0.0))
             || self.machines.values().any(|m| {
                 m.machining.is_some()
                     || (!m.held && m.opening && m.door < 1.0)
@@ -4655,13 +4659,19 @@ impl Cell {
 
     /// Carries the parts on each belt on by `dt` seconds, each up to the
     /// part ahead of it or the belt's end; takes away those at the end of a
-    /// belt that drains; and puts a raw part on at the start of one that
-    /// feeds, when its time comes and there is room. Returns whether a part
-    /// moved, and whether one came to an end or was put on.
+    /// belt that drains; hands one at the end of a belt linked on to another
+    /// belt over to that one's start, when there is room; and puts a raw
+    /// part on at the start of one that feeds, when its time comes and there
+    /// is room. Returns whether a part moved, and whether one came to an end
+    /// or was put on.
     fn convey(&mut self, doc: &Document, dt: f64) -> (bool, bool) {
         let (mut moved, mut arrived) = (false, false);
+        if self.belts_held {
+            return (moved, arrived);
+        }
         let boxes = self.axis_boxes(doc);
-        for belt in self.belts(doc) {
+        let belts = self.belts(doc);
+        for belt in &belts {
             let gap = 2.0 * RAW.0 + 0.005;
             let end = belt.length / 2.0 - RAW.0;
             // An axis standing up across the belt, where parts ride — a
@@ -4759,6 +4769,45 @@ impl Cell {
                     self.drained += 1;
                 }
                 self.changed = true;
+            }
+            // Linked on to another belt (outside a process flow, which
+            // hands its own parts on): the part at its end onto the first of
+            // them with room at its start, turned as the way runs there.
+            let at_end = self.parts.iter().position(|p| {
+                p.held.is_none()
+                    && p.flow.is_none()
+                    && belt.along_of(p).is_some_and(|x| x >= end - 0.003)
+            });
+            if let Some(i) = at_end {
+                let to = self
+                    .flow_next
+                    .get(&belt.object)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| belts.iter().find(|b| b.object == *n))
+                    .find(|b| {
+                        let start = -b.length / 2.0 + RAW.0;
+                        !self
+                            .parts
+                            .iter()
+                            .filter(|p| p.held.is_none())
+                            .filter_map(|p| b.along_of(p))
+                            .any(|x| x < start + gap)
+                    });
+                if let Some(to) = to {
+                    let heading = |b: &Belt, x: f64| {
+                        let d = b.point(x + 1e-3) - b.point(x - 1e-3);
+                        d.y.atan2(d.x)
+                    };
+                    let start = -to.length / 2.0 + RAW.0;
+                    let yaw = heading(to, start) - heading(belt, end);
+                    let p = &mut self.parts[i].world;
+                    let up = p.translation.z - belt.point(end).z;
+                    p.translation = to.point(start) + DVec3::Z * up;
+                    p.matrix3 = kreate_math::DMat3::from_rotation_z(yaw) * p.matrix3;
+                    moved = true;
+                    arrived = true;
+                }
             }
             if belt.props.feed > 0.0 {
                 let since = self.fed.entry(belt.object).or_insert(belt.props.feed);

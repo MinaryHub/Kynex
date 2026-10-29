@@ -1241,3 +1241,56 @@ fn a_corner_conveyor_carries_parts_round_its_curve() {
         assert!(sunk >= 25, "{sunk}");
     }
 }
+
+/// Two belts, the first feeding, linked one on to the other with no
+/// process flow: each part at the first's end goes on to the second, which
+/// carries it to its end and takes it away.
+#[test]
+fn a_belt_linked_on_to_another_hands_its_parts_over() {
+    let (doc, mut cell, u) = line(&[
+        ("conveyor", 0.0, json!({"speed": 0.5, "feed": 3.0})),
+        ("conveyor", 2.1, json!({"speed": 0.5, "drain": 1})),
+    ]);
+    let (first, second) = (u[0], u[1]);
+    link(&mut cell, &doc, first, &[second]);
+    let b = cell
+        .belts(&doc)
+        .into_iter()
+        .find(|b| b.object == second)
+        .expect("the second belt");
+    let start = Instant::now();
+    let (mut t, mut rode) = (0.0, false);
+    while t < 60.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        rode |= cell.parts().iter().any(|p| b.along_of(p).is_some());
+    }
+    assert!(rode, "a part rode the second belt");
+    // A part every 3 s, 2.1 m and 2 m at 0.5 m/s: about 18 taken away.
+    let drained = cell.take_drained();
+    assert!(drained >= 15, "{drained}");
+}
+
+/// Belts that feed, with no source: the run starts with them, and stopped,
+/// they stand, none fed nor carried on, until it starts again.
+#[test]
+fn a_run_of_belts_alone_starts_and_stops() {
+    let (doc, mut cell, u) = line(&[
+        ("conveyor", 0.0, json!({"speed": 0.5, "feed": 3.0})),
+        ("conveyor", 2.1, json!({"speed": 0.5})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    assert!(cell.flow_running());
+    let (t, _) = run(&mut cell, &doc, 0.0, 10.0);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "stop"}));
+    let at: Vec<DVec3> = cell.parts().iter().map(|p| p.world.translation).collect();
+    assert!(!at.is_empty());
+    let (t, _) = run(&mut cell, &doc, t, 10.0);
+    let still: Vec<DVec3> = cell.parts().iter().map(|p| p.world.translation).collect();
+    assert_eq!(at, still, "stood still while stopped");
+    assert!(!cell.is_running());
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, t, 10.0);
+    assert!(cell.parts().len() > at.len(), "fed again once started");
+}

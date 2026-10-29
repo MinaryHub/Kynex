@@ -318,12 +318,17 @@ impl Cell {
 }
 
 impl Cell {
-    /// Starts the flow, stops it where it is, or takes its parts away.
+    /// Starts the flow, stops it where it is, or takes its parts away. A
+    /// conveyor that feeds starts one as a source does; stopped, or taken
+    /// back to its start, the belts stand too.
     pub fn flow(&mut self, action: &str) -> Result<(), String> {
         let now = self.last_tick.unwrap_or(0.0);
         match action {
             "start" => {
-                if !self.components.iter().any(|c| c.kind == Kind::Source) {
+                let fed = |c: &Component| {
+                    c.kind == Kind::Source || (c.kind == Kind::Conveyor && c.props.feed > 0.0)
+                };
+                if !self.components.iter().any(fed) {
                     return Err(
                         "이 프로젝트에는 공정 흐름이 없습니다. 라이브러리 '공정 흐름'에서 \
                                 소재 공급·공정 스테이션·배출을 놓고 다음 공정으로 이으세요"
@@ -331,12 +336,17 @@ impl Cell {
                     );
                 }
                 self.flow_on = true;
+                self.belts_held = false;
                 self.flow_stats.from.get_or_insert(now);
                 self.flow_start.get_or_insert(now);
             }
-            "stop" => self.flow_on = false,
+            "stop" => {
+                self.flow_on = false;
+                self.belts_held = true;
+            }
             "reset" => {
                 self.flow_on = false;
+                self.belts_held = true;
                 let gone: Vec<u64> = self
                     .parts
                     .iter()

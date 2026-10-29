@@ -887,10 +887,11 @@ on its pedestal). Everything lands unturned; turn it afterwards.
 Select a placed item, here or in the scene, and its gizmo is on it at
 once, at the item's origin and along its own axes, whichever part of it
 was picked: the equipment moves as one, as Visual Components moves a
-component. Drag an arrow to move it along that axis, a square to move it
-in that plane; in **회전** (or `R`; `T` or **이동** back) drag the red,
-green or blue ring to turn it about X, Y or Z — its X and Y tilt and its
-turn, in the angle snap's steps. Several selected together turn about Z
+component. The arrows and the rings are both on it, the rings beyond the
+arrows' tips. Drag an arrow to move it along that axis, a square to move
+it in that plane, in the snap's steps; drag the red, green or blue ring
+to turn it about X, Y or Z — its X and Y tilt and its turn, in the angle
+snap's steps. Several selected together turn about Z
 only; Alt held as it is let go keeps it from snapping onto a connection
 point. Turned, it is only set down as it is let go, not snapped onto a
 connection point: a conveyor turned about its middle would otherwise be
@@ -1076,9 +1077,9 @@ not change the session's scene.
     comparison included, so only the steady state counts.
   - The flow bar and summary count parts out by product.
 - **Conveyors, batches and racks** in a process flow:
-  - **코너형 컨베이어** (물류): a curved belt turning left or right by
-    its 회전 각도 (90° unless set, 30–180°) at its 회전 반경 to the belt's
-    middle. Its ends snap onto straight conveyors' as theirs do, the next
+  - **코너형 컨베이어** (물류): a curved belt turning left a quarter
+    turn at its 회전 반경 to the belt's middle (a project that set it
+    another way, right or 30–180°, keeps it). Its ends snap onto straight conveyors' as theirs do, the next
     turned the way the corner's end runs. Parts ride round the curve at
     the belt's pace, turned with it, as long as its middle's arc.
   - A conveyor can be picked as a 다음 공정. Its parts go onto the belt at

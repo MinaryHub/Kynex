@@ -267,8 +267,6 @@ pub const TEMPLATES: &[Template] = &[
             p("radius", "회전 반경", 0.8, 0.4, 3.0),
             p("width", "벨트 폭", 0.5, 0.2, 1.5),
             p("height", "높이", 0.8, 0.3, 1.5),
-            q("angle", "회전 각도", 90.0, 30.0, 180.0, "°"),
-            c("turn", "도는 쪽", 0.0, &["왼쪽", "오른쪽"]),
         ],
     },
     Template {
@@ -1255,11 +1253,15 @@ impl Item {
     }
 
     /// A corner conveyor's way round, from its parameters.
+    /// A corner turns left a quarter turn: neither is set in the inspector.
+    /// A project that set them (`angle`, 30° to 180°; `turn`, 1 right)
+    /// keeps them.
     fn corner(&self) -> Corner {
+        let angle = self.params.get("angle").copied().unwrap_or(90.0);
         Corner {
             radius: self.param("radius"),
-            angle: self.param("angle").to_radians(),
-            left: self.param("turn") < 0.5,
+            angle: angle.clamp(30.0, 180.0).to_radians(),
+            left: self.params.get("turn").copied().unwrap_or(0.0) < 0.5,
         }
     }
 

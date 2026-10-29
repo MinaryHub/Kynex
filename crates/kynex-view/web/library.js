@@ -94,11 +94,22 @@ export class LibraryPanel {
 
     this.proxy = new THREE.Object3D();
     ctx.scene.add(this.proxy);
+    // The gizmo: arrows to move it and rings to turn it, both at once, along
+    // the equipment's own axes, not the world's. The rings stand beyond the
+    // arrows' tips, so the one never picks for the other; no free ball nor
+    // ring facing the view, which would lie over the arrows.
     this.handle = new TransformControls(ctx.camera, ctx.canvas);
     this.handle.setSize(0.8);
-    // Its arrows and rings along the equipment's own axes, not the world's.
     this.handle.setSpace('local');
-    this.helper = this.handle.getHelper();
+    this.turner = new TransformControls(ctx.camera, ctx.canvas);
+    this.turner.setMode('rotate');
+    this.turner.setSize(1.3);
+    this.turner.setSpace('local');
+    const parts = this.turner._gizmo;
+    for (const group of [parts.gizmo.rotate, parts.picker.rotate]) {
+      for (const m of group.children.filter((c) => c.name === 'E' || c.name === 'XYZE')) m.removeFromParent();
+    }
+    this.helpers = [this.handle.getHelper(), this.turner.getHelper()];
     this.handleItem = null;
     // The gizmo on the equipment selected, unless turned off in this browser.
     this.gizmo = true;
@@ -123,7 +134,9 @@ export class LibraryPanel {
     this.applySnap();
     this.dragging = false;
     this.draggedAt = 0;
-    this.handle.addEventListener('dragging-changed', (e) => {
+    const dragged = (mode) => (e) => {
+      // Moving or turning, as the arrows or the rings were taken.
+      if (e.value) this.mode = mode;
       ctx.controls.enabled = !e.value;
       this.dragging = e.value;
       // The group as it stood when the drag began: it moves with the item
@@ -149,11 +162,13 @@ export class LibraryPanel {
           this.move(null, null, null, { op: 'move_many', moves, settle: true });
         }
       }
-    });
+    };
+    this.handle.addEventListener('dragging-changed', dragged('translate'));
+    this.turner.addEventListener('dragging-changed', dragged('rotate'));
     // Alt held: let go where it is, connected to nothing.
     this.alt = false;
     for (const type of ['keydown', 'keyup']) window.addEventListener(type, (e) => (this.alt = e.altKey));
-    this.handle.addEventListener('objectChange', () => {
+    const changed = () => {
       if (!this.dragging || this.handleItem == null) return;
       // Its turn about Z, then its tilt about Y and X, as the item keeps
       // them (`roll`, `pitch`, `yaw`).
@@ -168,7 +183,9 @@ export class LibraryPanel {
       }
       const at = this.originAt();
       this.move(null, null, null, { op: 'move', item: this.handleItem, at, yaw: e.z, pitch: e.y, roll: e.x });
-    });
+    };
+    this.handle.addEventListener('objectChange', changed);
+    this.turner.addEventListener('objectChange', changed);
 
     this.list.addEventListener('dragstart', (e) => {
       const key = e.target.closest('[data-template]')?.dataset.template;
@@ -250,10 +267,6 @@ export class LibraryPanel {
         this.duplicate();
       } else if (act === 'handle') {
         this.setGizmo(!this.gizmo);
-      } else if (act === 'mode-move') {
-        this.setMode('translate');
-      } else if (act === 'mode-turn') {
-        this.setMode('rotate');
       }
     });
   }
@@ -281,7 +294,7 @@ export class LibraryPanel {
   groupChanged() {
     this.markGroup();
     // Several turn about Z only.
-    if (this.mode === 'rotate') this.handle.showX = this.handle.showY = this.groupItems().length <= 1;
+    this.turner.showX = this.turner.showY = this.groupItems().length <= 1;
     const s = this.ctx.selected();
     if (s != null) this.showFor(s);
   }
@@ -345,7 +358,7 @@ export class LibraryPanel {
     this.handle.setTranslationSnap(this.snap.grid ? this.snap.grid / 1000 : null);
     // Turned freely under the pointer; the angle sent is snapped, from 0°
     // (`snapAngle`), not by steps from where it stood.
-    this.handle.setRotationSnap(null);
+    this.turner.setRotationSnap(null);
     try {
       localStorage.setItem('kynex.snap', JSON.stringify(this.snap));
     } catch {}
@@ -482,7 +495,13 @@ export class LibraryPanel {
 
   // Whether the pointer is the library's: a placing click or the handle.
   ownsPointer() {
-    return this.dragging || this.handle.axis !== null || performance.now() - this.draggedAt < 250;
+    const over = this.handle.axis !== null || this.turner.axis !== null;
+    return this.dragging || over || performance.now() - this.draggedAt < 250;
+  }
+
+  // Whether the pointer is over one of the gizmo's arrows or rings.
+  gizmoAxis() {
+    return ['X', 'Y', 'Z'].includes(this.handle.axis) || ['X', 'Y', 'Z'].includes(this.turner.axis);
   }
 
   // A click on the scene, while a template is picked: placed there.
@@ -660,11 +679,9 @@ export class LibraryPanel {
         </optgroup>
       </select></label>` : ''}
       <div class="insp-actions">
-        <button class="text-btn${this.gizmo ? ' on' : ''}" data-item-act="handle" title="${t('장비를 고르면 기즈모(이동·회전 화살표)가 나와 마우스로 바로 끌 수 있습니다. R: 회전, T: 이동, Alt: 맞붙이지 않기')}">${this.gizmo ? t('기즈모 끄기') : t('기즈모 켜기')}</button>
-        ${this.gizmo ? `<span class="seg gizmo-mode"><button data-item-act="mode-move" class="${this.mode !== 'rotate' ? 'on' : ''}" title="${t('화살표로 X·Y·Z 이동 (T)')}">${t('이동')}</button><button data-item-act="mode-turn" class="${this.mode === 'rotate' ? 'on' : ''}" title="${t('고리로 X·Y·Z축 회전 (R)')}">${t('회전')}</button></span>` : ''}
-        ${this.mode === 'rotate'
-          ? `<label class="insp-snap" title="${t('핸들로 돌릴 때 각도 단위: 0°부터 그 배수로')}">${t('각도 스냅')}<select data-snap="angle">${[0, 5, 15, 45, 90].map((v) => `<option value="${v}"${v === this.snap.angle ? ' selected' : ''}>${v ? `${v}°` : t('끔')}</option>`).join('')}</select></label>`
-          : `<label class="insp-snap" title="${t('핸들로 옮길 때 격자 간격')}">${t('스냅')}<select data-snap="grid">${[0, 10, 50, 100, 500].map((v) => `<option value="${v}"${v === this.snap.grid ? ' selected' : ''}>${v ? `${v} mm` : t('끔')}</option>`).join('')}</select></label>`}
+        <button class="text-btn${this.gizmo ? ' on' : ''}" data-item-act="handle" title="${t('장비를 고르면 기즈모(이동 화살표와 회전 고리)가 나와 마우스로 바로 끌 수 있습니다. Alt: 맞붙이지 않기')}">${this.gizmo ? t('기즈모 끄기') : t('기즈모 켜기')}</button>
+        <label class="insp-snap" title="${t('핸들로 옮길 때 격자 간격')}">${t('스냅')}<select data-snap="grid">${[0, 10, 50, 100, 500].map((v) => `<option value="${v}"${v === this.snap.grid ? ' selected' : ''}>${v ? `${v} mm` : t('끔')}</option>`).join('')}</select></label>
+        <label class="insp-snap" title="${t('핸들로 돌릴 때 각도 단위: 0°부터 그 배수로')}">${t('각도 스냅')}<select data-snap="angle">${[0, 5, 15, 45, 90].map((v) => `<option value="${v}"${v === this.snap.angle ? ' selected' : ''}>${v ? `${v}°` : t('끔')}</option>`).join('')}</select></label>
         <button class="text-btn quiet" data-item-act="duplicate" title="${t('옆에 복제 (Ctrl+D). 복사 Ctrl+C, 붙여넣기 Ctrl+V')}">${t('복제')}</button>
         <button class="text-btn quiet danger" data-item-act="remove" title="${t('삭제 (Delete)')}">${many > 1 ? t('{n}개 삭제', { n: many }) : t('삭제')}</button>
       </div>
@@ -823,11 +840,13 @@ export class LibraryPanel {
     this.handleItem = id;
     if (id != null) {
       this.handle.attach(this.proxy);
-      this.ctx.scene.add(this.helper);
+      this.turner.attach(this.proxy);
+      for (const h of this.helpers) this.ctx.scene.add(h);
       this.followHandle();
     } else {
       this.handle.detach();
-      this.helper.removeFromParent();
+      this.turner.detach();
+      for (const h of this.helpers) h.removeFromParent();
     }
     const s = this.ctx.selected();
     if (s != null) this.showFor(s);
@@ -854,24 +873,5 @@ export class LibraryPanel {
   originAt() {
     const off = (this.offset ?? new THREE.Vector3()).clone().applyQuaternion(this.proxy.quaternion);
     return this.proxy.position.clone().sub(off).toArray();
-  }
-
-  // Keys while the gizmo is on: R turns, T moves.
-  key(k) {
-    if (this.handleItem == null) return false;
-    if (k === 'r') this.setMode('rotate');
-    else if (k === 't') this.setMode('translate');
-    else return false;
-    return true;
-  }
-
-  // The gizmo moving (arrows along X, Y, Z) or turning (rings about X, Y,
-  // Z); several selected together turn about Z only.
-  setMode(mode) {
-    this.handle.setMode(mode);
-    this.mode = mode;
-    this.handle.showX = this.handle.showY = mode !== 'rotate' || this.groupItems().length <= 1;
-    const s = this.ctx.selected();
-    if (s != null) this.showFor(s);
   }
 }

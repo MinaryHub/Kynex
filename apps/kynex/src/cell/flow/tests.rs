@@ -1294,3 +1294,32 @@ fn a_run_of_belts_alone_starts_and_stops() {
     run(&mut cell, &doc, t, 10.0);
     assert!(cell.parts().len() > at.len(), "fed again once started");
 }
+
+/// Two belts laid along +X but linked the other way, the second on to the
+/// first: both run as the link does, the second's parts going along −X
+/// off its end on to the first, which carries them on along −X and takes
+/// them away.
+#[test]
+fn belts_run_the_way_they_are_linked() {
+    let (doc, mut cell, u) = line(&[
+        ("conveyor", 0.0, json!({"speed": 0.5, "drain": 1})),
+        ("conveyor", 2.1, json!({"speed": 0.5, "feed": 3.0})),
+    ]);
+    let (first, second) = (u[0], u[1]);
+    link(&mut cell, &doc, second, &[first]);
+    let belts = cell.belts(&doc);
+    for b in &belts {
+        assert!(b.along.x < -0.99, "{}: {}", b.object, b.along);
+    }
+    let b = belts.into_iter().find(|b| b.object == first).unwrap();
+    let start = Instant::now();
+    let (mut t, mut rode) = (0.0, false);
+    while t < 60.0 {
+        t += 0.1;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        rode |= cell.parts().iter().any(|p| b.along_of(p).is_some());
+    }
+    assert!(rode, "a part rode the first belt");
+    let drained = cell.take_drained();
+    assert!(drained >= 15, "{drained}");
+}

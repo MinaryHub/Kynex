@@ -3110,34 +3110,10 @@ fn cnc(doc: &mut Document, c: &Colours, item: &Item, vise: bool) -> ObjectId {
     machine
 }
 
-/// A chevron on a belt's top, `tip` its point, pointing along `heading` (on
-/// the floor), `size` across: two thin bars, the way the belt runs.
-fn chevron(doc: &mut Document, c: &Colours, name: &str, tip: DVec3, heading: DVec3, size: f64) {
-    let way = heading.y.atan2(heading.x);
-    let arm = size * 0.55;
-    for (k, side) in [(0, 1.0), (1, -1.0)] {
-        // Each arm back from the tip, 40° off the way it runs.
-        let a = way + side * (180.0_f64 - 40.0).to_radians();
-        let mid = tip + DVec3::new(a.cos(), a.sin(), 0.0) * arm / 2.0;
-        let id = block(
-            doc,
-            &format!("{name}_{k}"),
-            [arm, size * 0.16, 0.004],
-            [mid.x, mid.y, tip.z + 0.002],
-            c.fence,
-            None,
-        );
-        doc.object_mut(id).unwrap().transform.rotation = DQuat::from_rotation_z(a);
-    }
-}
-
-/// How far apart the chevrons on a belt are, metres.
-const CHEVRON_PITCH: f64 = 0.6;
-
 /// A belt conveyor `l` long along X, centred on the origin, its belt `w`
 /// wide with its top at `h`: side frames, legs at most 1.5 m apart, and a
-/// drum at each end; chevrons on the belt the way it runs. Returns the
-/// belt, which carries parts towards +X.
+/// drum at each end. Returns the belt, which carries parts towards +X —
+/// or the way its links run (see `Cell::belts`).
 fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
     let belt = block(
         doc,
@@ -3147,19 +3123,6 @@ fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId
         c.belt,
         None,
     );
-    let size = (w * 0.5).min(0.25);
-    let count = ((l / CHEVRON_PITCH).floor() as usize).max(1);
-    for k in 0..count {
-        let x = -l / 2.0 + l * (k as f64 + 0.5) / count as f64 + size * 0.2;
-        chevron(
-            doc,
-            c,
-            &format!("arrow_{k}"),
-            DVec3::new(x, 0.0, h),
-            DVec3::X,
-            size,
-        );
-    }
     for (side, y) in [("left", -1.0), ("right", 1.0)] {
         let y = y * (w / 2.0 + 0.02);
         block(
@@ -3255,8 +3218,7 @@ impl Corner {
 /// A corner conveyor, its belt's top at `h` and `w` wide, turning as
 /// `corner` says: the curved belt — named for the way it turns, about its
 /// own origin where it turns about (see `Cell::belt_arc`) —, a curved frame
-/// each side, legs, and a drum at each end; chevrons on the belt the way it
-/// runs, round with it. Returns the belt.
+/// each side, legs, and a drum at each end. Returns the belt.
 fn corner_conveyor(doc: &mut Document, c: &Colours, corner: Corner, w: f64, h: f64) -> ObjectId {
     let pivot = corner.pivot();
     let steps = ((corner.angle.to_degrees() / 6.0).ceil() as usize).max(4);
@@ -3301,20 +3263,6 @@ fn corner_conveyor(doc: &mut Document, c: &Colours, corner: Corner, w: f64, h: f
     let belt = doc.add_mesh_object(name, sector(r - w / 2.0, r + w / 2.0, -0.02, 0.0));
     paint(doc, belt, c.belt);
     doc.object_mut(belt).unwrap().transform.translation = DVec3::new(pivot.x, pivot.y, h);
-    let size = (w * 0.5).min(0.25);
-    let count = ((r * corner.angle / CHEVRON_PITCH).floor() as usize).max(1);
-    for k in 0..count {
-        let t = (k as f64 + 0.5) / count as f64;
-        let at = corner.point(t);
-        chevron(
-            doc,
-            c,
-            &format!("arrow_{k}"),
-            DVec3::new(at.x, at.y, h),
-            corner.heading(t),
-            size,
-        );
-    }
     for (side, r) in [("inner", r - w / 2.0 - 0.04), ("outer", r + w / 2.0)] {
         let frame = doc.add_mesh_object(&format!("frame_{side}"), sector(r, r + 0.04, -0.14, 0.0));
         paint(doc, frame, c.steel);

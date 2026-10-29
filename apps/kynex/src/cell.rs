@@ -1137,6 +1137,16 @@ struct Arc {
 }
 
 impl Belt {
+    /// Turned about: running from its end to its start.
+    fn reverse(&mut self) {
+        self.along = -self.along;
+        self.across = -self.across;
+        if let Some(a) = &mut self.arc {
+            a.from += a.sweep;
+            a.sweep = -a.sweep;
+        }
+    }
+
     /// The point on its middle, on its top, `s` along it from its middle.
     fn point(&self, s: f64) -> DVec3 {
         match self.arc {
@@ -4563,8 +4573,54 @@ impl Cell {
             .collect()
     }
 
-    /// Every conveyor's belt, where it is in `doc`.
+    /// Every conveyor's belt, where it is in `doc`, running the way its
+    /// links do: from what is linked on to it, to what it is linked on to.
+    /// Nearer its start than its end, they turn it about (`Belt::reverse`).
     fn belts(&self, doc: &Document) -> Vec<Belt> {
+        let mut belts = self.laid_belts(doc);
+        // Where each linked thing is: a belt by its middle, else its origin.
+        let where_is = |object: u64| {
+            belts
+                .iter()
+                .find(|b| b.object == object)
+                .map(|b| b.point(0.0))
+                .or_else(|| id_of(doc, object).map(|id| doc.world_transform(id).translation))
+        };
+        let turn: Vec<bool> = belts
+            .iter()
+            .map(|b| {
+                let (start, end) = (b.point(-b.length / 2.0), b.point(b.length / 2.0));
+                // How much nearer its start each is than its end.
+                let lean = |at: DVec3| at.distance(end) - at.distance(start);
+                let to: f64 = self
+                    .flow_next
+                    .get(&b.object)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| where_is(*n))
+                    .map(lean)
+                    .sum();
+                let from: f64 = self
+                    .flow_next
+                    .iter()
+                    .filter(|(_, next)| next.contains(&b.object))
+                    .filter_map(|(o, _)| where_is(*o))
+                    .map(lean)
+                    .sum();
+                to - from > 1e-6
+            })
+            .collect();
+        for (b, turn) in belts.iter_mut().zip(turn) {
+            if turn {
+                b.reverse();
+            }
+        }
+        belts
+    }
+
+    /// Every conveyor's belt as laid, running along its own X (a corner
+    /// conveyor's, the way it turns).
+    fn laid_belts(&self, doc: &Document) -> Vec<Belt> {
         self.components
             .iter()
             .filter(|c| c.kind == Kind::Conveyor)

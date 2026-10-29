@@ -825,8 +825,9 @@ thumbnails: each drawn from the piece at its usual size
 - 성형기: 사출 성형기 (a 150 t class machine: clamp and mould behind a
   guard, injection unit with its hopper; length, width, height).
 - 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대.
-- 물류: 벨트 컨베이어 (length, belt width, height; yellow chevrons on its
-  belt point the way it runs, as on a corner one, round the bend), AMR (a mobile base
+- 물류: 벨트 컨베이어 (length, belt width, height; it runs the way its
+  links do — linked on to something behind it, turned about —, as a corner
+  one does, round the bend), AMR (a mobile base
   with a top plate to carry a load; length, width, height), AMR 정지 위치
   (a frame its size on the floor, an arrow the way it faces).
 - 안전: 안전 펜스, 보호 가드레일 (yellow posts and two rails).

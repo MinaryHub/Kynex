@@ -693,46 +693,6 @@ fn the_glass_robot_folds_to_turn_and_carries_its_sheet_hidden() {
     assert!(sheet.transform.scale.max_element() < 1e-3);
 }
 
-/// A conveyor shows the way it runs: chevrons on its belt, pointing to its
-/// out end — round the bend on a corner one.
-#[test]
-fn a_conveyor_s_chevrons_point_the_way_its_belt_runs() {
-    // A straight belt runs along +X; a left corner of 90° ends running +Y.
-    for (template, way) in [("conveyor", DVec3::X), ("corner_conveyor", DVec3::Y)] {
-        let mut library = Library::default();
-        ask(
-            &mut library,
-            json!({"op": "place", "template": template, "params": {"angle": 90.0}}),
-        );
-        let (doc, _) = shown(&mut library);
-        // Each arm along its own X, back from its chevron's tip.
-        let arms: Vec<(String, DVec3)> = doc
-            .objects()
-            .filter(|(_, o)| o.name.starts_with("arrow_"))
-            .map(|(id, o)| {
-                (
-                    o.name.clone(),
-                    doc.world_transform(id).matrix3.x_axis.normalize(),
-                )
-            })
-            .collect();
-        assert!(
-            arms.len() >= 2 && arms.len() % 2 == 0,
-            "{template}: {}",
-            arms.len()
-        );
-        // The last chevron, at the out end: its two arms together point
-        // back, against the way the belt runs there.
-        let last = arms.len() / 2 - 1;
-        let back: DVec3 = arms
-            .iter()
-            .filter(|(n, _)| n.starts_with(&format!("arrow_{last}_")))
-            .map(|(_, a)| *a)
-            .sum();
-        assert!(back.normalize().dot(way) < -0.9, "{template}: {back}");
-    }
-}
-
 /// A vertical machining centre: a CNC machine, its vise where its part sits.
 #[test]
 fn a_machining_centre_holds_its_part_in_its_vise() {

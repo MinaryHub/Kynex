@@ -55,6 +55,11 @@ pub const DEMOS: &[Demo] = &[
         about: "FOUP와 천장 반송(OHT), 6개 층 전공정, EDS와 후공정 패키징",
         file: include_str!("../demos/semiconductor_fab.json"),
     },
+    Demo {
+        name: "블럭 조립 공장",
+        about: "슬라이드 랙의 노랑·빨강·파랑 블럭, 로봇 픽업, 로봇 팔 AMR, 색상별 목업 장비, 조립·비전 검사, 완제품 랙",
+        file: include_str!("../demos/block_assembly.json"),
+    },
 ];
 
 /// The samples, one for each thing KYNEX does, small enough to learn
@@ -178,6 +183,8 @@ pub fn copy(demo: &Demo, dir: &Path) -> Result<PathBuf, String> {
 /// The demos' makers (see `demos/`), and what they are built with.
 #[cfg(test)]
 mod beverage;
+#[cfg(test)]
+mod blocks;
 #[cfg(test)]
 mod build;
 #[cfg(test)]

@@ -292,12 +292,32 @@
   </section>
 
   <aside class="panel right" id="robot-panel">
-    <div class="panel-head">
-      <h2>로봇</h2>
-      <span class="count" id="robot-count">0</span>
+    <div class="panel-head tabs" role="tablist">
+      <button class="tab on" data-tab="robots" role="tab">로봇 <span class="count" id="robot-count">0</span></button>
+      <button class="tab" data-tab="chat" role="tab" title="Claude·GPT·Gemini에게 말로 시뮬레이션을 시킵니다">AI 채팅</button>
     </div>
-    <div class="robots" id="robots">
-      <p class="muted pad">장면에 로봇이 없습니다. 라이브러리에서 로봇을 놓으면 관절과 프로그램이 여기에 나타납니다.</p>
+    <div class="tab-page" data-page="robots">
+      <div class="robots" id="robots">
+        <p class="muted pad">장면에 로봇이 없습니다. 라이브러리에서 로봇을 놓으면 관절과 프로그램이 여기에 나타납니다.</p>
+      </div>
+    </div>
+    <div class="tab-page chat" data-page="chat" id="chat" hidden>
+      <div class="chat-bar">
+        <span class="chat-who"></span>
+        <button class="text-btn quiet" data-chat="clear" title="대화를 지우고 새로 시작합니다">새 대화</button>
+      </div>
+      <details class="chat-settings">
+        <summary>모델과 API 키</summary>
+        <label>모델 회사<select data-chat="provider"><option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option><option value="gemini">Gemini (Google)</option></select></label>
+        <label>모델<input data-chat="model" type="text" spellcheck="false" autocomplete="off"></label>
+        <label>API 키<input data-chat="key" type="password" spellcheck="false" autocomplete="off" placeholder="키를 붙여 넣으세요"></label>
+        <p class="muted">키는 이 브라우저에만 저장되고, 대화는 이 페이지에서 바로 그 회사로 보냅니다. <a data-chat="keys" target="_blank" rel="noopener"></a></p>
+      </details>
+      <div class="chat-log" aria-live="polite"></div>
+      <div class="chat-compose">
+        <textarea class="chat-input" rows="3" placeholder="예: 공정 흐름을 시작하고 병목을 알려줘 (Enter: 보내기, Shift+Enter: 줄바꿈)"></textarea>
+        <button class="text-btn on" data-chat="send">보내기</button>
+      </div>
     </div>
   </aside>
 </main>

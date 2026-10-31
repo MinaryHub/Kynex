@@ -535,10 +535,28 @@ project's name in the same dialog. The panels over the toolbar —
 projects, the site's drawing, the PLC — close when something outside
 them is clicked, or on Esc.
 
+**AI 채팅.** The right panel's second tab is a chat with Claude, GPT or Gemini that works the
+simulation. Pick the provider, the model (Claude Opus 5.5, GPT-5 and
+Gemini 2.5 Pro to start with; any other can be typed in) and paste an API
+key. The key is kept in that browser only (localStorage), and the page
+calls the provider itself (`web/chat.js`). The model works through tools
+that are the page's own requests to KYNEX:
+- read the scene, the flow and its figures (`get_state`) and the library's templates;
+- place, move, resize and remove equipment;
+- set a flow component's role and props, link components;
+- start, stop or reset the run, set its speed, and wait while it runs;
+- send any other request (`kynex_request`).
+
+What it changes can be undone as any change can. Each tool call shows in
+the conversation, a failed one in red, and 중지 stops it between calls.
+With Claude, a request its safeguards decline goes to a fallback model
+(`fallbacks: "default"`).
+
 **예제 (demos).** Under the projects, the panel lists the demo projects
 that come with KYNEX, built into it (`apps/kynex/demos`, `demos.rs`), so
 every build and installer has them: 성능 데모 공장, 공장 내부 전시, 대규모
-물류 창고, 자동차 공장, LCD 공장, 음료 공장, 정유 공장, 반도체 공장 — each with its
+물류 창고, 자동차 공장, LCD 공장, 음료 공장, 정유 공장, 반도체 공장, 블럭 조립
+공장 — each with its
 process flow and its scenarios to compare. One clicked is copied into the projects
 folder under its name and opened; what is changed is saved to the copy.
 Opened again, it is another copy (`자동차 공장 2`, …), never over a project
@@ -581,6 +599,23 @@ distillation columns, fired heaters, reactors, horizontal vessels, the
 FCC, air coolers, LPG spheres, the flare stack and the control room. It
 is built by `apps/kynex/src/demos/refinery.rs`; both plants are checked
 for equipment running into each other.
+
+**블럭 조립 공장** puts blocks of three colours together. Yellow, red and
+blue blocks come into the material store and wait on a slide rack of one
+shelf. A robot on a pedestal in front of the rack picks them onto the
+outfeed conveyor behind it.
+Four AMRs, each with a jointed arm on it, take each block from the
+conveyor's end to a mock-up machine of its colour: two of each colour,
+one either side of the aisle, shared evenly. A machine keeps a block
+about a minute, as if it worked on it, then an AMR takes it to the
+assembly. There a yellow block on the left jig and a red or blue one on
+the right are put together side by side, and drawn so. The vision
+inspector checks the pair's colours, taking out one in fifty, and an AMR
+puts the pair on the shelves of the finished-goods slide racks. The AMRs
+drive one way round the aisle and park on spurs off its two ends. The
+blocks are drawn from a bag of two yellow, a red and a blue, shuffled, so
+that neither side of the assembly gets far ahead and jams its jig. It is
+built by `apps/kynex/src/demos/blocks.rs` and checked for clashes.
 
 **기능별 샘플.** Below the demos, eleven small samples, each showing one
 thing KYNEX does: a line on a site plan, a
@@ -824,11 +859,17 @@ thumbnails: each drawn from the piece at its usual size
 - 공작기계: CNC 선반, CNC 머시닝센터 (수직형).
 - 성형기: 사출 성형기 (a 150 t class machine: clamp and mould behind a
   guard, injection unit with its hopper; length, width, height).
-- 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대.
+- 주변 장치: 투입 / 배출 팔레트 테이블, 로봇 받침대, 목업 장비 (a
+  cabinet standing for whatever machine a block goes into: a band of its
+  colour, a window, the hatch a block goes in at, a panel and a signal
+  tower), 비전 검사기 (a table under an arch with a camera, its ring light
+  and a screen).
 - 물류: 벨트 컨베이어 (length, belt width, height; it runs the way its
   links do — linked on to something behind it, turned about —, as a corner
   one does, round the bend), AMR (a mobile base
-  with a top plate to carry a load; length, width, height), AMR 정지 위치
+  with a top plate to carry a load; length, width, height; 로봇 팔:
+  다관절 로봇, a jointed arm on its front, reaching back over its load),
+  AMR 정지 위치
   (a frame its size on the floor, an arrow the way it faces).
 - 안전: 안전 펜스, 보호 가드레일 (yellow posts and two rails).
 - 공장 내부 (`library/interior.rs`): 공장 벽체 (sandwich panels on a
@@ -1229,7 +1270,16 @@ not change the session's scene.
     change it. Opening or reloading the page stops the run and sets 1×.
   - A buffer's **꺼내는 순서**: first in first out, or last in first out.
     Library **랙 창고**: a pallet rack whose parts sit on its shelves,
-    ten to a shelf, the lowest first.
+    ten to a shelf, the lowest first. Its **랙 형태: 슬라이드 랙** has roller
+    lanes front to back, guides between them and a stop along the front,
+    its lowest shelf at a waist's height (0.6 m) and the others 0.7 m apart.
+    A rack's **폭** sets how wide it is (1.2 m to start with). A slide rack's
+    lanes stay in its middle, so a wider one puts its posts out of the way
+    of a robot's arm swinging past.
+  - A source drawing its products **from a bag** (`policy` 1): the mix in
+    a bag, shuffled, filled again once empty. The products still come at
+    random, but never more than a bag off the mix. Use it where two
+    products are put together one of each.
 - **Orders, kanban, dispatch rules and trends** in a process flow:
   - A source's **주문표 → CSV 불러오기**: a line per order, `release
     (minutes), product (A–F or 1–6), quantity, due (minutes, may be
@@ -1252,6 +1302,10 @@ not change the session's scene.
     menu sets it 양방향, either way one way, or cuts it; click it and
     Delete cuts it too. Each lane is set on its own, the others as they
     were (`{"op": "amr_lane", "from", "to", "way": "both"|"to"|"from"|"none"}`).
+    A stop has lanes with four other stops at most, either way, as a
+    crossroads does. A fifth is refused and the lanes stay as they were.
+    A project saved with more is read as it is, and its stop only gets no
+    more.
   - In an AMR stop's inspector, **AMR 경로** links it to other stops. Links
     go both ways and are drawn in orange. Through the request
     (`{"op": "amr_lanes", …, "oneway": true}`) a link goes one way only,
@@ -1330,7 +1384,10 @@ not change the session's scene.
   the far side standing.
 - **What the parts look like**: a source's or a station's **부품 모양**
   (부품, 차체 (BIW), 도장 차체, 완성차, 유리 기판, LCD 패널, LCD 모듈,
-  유리 카세트, FOUP, 웨이퍼, 반도체 패키지 — a tray of chips) is
+  유리 카세트, FOUP, 웨이퍼, 반도체 패키지 — a tray of chips —, 블럭 — a
+  6 cm cube in its product's colour, A yellow, B blue, E red —, 조립 블럭 —
+  the two blocks an assembly put together, side by side, each in its own
+  colour) is
   what its parts look like once
   it has made them, so a car can be seen going down its line as it is
   built: a car body drawn at its stage — the painted ones in five colours
@@ -1338,6 +1395,8 @@ not change the session's scene.
   behind, in lanes in a store, facing the way it goes. A flow piece's
   **형태: 바닥 표시** is a mark on the floor, a body's size, in place of a
   table: placed in a jig, a booth or on a line, the body rides through it.
+  **형태: 지그** is a small steel fixture on a post, 0.3 m square, its top
+  at a bench's height.
 - **Operators** (library 공정 흐름 → 작업자, or the role 작업자 on any
   object). The library's is drawn as a person at work, 1.75 m: safety
   shoes, work trousers, an orange safety vest with reflective bands,

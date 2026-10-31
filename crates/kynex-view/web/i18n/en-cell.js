@@ -180,7 +180,7 @@ export default {
   '작업자 필요 스테이션이 생기면 맡을 곳을 고를 수 있습니다': 'Once a station needs an operator, you can pick where this one works',
   'AMR 길': 'AMR lanes',
   '{name} 선택': 'Select {name}',
-  '길 잇기: 연결 모드(Shift+C)에서 번호표를 다른 번호표로 끌기 · 방향·끊기: 길을 오른쪽 클릭': 'Add a lane: in Link mode (Shift+C) drag a stop number onto another · Direction/remove: right-click the lane',
+  '길 잇기: 연결 모드(Shift+C)에서 번호표를 다른 번호표로 끌기 (한 곳에서 4곳까지) · 방향·끊기: 길을 오른쪽 클릭': 'Add a lane: in Link mode (Shift+C) drag a stop number onto another (up to 4 from one stop) · Direction/remove: right-click the lane',
   '이전 공정': 'Previous',
   '이후 공정': 'Next',
   '배출 {n}개': 'Out {n}',

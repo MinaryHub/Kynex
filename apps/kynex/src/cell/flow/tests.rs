@@ -1323,3 +1323,30 @@ fn belts_run_the_way_they_are_linked() {
     let drained = cell.take_drained();
     assert!(drained >= 15, "{drained}");
 }
+
+/// A source drawing its mix from a bag: at random, yet never more than a
+/// bag's worth off the mix — two A to a B and an E, every four parts.
+#[test]
+fn a_source_s_bag_keeps_its_mix_close() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 1.0, "capacity": 100, "policy": 1})),
+        ("flow_sink", 2.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": u[0].to_string(), "mix": [2.0, 1.0, 0.0, 0.0, 1.0]}),
+    );
+    let mut drawn = Vec::new();
+    for _ in 0..40 {
+        drawn.push(cell.product_of(u[0], true));
+    }
+    for bag in drawn.chunks(4) {
+        let mut b = bag.to_vec();
+        b.sort();
+        assert_eq!(b, vec![0, 0, 1, 4], "{drawn:?}");
+    }
+    // Not the same order every time.
+    assert!(drawn.chunks(4).any(|b| b != &drawn[..4]), "{drawn:?}");
+}

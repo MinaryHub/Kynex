@@ -104,6 +104,11 @@ pub struct Stats {
 /// Room between parts set out on a component, metres.
 const PITCH: f64 = 2.0 * RAW.0 + 0.01;
 
+/// How far apart blocks ([`BLOCK`], [`BLOCKS`]) are set out on a table or
+/// a shelf, metres: two put together side by side fit, as do five lanes of
+/// them across a slide rack's shelf.
+pub const BLOCK_PITCH: f64 = 0.18;
+
 /// The seed a flow's random numbers start from unless one is given.
 pub const SEED: u64 = 1;
 
@@ -356,7 +361,15 @@ impl Cell {
                 self.parts.retain(|p| p.flow.is_none());
                 self.removed.extend(gone);
                 self.stations.clear();
+                self.bags.clear();
                 self.jobs.clear();
+                // The AMRs, people and turntables back where they were
+                // placed, charged, holding no stop.
+                self.sent_home.extend(std::mem::take(&mut self.rovers).into_keys());
+                self.holds.clear();
+                self.blocked.clear();
+                self.energy.clear();
+                self.charging.clear();
                 self.station_doors.clear();
                 self.station_door_wanted.clear();
                 self.rng = SEED;
@@ -397,12 +410,32 @@ impl Cell {
     }
 
     /// A product for a part source `object` puts in, drawn by its mix
-    /// (A alone if it has none).
-    fn product_of(&mut self, object: u64) -> u8 {
+    /// (A alone if it has none) — from its bag, if it draws from one
+    /// (`bag`, see `Props::policy`).
+    fn product_of(&mut self, object: u64, bag: bool) -> u8 {
         let mix = self.mix.get(&object).cloned().unwrap_or_default();
         let total: f64 = mix.iter().sum();
         if total <= 0.0 {
             return 0;
+        }
+        if bag {
+            if self.bags.get(&object).is_none_or(|b| b.is_empty()) {
+                // As many of each as its share of the least, shuffled.
+                let least = mix.iter().copied().filter(|w| *w > 0.0).fold(f64::INFINITY, f64::min);
+                let mut fill: Vec<u8> = mix
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(k, w)| std::iter::repeat_n(k as u8, (w / least).round().min(100.0) as usize))
+                    .collect();
+                for i in (1..fill.len()).rev() {
+                    let j = ((self.uniform() * (i + 1) as f64) as usize).min(i);
+                    fill.swap(i, j);
+                }
+                self.bags.insert(object, fill);
+            }
+            if let Some(p) = self.bags.get_mut(&object).and_then(|b| b.pop()) {
+                return p;
+            }
         }
         let mut x = self.uniform() * total;
         for (k, w) in mix.iter().enumerate() {
@@ -1004,7 +1037,7 @@ impl Cell {
                 s.fed -= wait;
                 s.wait = next;
                 s.made += 1;
-                let product = self.product_of(c.object);
+                let product = self.product_of(c.object, c.props.policy == 1);
                 self.add_part(top + DVec3::Z * RAW.1 / 2.0, false);
                 let uid = self.parts.last().expect("just added").uid;
                 let p = self.parts.last_mut().unwrap();
@@ -1147,11 +1180,19 @@ impl Cell {
                     // Scrap, as often as the station makes it, goes.
                     let scrapped = c.props.scrap > 0.0 && self.uniform() < c.props.scrap;
                     let mut made = Vec::new();
+                    // What the first is put together with, to show beside it.
+                    let pair = parts
+                        .get(1)
+                        .and_then(|u| self.part_index(*u))
+                        .map(|i| self.parts[i].product);
                     for (k, uid) in parts.iter().enumerate() {
                         let Some(i) = self.part_index(*uid) else {
                             continue;
                         };
                         if k == 0 && !scrapped {
+                            if pair.is_some() {
+                                self.parts[i].pair = pair;
+                            }
                             self.parts[i].finished = true;
                             // As this station makes it look, if it says.
                             if c.props.look > 0 {
@@ -1278,7 +1319,9 @@ impl Cell {
                 continue;
             }
             let gap = 2.0 * RAW.0 + 0.005;
-            let start = -b.length / 2.0 + RAW.0;
+            // Clear where a part is put on: at its start, or a little in
+            // from it, by a robot (`fleet::belt_drop`).
+            let start = (-b.length / 2.0 + RAW.0).max(super::fleet::belt_drop(&b));
             let on: Vec<f64> = self
                 .parts
                 .iter()
@@ -1638,6 +1681,15 @@ impl Cell {
                 .iter()
                 .filter_map(|u| self.slots.get(u).filter(|s| s.0 == *object).map(|s| s.1))
                 .collect();
+            // Blocks further apart than parts, two put together fitting.
+            let pitch = if order.iter().any(|u| {
+                self.part_index(*u)
+                    .is_some_and(|i| matches!(self.parts[i].look, BLOCK | BLOCKS))
+            }) {
+                BLOCK_PITCH
+            } else {
+                PITCH
+            };
             for uid in &order {
                 let k = match self.slots.get(uid) {
                     Some(&(o, k)) if o == *object => k,
@@ -1657,7 +1709,7 @@ impl Cell {
                 };
                 let (col, row) = ((i % 5) as f64 - 2.0, (i / 5) as f64);
                 let base = level.unwrap_or(top);
-                spots.insert(*uid, base + along * col * PITCH + across * row * PITCH);
+                spots.insert(*uid, base + along * col * pitch + across * row * pitch);
             }
         }
         // A part no longer set out on a table gives up its place.

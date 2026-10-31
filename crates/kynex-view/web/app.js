@@ -17,6 +17,7 @@ import { TimelinePanel } from '/timeline.js';
 import { openReport } from '/report.js';
 import { showMenu } from '/menu.js';
 import { mountHelp } from '/help.js';
+import { ChatPanel } from '/chat.js';
 import { tFor, tr, getLang, setLang, translatePage } from './i18n.js';
 
 const t = tFor('page');
@@ -1180,6 +1181,14 @@ const timelinePanel = new TimelinePanel({
   select: (uid) => select(uid),
 });
 
+// The AI chat on the right: what it reads, the page's own state.
+const chatPanel = new ChatPanel({
+  library: () => libraryPanel.library,
+  cell: () => cellPanel.cell,
+  project: () => projectPanel.state?.name ?? null,
+  toast,
+});
+
 const libraryPanel = new LibraryPanel({
   records,
   scene,
@@ -1199,13 +1208,18 @@ const libraryPanel = new LibraryPanel({
   escapeHtml,
 });
 
-// The left panel's two pages: the scene's tree, and the library.
-document.querySelector('.panel-head.tabs').addEventListener('click', (e) => {
-  const tab = e.target.closest('[data-tab]');
-  if (!tab) return;
-  for (const t of document.querySelectorAll('[data-tab]')) t.classList.toggle('on', t === tab);
-  for (const p of document.querySelectorAll('[data-page]')) p.hidden = p.dataset.page !== tab.dataset.tab;
-});
+// Each side panel's pages: on the left the scene's tree and the library,
+// on the right the robots and the AI chat.
+for (const head of document.querySelectorAll('.panel-head.tabs')) {
+  head.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-tab]');
+    if (!tab) return;
+    const panel = head.closest('.panel');
+    for (const t of panel.querySelectorAll('[data-tab]')) t.classList.toggle('on', t === tab);
+    for (const p of panel.querySelectorAll('[data-page]')) p.hidden = p.dataset.page !== tab.dataset.tab;
+    if (tab.dataset.tab === 'chat') chatPanel.input.focus();
+  });
+}
 
 document.getElementById('robots').addEventListener('click', (e) => {
   const row = e.target.closest('.joint');
@@ -2364,20 +2378,13 @@ function playPause() {
   if (going) {
     if (flow?.on) timelinePanel.flowOp('stop');
     robotPanel.playAll(false);
-    toast(t('정지했습니다 (스페이스: 다시 실행)'));
     return;
   }
   const flows = (cellPanel.cell.components ?? []).some((c) => c.flow);
   if (flows) timelinePanel.flowOp('start');
   const robots = robotPanel.playAll(true);
-  if (!flows && !robots) return toast(t('실행할 공정 흐름도, 프로그램이 있는 로봇도 없습니다'));
-  toast(
-    t('실행합니다') +
-      (flows ? ' · ' + t('공정 흐름') : '') +
-      (robots ? ' · ' + t('로봇 {n}대', { n: robots }) : '') +
-      ' ' +
-      t('(스페이스: 정지, +/−: 배속)'),
-  );
+  // Going or stopped, the run badge says so: only nothing to run is told.
+  if (!flows && !robots) toast(t('실행할 공정 흐름도, 프로그램이 있는 로봇도 없습니다'));
 }
 
 // Back to the start: the run stopped, every product taken away, the robots

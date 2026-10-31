@@ -51,12 +51,19 @@ pub const LOOKS: &[&str] = &[
     "항공유 로트",
     "경유 로트",
     "중질유 로트",
+    "블럭",
+    "조립 블럭",
 ];
+
+/// The looks of a block (a 6 cm cube, coloured as its product) and of two
+/// blocks put together side by side (see [`Part::pair`]).
+pub const BLOCK: u32 = 23;
+pub const BLOCKS: u32 = 24;
 
 /// How far apart parts of each look stand in line at a station, and the
 /// lanes they stand in in a store, metres. A part of the first look is set
 /// out on its station's table instead.
-const LOOK_PITCH: [(f64, f64); 23] = [
+const LOOK_PITCH: [(f64, f64); 25] = [
     (0.0, 0.0),
     (5.2, 2.6),
     (5.2, 2.6),
@@ -80,13 +87,17 @@ const LOOK_PITCH: [(f64, f64); 23] = [
     (6.6, 3.0),
     (6.6, 3.0),
     (6.6, 3.0),
+    // Blocks: set out in rows on a table or a shelf, as parts are
+    // (`flow::BLOCK_PITCH`).
+    (0.0, 0.0),
+    (0.0, 0.0),
 ];
 
 /// How far apart parts of each look are stacked one over another in a store,
 /// metres, and how many to a stack — sheets and panels twenty high, cassettes
 /// five on a stocker's shelves, FOUPs four, wafers twenty-five, trays ten;
 /// none for a car body, which stands in lanes.
-const LOOK_STACK: [(f64, usize); 23] = [
+const LOOK_STACK: [(f64, usize); 25] = [
     (0.0, 1),
     (0.0, 1),
     (0.0, 1),
@@ -110,6 +121,8 @@ const LOOK_STACK: [(f64, usize); 23] = [
     (2.5, 3),
     (2.5, 3),
     (2.5, 3),
+    (0.0, 1),
+    (0.0, 1),
 ];
 
 /// How high a sheet is lifted to go between a tool and a stocker, metres:
@@ -144,6 +157,12 @@ fn look_key(p: &Part) -> usize {
         look @ 11..=16 => return HOIST_LOOK + 1 + (look as usize - 11),
         // A refinery's: a lot of oil in its tank container.
         look @ 17..=22 => return HOIST_LOOK + 7 + (look as usize - 17),
+        // A block of its product's colour; two put together, each its own.
+        BLOCK => return BLOCK_LOOK + product_index(p.product),
+        BLOCKS => {
+            let pair = product_index(p.pair.unwrap_or(p.product));
+            return BLOCK_LOOK + PRODUCTS + product_index(p.product) * PRODUCTS + pair;
+        }
         _ => {}
     }
     match p.look as usize {
@@ -175,6 +194,11 @@ fn look_meshes() -> &'static Vec<crate::library::LookMeshes> {
             ))
             .chain((0..6).map(crate::library::beverage_look))
             .chain((0..6).map(crate::library::lot_look))
+            .chain((0..PRODUCTS).map(|a| crate::library::block_look(a, None)))
+            .chain(
+                (0..PRODUCTS * PRODUCTS)
+                    .map(|k| crate::library::block_look(k / PRODUCTS, Some(k % PRODUCTS))),
+            )
             .collect()
     })
 }
@@ -186,6 +210,19 @@ pub(crate) const NO_GLASS: f64 = 1e-4;
 /// The look of a cassette on a stocker's crane: the cassette's pieces,
 /// then the crane's (see [`crane_look`]).
 const CRANE_LOOK: usize = 3 * CAR_COLOURS + 4;
+
+/// The first of the blocks' looks: a block of each product, then two put
+/// together, each pair of products (see [`look_key`]), after a refinery's
+/// six lots.
+const BLOCK_LOOK: usize = HOIST_LOOK + 13;
+
+/// How many products a flow carries ([`flow::PRODUCTS`]).
+const PRODUCTS: usize = flow::PRODUCTS.len();
+
+/// Product `p` as an index into the blocks' looks.
+fn product_index(p: u8) -> usize {
+    (p as usize).min(PRODUCTS - 1)
+}
 
 /// The look of a FOUP on an overhead hoist: the FOUP's pieces, then the
 /// hoist vehicle's (see [`hoist_look`]), after a FOUP, a wafer and a tray.
@@ -516,6 +553,10 @@ pub struct Props {
     /// of the car plant — to see a car go down its line as it is built.
     pub look: u32,
     /// A buffer's order: first in first out (0), or last in first out (1).
+    /// A source's draw of its products: each at random by its mix (0), or
+    /// from a bag of them in its mix, shuffled, filled again once empty
+    /// (1) — at random still, but never far off the mix, as where two
+    /// products are put together one of each.
     pub policy: u32,
     /// A source's limit on its parts in the flow at once — a kanban: none
     /// more until one leaves (0: no limit); and how any flow component
@@ -1056,6 +1097,9 @@ pub struct Part {
     /// On its way by a stocker's crane: where it goes onto the rail, where
     /// off it, and the rail's way (see `Props::rail`).
     pub rail: Option<[DVec3; 3]>,
+    /// Put together with another part at an assembly: that part's product,
+    /// shown beside its own (a block's look, [`BLOCKS`]).
+    pub pair: Option<u8>,
 }
 
 impl Part {
@@ -1279,6 +1323,9 @@ pub struct Cell {
     /// Each AMR that has been sent anywhere: where it is, and the legs of
     /// its way still to go.
     rovers: BTreeMap<u64, Rover>,
+    /// The AMRs (and people, turntables) the run was taken back from, put
+    /// where they were placed: the viewers told once.
+    sent_home: Vec<u64>,
     /// Each PLC command as last read, by address: a command is given as
     /// its address comes on.
     plc_last: BTreeMap<(u64, String), bool>,
@@ -1315,6 +1362,9 @@ pub struct Cell {
     /// each (0: its own); the products each link of the flow takes (none:
     /// all); and the calendar and warm-up (see `flow`).
     mix: BTreeMap<u64, Vec<f64>>,
+    /// Each source that draws its mix from a bag (`Props::policy`): the
+    /// products left in it, the next last.
+    bags: BTreeMap<u64, Vec<u8>>,
     /// Each source's orders, and how far each has got (see `flow`).
     orders: BTreeMap<u64, Vec<flow::Order>>,
     cycles: BTreeMap<u64, Vec<f64>>,
@@ -2733,7 +2783,12 @@ impl Cell {
         self.parts
             .iter()
             .filter(|p| p.held.is_some())
-            .map(|p| p.uid)
+            // A part drawn as a look, its pieces with it: they are what
+            // meshes it has.
+            .flat_map(|p| {
+                let pieces = (p.look > 0).then(|| (0..LOOK_PIECES).map(move |k| look_piece(p.uid, k)));
+                std::iter::once(p.uid).chain(pieces.into_iter().flatten())
+            })
             .collect()
     }
 
@@ -2857,6 +2912,7 @@ impl Cell {
             came: 0,
             look: 0,
             rail: None,
+            pair: None,
         });
         self.changed = true;
     }
@@ -4949,6 +5005,17 @@ impl Cell {
             || self.machines.values().any(|m| m.door > 0.0)
     }
 
+    /// The objects of each AMR sent home since this was last asked, and
+    /// all below them: where they were placed in `doc` again.
+    fn take_sent_home(&mut self, doc: &Document) -> Vec<u64> {
+        let home = std::mem::take(&mut self.sent_home);
+        let ids: Vec<ObjectId> = home.iter().filter_map(|u| id_of(doc, *u)).collect();
+        doc.objects()
+            .filter(|(o, _)| ids.iter().any(|id| o == id || is_below(doc, *o, *id)))
+            .filter_map(|(o, _)| doc.object_uid(o).map(|u| u.raw()))
+            .collect()
+    }
+
     /// Puts each AMR that has been sent anywhere where it now is, in
     /// `doc`, and returns its objects, all of which moved.
     fn place_rovers(&self, doc: &mut Document) -> Vec<u64> {
@@ -5218,6 +5285,11 @@ impl Cell {
     /// the scene has them.
     pub fn untouched(&mut self, doc: &Document) -> Changes {
         let mut changes = self.take_removed();
+        for uid in self.take_sent_home(doc) {
+            changes
+                .changed
+                .insert((DatablockKind::Object, Uid::from_raw(uid)));
+        }
         for uid in self.doors(doc).into_iter().map(|(uid, ..)| uid) {
             changes
                 .changed
@@ -5357,8 +5429,9 @@ impl Cell {
     pub fn apply(&mut self, doc: &mut Document) -> Changes {
         let mut changes = self.take_removed();
         for uid in self
-            .open_doors(doc)
+            .take_sent_home(doc)
             .into_iter()
+            .chain(self.open_doors(doc))
             .chain(self.place_rovers(doc))
             .chain(self.move_arms(doc))
         {
@@ -5778,7 +5851,7 @@ pub fn is_op(op: &str) -> bool {
 }
 
 mod fleet;
-mod flow;
+pub(crate) mod flow;
 #[cfg(test)]
 pub use flow::SEED;
 

@@ -490,7 +490,7 @@ export class CellPanel {
           linked.length
             ? linked.map((s) => `<button class="text-btn" data-select="${escapeHtml(s.object)}" title="${t('{name} 선택', { name: escapeHtml(tr(s.name)) })}">${way(s)}</button>`).join('')
             : `<span class="muted">${t('없음')}</span>`
-        }</div>` + `<span class="muted insp-hint">${t('길 잇기: 연결 모드(Shift+C)에서 번호표를 다른 번호표로 끌기 · 방향·끊기: 길을 오른쪽 클릭')}</span>`;
+        }</div>` + `<span class="muted insp-hint">${t('길 잇기: 연결 모드(Shift+C)에서 번호표를 다른 번호표로 끌기 (한 곳에서 4곳까지) · 방향·끊기: 길을 오른쪽 클릭')}</span>`;
     } else if (c && c.flow) {
       const f = c.flow;
       // Where its parts come from and go: the links drawn, each with what

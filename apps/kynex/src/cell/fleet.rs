@@ -33,6 +33,20 @@ const REACH: f64 = 0.6;
 /// How far from a flow component the stop it is served at may be, metres.
 const NEAR: f64 = 4.0;
 
+/// How far in from its start a robot puts a part onto a belt, metres: its
+/// gripper, wider than the part, clear of the drum at the belt's end.
+pub const BELT_IN: f64 = 0.15;
+
+/// Where on belt `b` a robot puts a part: [`BELT_IN`] from its start, or
+/// its middle if it is shorter.
+pub(super) fn belt_drop(b: &Belt) -> f64 {
+    -b.length / 2.0 + BELT_IN.min(b.length / 2.0)
+}
+
+/// How many other stops a stop may have lanes with, either way: a
+/// crossroads, four ways out of it.
+pub const MOST_LANES: usize = 4;
+
 /// The share of a full charge under which an AMR takes no more jobs and,
 /// once free, goes to charge.
 const LOW: f64 = 0.2;
@@ -97,26 +111,56 @@ impl Cell {
         if next.iter().any(|n| !is_stop(*n) || *n == object) {
             return Err("다른 AMR 정지 위치와만 이을 수 있습니다".into());
         }
-        if oneway {
-            // From it only: the ways into it are the other stops' own.
-            self.lanes.insert(object, next);
-            self.lanes.retain(|_, v| !v.is_empty());
-            self.roles_changed = true;
-            self.changed = true;
-            return Ok(());
-        }
-        // Both ways: what was linked to it and is no more is unlinked too.
-        for lanes in self.lanes.values_mut() {
-            lanes.retain(|n| *n != object);
-        }
-        for n in &next {
-            let back = self.lanes.entry(*n).or_default();
-            if !back.contains(&object) {
-                back.push(object);
+        let mut lanes = self.lanes.clone();
+        if !oneway {
+            // Both ways: what was linked to it and is no more is unlinked too.
+            for to in lanes.values_mut() {
+                to.retain(|n| *n != object);
+            }
+            for n in &next {
+                let back = lanes.entry(*n).or_default();
+                if !back.contains(&object) {
+                    back.push(object);
+                }
             }
         }
-        self.lanes.insert(object, next);
-        self.lanes.retain(|_, v| !v.is_empty());
+        // One way: from it only, the ways into it the other stops' own.
+        lanes.insert(object, next);
+        self.keep_lanes(lanes)
+    }
+
+    /// The lanes `lanes` kept, unless a stop would have them with more
+    /// than [`MOST_LANES`] others — more than it had: a project saved
+    /// with more is read as it is, only kept from more —; then they stay
+    /// as they were.
+    fn keep_lanes(&mut self, mut lanes: BTreeMap<u64, Vec<u64>>) -> Result<(), String> {
+        lanes.retain(|_, v| !v.is_empty());
+        let others = |lanes: &BTreeMap<u64, Vec<u64>>| {
+            let mut out: BTreeMap<u64, HashSet<u64>> = BTreeMap::new();
+            for (a, to) in lanes {
+                for b in to {
+                    out.entry(*a).or_default().insert(*b);
+                    out.entry(*b).or_default().insert(*a);
+                }
+            }
+            out
+        };
+        let (before, after) = (others(&self.lanes), others(&lanes));
+        let had = |stop: &u64| before.get(stop).map_or(0, HashSet::len);
+        if let Some((stop, _)) = after
+            .iter()
+            .find(|(stop, o)| o.len() > MOST_LANES && o.len() > had(stop))
+        {
+            let name = self
+                .components
+                .iter()
+                .find(|c| c.object == *stop)
+                .map_or(String::new(), |c| c.name.clone());
+            return Err(format!(
+                "AMR 정지 위치 하나에는 길을 {MOST_LANES}곳까지만 낼 수 있습니다 ({name})"
+            ));
+        }
+        self.lanes = lanes;
         self.roles_changed = true;
         self.changed = true;
         Ok(())
@@ -140,17 +184,15 @@ impl Cell {
             "none" => (false, false),
             _ => return Err("way: both, to, from, none".into()),
         };
+        let mut lanes = self.lanes.clone();
         for (x, y, on) in [(a, b, ab), (b, a, ba)] {
-            let next = self.lanes.entry(x).or_default();
+            let next = lanes.entry(x).or_default();
             next.retain(|n| *n != y);
             if on {
                 next.push(y);
             }
         }
-        self.lanes.retain(|_, v| !v.is_empty());
-        self.roles_changed = true;
-        self.changed = true;
-        Ok(())
+        self.keep_lanes(lanes)
     }
 
     /// Each stop's place on the floor, by stop.
@@ -860,13 +902,14 @@ impl Cell {
             .filter_map(|j| {
                 let p = self.parts.iter().find(|p| p.uid == j.part)?;
                 let to = self.components.iter().find(|c| c.object == j.to)?;
-                // Onto a belt at its start, where the flow puts its parts:
-                // not its middle, which may be out of the robot's reach.
+                // Onto a belt near its start, where the flow puts its
+                // parts: not its middle, which may be out of the robot's
+                // reach, nor its very end, the gripper on the drum.
                 // Onto an AMR, its top plate's middle.
                 let deck = j.handoff.and_then(|a| decks.iter().find(|d| d.object == a));
                 let top = match (deck, belts.iter().find(|b| b.object == j.to)) {
                     (Some(d), _) => d.pose.transform_point3((d.lo + d.hi) / 2.0 * DVec3::new(1.0, 1.0, 0.0) + DVec3::Z * d.hi.z),
-                    (None, Some(b)) => b.point(-b.length / 2.0 + super::RAW.0),
+                    (None, Some(b)) => b.point(belt_drop(b)),
                     (None, None) => Self::dock(doc, to)?.0,
                 };
                 Some((
@@ -1020,7 +1063,7 @@ impl Cell {
             None => Self::dock(doc, comp(from)?)?.0,
         };
         let put = match belts.iter().find(|b| b.object == to) {
-            Some(b) => b.point(-b.length / 2.0 + super::RAW.0),
+            Some(b) => b.point(belt_drop(b)),
             None => Self::dock(doc, comp(to)?)?.0,
         };
         let up = DVec3::Z * (super::RAW.1 / 2.0 + 0.002);

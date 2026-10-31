@@ -1165,3 +1165,66 @@ fn a_lane_is_set_one_way_both_ways_or_none_alone() {
     // The one way from c into a kept throughout.
     assert!(has(&cell, c, a) && !has(&cell, a, c));
 }
+
+/// A stop has lanes with four others at most, either way: the fifth is
+/// refused, by a lane alone or a stop's whole list, and the lanes stay as
+/// they were. A project saved with more is read as it is: its stop is only
+/// kept from more, and lanes elsewhere still change.
+#[test]
+fn a_stop_has_lanes_with_four_others_at_most() {
+    let (doc, mut cell, u) = floor(&[
+        ("amr_stop", 0.0, 0.0, Value::Null),
+        ("amr_stop", 4.0, 0.0, Value::Null),
+        ("amr_stop", 0.0, 4.0, Value::Null),
+        ("amr_stop", -4.0, 0.0, Value::Null),
+        ("amr_stop", 0.0, -4.0, Value::Null),
+        ("amr_stop", 4.0, 4.0, Value::Null),
+    ]);
+    let hub = u[0];
+    let lane = |cell: &mut Cell, x: u64, y: u64, way: &str| -> Value {
+        serde_json::from_str(&cell.handle(
+            &doc,
+            &json!({"op": "amr_lane", "from": x.to_string(), "to": y.to_string(), "way": way}).to_string(),
+        ))
+        .unwrap()
+    };
+    // Four ways out of the hub: two both ways, one out, one in.
+    for (k, way) in [(1, "both"), (2, "both"), (3, "to"), (4, "from")] {
+        assert_eq!(lane(&mut cell, hub, u[k], way)["ok"], true);
+    }
+    let before = cell.lanes.clone();
+    let fifth = lane(&mut cell, u[5], hub, "to");
+    assert_eq!(fifth["ok"], false, "{fifth}");
+    assert!(fifth["error"].as_str().unwrap().contains('4'), "{fifth}");
+    let list: Vec<String> = u[1..].iter().map(u64::to_string).collect();
+    let all = cell.handle(&doc, &json!({"op": "amr_lanes", "object": hub.to_string(), "next": list}).to_string());
+    assert!(all.contains("\"ok\":false"), "{all}");
+    assert_eq!(cell.lanes, before);
+    // A way already there turned both ways is no new other.
+    assert_eq!(lane(&mut cell, hub, u[3], "both")["ok"], true);
+    // Saved with five: read so; a lane elsewhere changes, the hub no more.
+    cell.lanes.entry(u[5]).or_default().push(hub);
+    assert_eq!(lane(&mut cell, u[1], u[5], "both")["ok"], true);
+    assert_eq!(lane(&mut cell, hub, u[5], "both")["ok"], true);
+}
+
+/// The run taken back to its start: an AMR that drove off is where it was
+/// placed again, holding no stop, and the viewers are told it moved, once.
+#[test]
+fn a_reset_sends_the_amrs_back_where_they_were_placed() {
+    let (doc, mut cell, [amr, _a, _b, _c, d]) = square();
+    cell.drive(&doc, amr, d).unwrap();
+    run(&mut cell, &doc, 0.0, 6.0);
+    assert!(at(&cell, amr).x > 3.5);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "reset"}));
+    assert!(cell.rovers.is_empty() && cell.holds.is_empty());
+    let mut shown = doc.clone();
+    let told = cell.apply(&mut shown);
+    assert!(told.changed.contains(&(DatablockKind::Object, Uid::from_raw(amr))), "{:?}", told.changed);
+    let id = id_of(&shown, amr).unwrap();
+    let (p, _) = floor_pose(&shown.world_transform(id));
+    assert!(p.truncate().length() < 1e-6, "{p}");
+    // Told once.
+    let again = cell.untouched(&doc);
+    assert!(!again.changed.contains(&(DatablockKind::Object, Uid::from_raw(amr))));
+}

@@ -111,8 +111,15 @@ const fn c(
 /// What a flow piece stands as: a table its parts are set out on, a mark
 /// on the floor — where something as big as a car body stands, or one
 /// rides into a booth, a jig or onto a line placed over it — or a tool's
-/// load port, where an overhead hoist sets a FOUP down.
-const BASES: &[&str] = &["작업대", "바닥 표시", "로드 포트"];
+/// load port, where an overhead hoist sets a FOUP down; or a jig, a
+/// small fixture on a post beside a bench, its top at the bench's height.
+const BASES: &[&str] = &["작업대", "바닥 표시", "로드 포트", "지그"];
+
+/// What a rack of shelves is: a pallet rack, or a slide (flow) rack.
+const RACKS: &[&str] = &["팔레트 랙", "슬라이드 랙"];
+
+/// What an AMR carries on it besides its load: nothing, or a jointed arm.
+const ARMS: &[&str] = &["없음", "다관절 로봇"];
 
 /// The tools a robot can carry on its flange, by number (see [`tool_urdf`]).
 pub const TOOLS: &[&str] = &[
@@ -273,11 +280,13 @@ pub const TEMPLATES: &[Template] = &[
         key: "amr",
         name: "AMR (자율 이동 로봇)",
         group: "물류",
-        // A 250 kg-class mobile base.
+        // A 250 kg-class mobile base; or a mobile manipulator, a jointed
+        // arm on its front that loads and unloads it.
         params: &[
             p("length", "길이", 0.9, 0.5, 2.0),
             p("width", "폭", 0.6, 0.4, 1.5),
             p("height", "높이", 0.35, 0.2, 0.8),
+            c("arm", "로봇 팔", 0.0, ARMS),
         ],
     },
     Template {
@@ -328,10 +337,13 @@ pub const TEMPLATES: &[Template] = &[
         key: "flow_rack",
         name: "랙 창고",
         group: "공정 흐름",
-        // A pallet rack of shelves, parts kept on them level by level.
+        // A pallet rack of shelves, parts kept on them level by level; or a
+        // slide rack, its shelves roller lanes that run down to its front.
         params: &[
             q("levels", "단 수", 3.0, 1.0, 8.0, "단"),
             q("capacity", "용량", 30.0, 1.0, 1000.0, "개"),
+            c("style", "랙 형태", 0.0, RACKS),
+            p("width", "폭", 1.2, 0.8, 3.0),
         ],
     },
     Template {
@@ -820,6 +832,19 @@ pub const TEMPLATES: &[Template] = &[
             p("width", "폭", 15.0, 4.0, 40.0),
             p("height", "높이", 6.0, 3.0, 15.0),
         ],
+    },
+    // A block line's mock-up machine (`blocks`).
+    Template {
+        key: "mock_machine",
+        name: "목업 장비",
+        group: "주변 장치",
+        params: &[c("band", "색상", 0.0, blocks::BANDS)],
+    },
+    Template {
+        key: "vision_inspector",
+        name: "비전 검사기",
+        group: "주변 장치",
+        params: &[],
     },
     // A beverage plant's own equipment (`beverage`).
     Template {
@@ -2616,6 +2641,9 @@ fn build(item: &Item) -> Result<Built, String> {
                 item.param("width"),
                 item.param("height"),
             );
+            if item.param("arm").round() as usize == 1 {
+                amr_arm(&mut doc, &c, item.param("length"), item.param("height"), amr);
+            }
             roles.push((amr, Kind::Amr));
         }
         "positioner" => {
@@ -2635,8 +2663,15 @@ fn build(item: &Item) -> Result<Built, String> {
             let rack = doc.add_object(Object::new("rack", ObjectData::Empty));
             let m = Some(rack);
             let levels = item.param("levels").round().clamp(1.0, 8.0) as usize;
-            let (w, d, step) = (1.2, 0.5, 0.45);
-            let h = step * levels as f64 + 0.1;
+            let slide = item.param("style").round() as usize == 1;
+            // A slide rack's shelves further apart, the lowest at a waist's
+            // height, where it is picked from.
+            // As wide as asked: a slide rack's five lanes in its middle,
+            // its posts as far out as it is wide — clear of a robot's arm
+            // swinging past.
+            let (w, d) = (item.param("width"), 0.5);
+            let (first, step, top) = if slide { (0.6, 0.7, 0.3) } else { (0.1, 0.45, 0.45) };
+            let h = first + step * (levels - 1) as f64 + top;
             for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 block(
                     &mut doc,
@@ -2648,14 +2683,50 @@ fn build(item: &Item) -> Result<Built, String> {
                 );
             }
             for k in 0..levels {
+                let z = first + step * k as f64;
                 block(
                     &mut doc,
                     &format!("shelf_{k}"),
                     [w, d, 0.03],
-                    [0.0, 0.0, 0.1 + step * k as f64],
-                    c.pallet,
+                    [0.0, 0.0, z],
+                    if slide { c.steel } else { c.pallet },
                     m,
                 );
+                if !slide {
+                    continue;
+                }
+                // A slide rack's shelf: five roller lanes front to back,
+                // guides between them, a stop along its front (−Y) and its
+                // side rails' blue.
+                for g in 0..6 {
+                    let x = (g as f64 - 2.5) * crate::cell::flow::BLOCK_PITCH;
+                    block(
+                        &mut doc,
+                        &format!("guide_{k}_{g}"),
+                        [0.012, d - 0.04, 0.012],
+                        [x, 0.0, z + 0.021],
+                        c.dark,
+                        m,
+                    );
+                }
+                block(
+                    &mut doc,
+                    &format!("stop_{k}"),
+                    [w - 0.08, 0.015, 0.02],
+                    [0.0, -d / 2.0 + 0.01, z + 0.025],
+                    c.accent,
+                    m,
+                );
+                for y in [-1.0, 1.0] {
+                    block(
+                        &mut doc,
+                        &format!("rail_{k}_{y}"),
+                        [w, 0.03, 0.05],
+                        [0.0, y * (d / 2.0 - 0.015), z - 0.01],
+                        c.body,
+                        m,
+                    );
+                }
             }
             roles.push((rack, Kind::Buffer));
             props.push((rack, json!({ "capacity": item.param("capacity") })));
@@ -2664,8 +2735,9 @@ fn build(item: &Item) -> Result<Built, String> {
             let c = Colours::new(&mut doc);
             // A table of its own size and colour; its top where parts stand.
             // Or a mark on the floor, a car body's size, 2 cm thick; or a
-            // tool's load port, where a FOUP is set down, 0.9 m up.
-            let (name, mut size, colour, kind) = match item.template.as_str() {
+            // tool's load port, where a FOUP is set down, 0.9 m up; or a
+            // jig, 0.3 m square and as high, of steel.
+            let (name, mut size, mut colour, kind) = match item.template.as_str() {
                 "flow_source" => ("source", [0.6, 0.6, 0.8], c.accent, Kind::Source),
                 "flow_station" => ("station", [1.0, 0.8, 0.9], c.machine, Kind::Station),
                 "flow_buffer" => ("buffer", [1.2, 0.5, 0.6], c.pallet, Kind::Buffer),
@@ -2674,6 +2746,10 @@ fn build(item: &Item) -> Result<Built, String> {
             match item.param("base").round() as usize {
                 1 => size = [5.0, 2.4, 0.02],
                 2 => size = [0.5, 0.5, 0.9],
+                3 => {
+                    size = [0.3, 0.3, 0.9];
+                    colour = c.steel;
+                }
                 _ => {}
             }
             let table = block(
@@ -2875,6 +2951,7 @@ fn build(item: &Item) -> Result<Built, String> {
         key if interior::KEYS.contains(&key) => interior::build(&mut doc, item),
         key if automotive::KEYS.contains(&key) => automotive::build(&mut doc, item),
         key if beverage::KEYS.contains(&key) => beverage::build(&mut doc, item),
+        key if blocks::KEYS.contains(&key) => blocks::build(&mut doc, item),
         key if refinery::KEYS.contains(&key) => refinery::build(&mut doc, item),
         key if display::KEYS.contains(&key) => display::build(&mut doc, item),
         key if semiconductor::KEYS.contains(&key) => semiconductor::build(&mut doc, item),
@@ -3469,6 +3546,36 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
     amr
 }
 
+/// A jointed arm on the front of an AMR `l` long, its top plate `h` high:
+/// a turning base, its upper arm standing up, its forearm reaching back
+/// over the plate, and its wrist and two-finger gripper over where a load
+/// rides (`fleet`: 0.1 m back from the middle) — as it stands between
+/// loading and unloading.
+fn amr_arm(doc: &mut Document, c: &Colours, l: f64, h: f64, amr: ObjectId) {
+    let m = Some(amr);
+    let x = l / 2.0 - 0.15;
+    let load = -0.1;
+    post(doc, "arm base", 0.075, 0.1, [x, 0.0, h + 0.05], c.dark, m);
+    post(doc, "arm turret", 0.065, 0.12, [x, 0.0, h + 0.16], c.machine, m);
+    bar(doc, "arm shoulder", 0.06, 0.16, [x, 0.0, h + 0.24], false, c.accent, m);
+    block(doc, "arm upper", [0.08, 0.08, 0.36], [x, 0.0, h + 0.42], c.machine, m);
+    bar(doc, "arm elbow", 0.05, 0.14, [x, 0.0, h + 0.6], false, c.accent, m);
+    let reach = x - load;
+    block(
+        doc,
+        "arm fore",
+        [reach, 0.065, 0.065],
+        [(x + load) / 2.0, 0.0, h + 0.6],
+        c.machine,
+        m,
+    );
+    post(doc, "arm wrist", 0.035, 0.12, [load, 0.0, h + 0.54], c.accent, m);
+    block(doc, "gripper", [0.05, 0.1, 0.04], [load, 0.0, h + 0.46], c.dark, m);
+    for y in [-0.045, 0.045] {
+        block(doc, "finger", [0.02, 0.012, 0.06], [load, y, h + 0.41], c.steel, m);
+    }
+}
+
 /// A two-station turntable `d` across, its plate `h` high: a round base,
 /// the plate (`top`) turning on it, and a screen across the plate between
 /// its two stations.
@@ -3622,11 +3729,13 @@ mod tests;
 
 mod automotive;
 mod beverage;
+mod blocks;
 mod display;
 mod refinery;
 mod semiconductor;
 pub(crate) use automotive::car_look;
 pub(crate) use beverage::beverage_look;
+pub(crate) use blocks::block_look;
 pub(crate) use display::display_look;
 pub(crate) use refinery::lot_look;
 pub(crate) use semiconductor::semi_look;

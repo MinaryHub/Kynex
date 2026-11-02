@@ -832,6 +832,26 @@ export default {
   '4. 개질 설비 증강 (650초→560초)': '4. Reformer upgrade (650 s→560 s)',
   '5. 처리 증대 + 개질 증강': '5. Higher throughput + reformer upgrade',
   '6. 원유선 입항 지연 (하역 600초→900초)': '6. Delayed crude tankers (unloading 600 s→900 s)',
+
+  // KYNEX's updates, and the viewer shared with tablets.
+  '공유 설정은 KYNEX를 실행한 컴퓨터에서만 바꿀 수 있습니다': 'Sharing can only be changed on the computer running KYNEX',
+  '네트워크에서 열지 못했습니다': 'Could not open it on the network',
+  '업데이트는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다': 'Updates are only possible on the computer running KYNEX',
+  '개발 빌드는 업데이트를 찾지 않습니다': 'Development builds do not look for updates',
+  '이 KYNEX는 스스로 설치하지 못합니다': 'This KYNEX cannot install updates itself',
+  '릴리스 페이지에서 내려받으세요': 'download it from the release page',
+  '업데이트를 확인하거나 내려받는 중입니다': 'Already checking for or downloading an update',
+  '설치할 새 버전이 없습니다': 'No newer version to install',
+  '내려받지 못했습니다': 'Could not download',
+  'curl을 실행하지 못했습니다': 'Could not run curl',
+  'GitHub의 답을 읽지 못했습니다': "Could not read GitHub's answer",
+  '이 컴퓨터에 맞는 릴리스 파일이 없습니다': 'The release has no file for this computer',
+  '내려받은 파일의 SHA-256이 릴리스와 다릅니다': "The download's SHA-256 does not match the release",
+  '릴리스 파일을 풀지 못했습니다': 'Could not unpack the release file',
+  '릴리스 파일에 kynex가 없습니다': 'The release file has no kynex in it',
+  'KYNEX를 다시 시작하지 못했습니다': 'Could not restart KYNEX',
+  '설치 파일을 실행하지 못했습니다': 'Could not run the setup',
+  '이 KYNEX는 스스로 업데이트하지 않습니다': 'This KYNEX does not update itself',
 };
 
 // A number as KYNEX writes it.

@@ -49,6 +49,31 @@ Every push to `main` releases that build (`.github/workflows/release.yml`)
 as `v<version>`: for Windows the installer, the MSI and a zip of the
 programs (`tools/package.ps1`), for Linux x64 and macOS arm64 a tar.gz.
 
+**Updates** (`apps/kynex/src/update.rs`). KYNEX asks GitHub for the latest
+release a little after it starts and every six hours after that. When the
+release is newer, KYNEX downloads the file for this computer in the
+background and checks it against the SHA-256 GitHub gives for it. It is
+installed the next time KYNEX starts. To install it straight away, click
+the green badge by the version (**지금 업데이트하고 다시 시작**): KYNEX
+installs it and starts again with the same project, and the page reloads
+once the new KYNEX answers. How an update is installed depends on how KYNEX
+was installed:
+
+| Installed with | Updated by |
+|---|---|
+| `setup.exe` (`unins000.exe` beside the program) | the new setup, run silently over it |
+| the zip or a tar.gz, in a folder KYNEX can write to | the programs replaced where they are |
+| the MSI, or a folder KYNEX cannot write to | nothing: the badge says a new version exists and links its release page |
+| `cargo` (`-dev`, or run from `target`) | nothing: no check either |
+
+Downloads go through the system's `curl` (PowerShell on a Windows without
+it), so they use the system's proxy and certificates. Automatic updates
+(download ahead, install at the next start) are on unless they are turned
+off in the same menu, which is kept in `%APPDATA%\kynex\update.json`. An
+update that does not take is not retried at every start. To turn checking
+off entirely, set `KYNEX_NO_UPDATE=1`. `kynex update` installs the latest
+release from the command line; `kynex update --check` only reports it.
+
 ## 3D viewer
 
 ```
@@ -93,7 +118,7 @@ obots`, at most
 5000 files and 512 MB, nothing written outside that folder whatever a
 name in it says. It is read on a
 thread of its own, so the viewer goes on meanwhile. Files go to `POST
-/import` as bytes, from this computer only, at most 256 MB.
+/import` as bytes, from this computer or a device the viewer is shared with, at most 256 MB.
 
 This opens `http://127.0.0.1:8090` in a browser. The viewer is a web page
 that KYNEX serves itself. It works on Windows, macOS, Linux and tablets, in
@@ -121,14 +146,29 @@ network with no internet.
   out-of-limit warning, and posing: see below), an inspector for the selected object, and a view
   toolbar (fit, ISO / top / front / side, joint gizmos, wireframe, grid).
   Keys: `F` fit, `0`/`7`/`1`/`3` views, `J` `W` `G` toggles, `Esc` deselect.
-- `--lan` lets other devices on the network open the viewer. The viewer
-  shows the whole scene to anyone who can reach the port, so the default is
-  this machine only. Anyone who can open the viewer can also pose its robots. That
-  pose stays in KYNEX and never reaches Kreate.
+- **Tablets and phones.** **도구 ▸ 태블릿·모바일에서 열기** shares the viewer
+  with the other devices on the network while KYNEX runs. KYNEX then also
+  listens on its port plus 100 (8190) and shows an address and its QR code.
+  Both carry an access code; a device without it gets a page saying it is
+  not let in. The device's browser keeps the code, so afterwards the plain
+  address works too. **새 접속 코드** turns away every device that had the old
+  code. Whether the viewer is shared, and the code, are kept in
+  `%APPDATA%\kynex\share.json`. Windows asks for firewall permission the
+  first time. A shared device can watch, run and lay out the cell. PLC
+  settings, opening and saving projects, sharing itself and updates stay on
+  this computer (`view::reaches_plc`). Opening the page on a tablet does
+  not stop a run in progress, as opening it here does. Touch works as the
+  mouse does, with two additions: a long press opens what a right click
+  opens, and on a touch screen up to 1400 px wide the side panels become
+  drawers.
+- `--lan` shares the viewer this way from the start, on the viewer's own
+  port, and prints the address with its code. The default is this machine
+  only. Anyone let in can also pose the robots; that pose stays in KYNEX and
+  never reaches Kreate.
 - The server only answers requests addressed to `localhost` or to an IP
   address. This blocks DNS rebinding, where a web page elsewhere points its
   own name at this machine to read the scene. On the LAN, open the viewer by
-  IP (`http://192.168.0.12:8090`), not by machine name.
+  IP (`http://192.168.0.12:8190/?key=…`), not by machine name.
 - `--file model.kreate` shows a saved file instead of a session.
 - On screens narrower than 960 px, the side panels become drawers.
 

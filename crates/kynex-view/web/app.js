@@ -18,6 +18,7 @@ import { openReport } from '/report.js';
 import { showMenu } from '/menu.js';
 import { mountHelp } from '/help.js';
 import { ChatPanel } from '/chat.js';
+import { SystemPanel, here } from '/system.js';
 import { tFor, tr, getLang, setLang, translatePage } from './i18n.js';
 
 const t = tFor('page');
@@ -802,6 +803,8 @@ function connect() {
   source.addEventListener('project', (e) => projectPanel.setState(JSON.parse(e.data)));
   source.addEventListener('floor', (e) => floorPanel.setState(JSON.parse(e.data)));
   source.addEventListener('history', (e) => setHistory(JSON.parse(e.data)));
+  source.addEventListener('updater', (e) => systemPanel.setUpdate(JSON.parse(e.data)));
+  source.addEventListener('share', (e) => systemPanel.setShare(JSON.parse(e.data)));
   source.addEventListener('cell', (e) => {
     const cell = JSON.parse(e.data);
     cellPanel.setCell(cell);
@@ -1161,6 +1164,8 @@ cellPanel.onLinking = (on) => {
   if (!on) previewLink(null);
 };
 const projectPanel = new ProjectPanel({ toast, escapeHtml });
+// KYNEX's updates, and the viewer shared with tablets.
+const systemPanel = new SystemPanel({ toast });
 // The site's drawing: looked at from above when first laid.
 const floorPanel = new FloorPanel({
   scene,
@@ -1884,6 +1889,73 @@ function sceneMenu(x, y) {
     { label: t('화면 맞춤'), hint: 'F', run: () => frame() },
   ]);
 }
+// Touch: a long press — held still for a moment — does what a right click
+// does, in the 3D view and on the tree's rows. iPad's browser has nothing
+// of its own for it; Android's says `contextmenu` itself, taken instead.
+// A second finger (a pinch) or a finger that moves is no press.
+const PRESS_MS = 550;
+let press = null;
+document.addEventListener(
+  'pointerdown',
+  (e) => {
+    clearTimeout(press?.timer);
+    press = null;
+    if (e.pointerType !== 'touch' || !e.isPrimary) return;
+    const p = { x: e.clientX, y: e.clientY, target: e.target, done: false };
+    p.timer = setTimeout(() => {
+      if (press !== p || p.done) return;
+      p.done = true;
+      if (canvas.contains(p.target)) {
+        down = null;
+        sceneMenu(p.x, p.y);
+      } else {
+        p.target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, button: 2 }));
+      }
+      navigator.vibrate?.(12);
+    }, PRESS_MS);
+    press = p;
+  },
+  true,
+);
+document.addEventListener(
+  'pointermove',
+  (e) => {
+    if (!press || e.pointerType !== 'touch' || press.done) return;
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) {
+      clearTimeout(press.timer);
+      press = null;
+    }
+  },
+  true,
+);
+for (const type of ['pointerup', 'pointercancel']) {
+  document.addEventListener(
+    type,
+    (e) => {
+      if (!press || e.pointerType !== 'touch') return;
+      clearTimeout(press.timer);
+      // A press that opened a menu chooses nothing as it ends.
+      if (press.done) down = null;
+      press = null;
+    },
+    true,
+  );
+}
+// Android's own long-press `contextmenu`: the press's, once.
+document.addEventListener(
+  'contextmenu',
+  (e) => {
+    if (!press || press.done || !e.isTrusted) return;
+    press.done = true;
+    clearTimeout(press.timer);
+    if (canvas.contains(e.target)) {
+      down = null;
+      sceneMenu(e.clientX, e.clientY);
+    }
+  },
+  true,
+);
+
 // The tree's rows too.
 document.getElementById('tree').addEventListener('contextmenu', (e) => {
   const li = e.target.closest('.node[data-uid]');
@@ -2264,9 +2336,15 @@ function toolsMenu(b) {
       run: () => {
         projectPanel.panel.hidden = true;
         floorPanel.panel.hidden = true;
+        systemPanel.panel.hidden = true;
         plcPanel.toggle();
       },
     },
+    ...systemPanel.toolsEntries(() => {
+      projectPanel.panel.hidden = true;
+      floorPanel.panel.hidden = true;
+      plcPanel.panel.hidden = true;
+    }),
   ]);
 }
 
@@ -2278,6 +2356,7 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
   if (b.dataset.action === 'project') {
     plcPanel.panel.hidden = true;
     floorPanel.panel.hidden = true;
+    systemPanel.panel.hidden = true;
     projectPanel.toggle();
   }
   if (b.dataset.action === 'link') {
@@ -2287,6 +2366,7 @@ document.querySelector('.toolbar').addEventListener('click', (e) => {
   if (b.dataset.action === 'floor') {
     plcPanel.panel.hidden = true;
     projectPanel.panel.hidden = true;
+    systemPanel.panel.hidden = true;
     floorPanel.toggle();
   }
   if (b.dataset.action === 'reset-run') resetRun();
@@ -2326,7 +2406,7 @@ function setHistory(h) {
 // The panels over the toolbar — projects, the site's drawing, the PLC —
 // close when something outside them is clicked (but their own button,
 // which toggles them), or on Esc, before Esc does anything else.
-const toolbarPanels = () => [projectPanel.panel, floorPanel.panel, plcPanel.panel];
+const toolbarPanels = () => [projectPanel.panel, floorPanel.panel, plcPanel.panel, systemPanel.panel];
 document.addEventListener(
   'pointerdown',
   (e) => {
@@ -2408,11 +2488,13 @@ async function resetRun() {
 }
 
 // The page opened or reloaded: the simulation stopped, at 1×, as a fresh
-// start is — not running on at whatever speed it was left at.
+// start is — not running on at whatever speed it was left at. Not for a
+// tablet's page opened to watch: what runs here runs on.
 let fresh = false;
 function freshStart() {
   if (fresh) return;
   fresh = true;
+  if (!here) return;
   const ask = (body) =>
     fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
   // A busy KYNEX — running fast — may not answer at once: asked again

@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#15181d">
 <title>KYNEX Viewer</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/app.css">
@@ -20,6 +24,7 @@
     <span class="brand-name">KYNEX</span>
     <span class="brand-sub">Viewer</span>
     <span class="brand-version num" id="version" title="KYNEX 버전"></span>
+    <button class="update-btn" id="update-btn" hidden title="KYNEX 업데이트"></button>
     <button class="lang-btn" id="lang-toggle" title="Language / 언어" style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid var(--line-2);background:transparent;color:var(--muted);cursor:pointer"></button>
   </div>
   <div class="status" id="status" data-state="connecting">
@@ -136,6 +141,25 @@
       <div class="project-sub">기능별 샘플 <span class="muted">기능 하나씩, 단계별 · 누르면 사본을 만들어 엽니다</span></div>
       <ul class="project-list demo-list" id="project-samples"></ul>
       <div class="muted project-dir" id="project-dir"></div>
+    </div>
+
+    <div class="plc-panel share-panel" id="share-panel" hidden>
+      <div class="plc-head">태블릿·모바일에서 열기 <span class="muted">같은 Wi-Fi·네트워크의 태블릿이나 휴대폰 브라우저에서 이 화면을 엽니다</span></div>
+      <label class="check share-toggle"><input type="checkbox" id="share-on"> 다른 기기에서 열 수 있게 하기</label>
+      <div class="share-body" id="share-body" hidden>
+        <img class="share-qr" id="share-qr" alt="접속 QR 코드">
+        <div class="share-side">
+          <a class="share-url num" id="share-url" target="_blank" rel="noopener"></a>
+          <div class="project-row">
+            <button class="text-btn" id="share-copy">주소 복사</button>
+            <button class="text-btn quiet" id="share-new-key" title="지금까지 연 기기를 모두 끊고 새 주소를 만듭니다">새 접속 코드</button>
+          </div>
+          <p class="muted">태블릿 카메라로 QR 코드를 찍거나 주소를 그대로 입력하세요. 한 번 연 기기는 다음부터 주소만으로 열립니다.</p>
+          <p class="muted">접속 코드가 든 주소를 아는 기기만 열 수 있습니다. PLC 설정, 프로젝트 열기·저장, 업데이트는 이 컴퓨터에서만 됩니다.</p>
+          <p class="muted">Windows 방화벽 창이 뜨면 '허용'을 누르세요. 회사·공용 Wi-Fi는 기기끼리 연결이 막혀 있을 수 있습니다.</p>
+        </div>
+      </div>
+      <p class="share-error" id="share-error" hidden></p>
     </div>
 
     <div class="plc-panel" id="plc-panel" hidden>

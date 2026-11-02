@@ -18,7 +18,9 @@ use crate::library::{self, Library};
 use crate::pose::{Posing, Project};
 use crate::run::{Clock, Runner};
 use crate::scenario;
+use crate::share::Share;
 use crate::timeline::{Now, Timeline};
+use crate::update::Updater;
 
 const PORT: u16 = 8090;
 
@@ -77,6 +79,14 @@ pub fn run_with(
         }
     }
 
+    // Started again by an update: once the KYNEX before has let go, and
+    // the browser it had open reconnects by itself.
+    if crate::update::relaunched() {
+        open = false;
+    }
+    // An update fetched earlier, installed before anything is opened.
+    crate::update::on_start();
+
     // The project first: one another KYNEX holds is not served at all.
     let mut stage = Stage::open(project)?;
 
@@ -93,12 +103,14 @@ pub fn run_with(
     // shown in KYNEX's window or the browser in its place.
     let local = format!("http://127.0.0.1:{}", server.addr().port());
     println!("KYNEX 뷰어: {local}");
-    if lan {
-        println!(
-            "  같은 네트워크의 다른 기기: http://{}:{}",
-            lan_address(),
-            server.addr().port()
-        );
+    crate::update::serving_on(server.addr().port());
+    let mut system = System {
+        share: Share::start(&server, server.addr().port(), lan),
+        updater: Updater::start(&server),
+    };
+    system.tell_share(&server);
+    if let Some(url) = system.share.url() {
+        println!("  같은 네트워크의 태블릿·다른 기기: {url}");
     }
     if open {
         open_browser(&local);
@@ -113,13 +125,22 @@ pub fn run_with(
         let loaded = kreate_io::container::read(std::io::BufReader::new(file))
             .map_err(|e| format!("{path}: {e}"))?;
         let status = Status::File { path: path.clone() };
-        return offline(&server, &requests, stage, loaded.document, &path, status);
+        return offline(
+            &server,
+            &requests,
+            &mut system,
+            stage,
+            loaded.document,
+            &path,
+            status,
+        );
     }
     // KYNEX on its own, unless a Kreate session is named.
     if address.is_none() && !kreate {
         return offline(
             &server,
             &requests,
+            &mut system,
             stage,
             Document::new(),
             "단독 실행",
@@ -202,6 +223,7 @@ pub fn run_with(
         if quiet && asked.is_empty() && !replaced && changes.is_none() {
             asked.extend(requests.recv_timeout(Duration::from_millis(3)).ok());
         }
+        let asked = system.take(&server, asked);
         let any_asked = !asked.is_empty();
         let touched = stage.answer(link.document(), asked);
         // Another project opened: everything shown anew.
@@ -1802,6 +1824,7 @@ impl Checks {
 fn offline(
     server: &Server,
     requests: &Receiver<RobotRequest>,
+    system: &mut System,
     mut stage: Stage,
     doc: Document,
     label: &str,
@@ -1833,6 +1856,7 @@ fn offline(
             }
         };
         let asked: Vec<RobotRequest> = first.into_iter().chain(requests.try_iter()).collect();
+        let asked = system.take(server, asked);
         let any_asked = !asked.is_empty();
         // Asked, or moved on by the clock: a door sliding, a cycle running.
         let touched = stage.answer(&doc, asked);
@@ -2037,9 +2061,43 @@ fn names(peers: &[(u16, String)]) -> Vec<String> {
     peers.iter().map(|(_, n)| n.clone()).collect()
 }
 
+/// What KYNEX itself is asked, beside the scene: sharing the viewer with
+/// tablets (`share`), and updating KYNEX (`update`).
+struct System {
+    share: Share,
+    updater: Updater,
+}
+
+impl System {
+    fn tell_share(&self, server: &Server) {
+        server.state("share", &self.share.to_json().to_string());
+    }
+
+    /// Answers the requests that are KYNEX's own; the rest are the stage's.
+    fn take(&mut self, server: &Server, asked: Vec<RobotRequest>) -> Vec<RobotRequest> {
+        asked
+            .into_iter()
+            .filter_map(|request| {
+                let body: Value = serde_json::from_str(&request.body).unwrap_or_default();
+                let answer = match body["op"].as_str() {
+                    Some("share") => {
+                        let answer = self.share.op(server, &body, request.local);
+                        self.tell_share(server);
+                        answer
+                    }
+                    Some("update") => self.updater.op(&body, request.local),
+                    _ => return Some(request),
+                };
+                let _ = request.reply.send(answer.to_string());
+                None
+            })
+            .collect()
+    }
+}
+
 /// This machine's address on the local network: the interface a packet to
 /// the outside would leave by. Nothing is sent.
-fn lan_address() -> String {
+pub(crate) fn lan_address() -> String {
     std::net::UdpSocket::bind("0.0.0.0:0")
         .and_then(|s| {
             s.connect("192.0.2.1:9")?;

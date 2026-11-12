@@ -110,7 +110,8 @@ impl Keys {
             return Err("OPC UA: 암호화할 길이가 블록 단위가 아닙니다".into());
         }
         let mut c = Aes256CbcEnc::new(&self.encrypt.into(), &self.iv.into());
-        for block in data.chunks_exact_mut(16) {
+        // Whole blocks: the length was checked above.
+        for block in data.as_chunks_mut::<16>().0 {
             c.encrypt_block_mut(block.into());
         }
         Ok(())
@@ -121,7 +122,8 @@ impl Keys {
             return Err("OPC UA: 암호문 길이가 블록 단위가 아닙니다".into());
         }
         let mut c = Aes256CbcDec::new(&self.encrypt.into(), &self.iv.into());
-        for block in data.chunks_exact_mut(16) {
+        // Whole blocks: the length was checked above.
+        for block in data.as_chunks_mut::<16>().0 {
             c.decrypt_block_mut(block.into());
         }
         Ok(())

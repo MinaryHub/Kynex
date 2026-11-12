@@ -45,9 +45,19 @@ commit and is the same on every machine (`tools/version.rs`;
 a tree with changes not committed says `-dev` after it. `kynex --version`
 prints it, and the viewer shows it by its name.
 
-Every push to `main` releases that build (`.github/workflows/release.yml`)
-as `v<version>`: for Windows the installer, the MSI and a zip of the
-programs (`tools/package.ps1`), for Linux x64 and macOS arm64 a tar.gz.
+Every push to `main` that passes CI (`.github/workflows/ci.yml`: format,
+clippy, the tests, and the demos' figures below) releases that build
+(`.github/workflows/release.yml`) as `v<version>`: for Windows the
+installer, the MSI and a zip of the programs (`tools/package.ps1`), for
+Linux x64 and macOS arm64 a tar.gz. A push CI fails is not released.
+
+**The demos' figures.** CI also runs each demo's first scenario for an
+hour and holds it to what it made, and how busy its machines were, when
+last measured (`KPIS` in `apps/kynex/src/demos.rs`): one that makes less
+than 85% of that, or stops with an alarm, fails CI. Run it with
+`cargo test -p kynex --lib demo_kpis -- --ignored` (about a minute); a
+change meant to move the figures puts what it prints in place of the
+table.
 
 ## 3D viewer
 
@@ -143,10 +153,15 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   robot follows the bar on the screen at once — what is beyond the joint
   turned (or slid) where the bar is, without waiting for KYNEX to answer —
   and takes KYNEX's own pose as each answer comes and once it is let go.
-- **Run and stop**: the run badge over the view is the one run control:
-  its 실행/정지 runs the flow and every robot with a program, as Space
-  does, and stops them; − and + beside it set the clock's speed (as the
-  − and + keys do). The toolbar's **처음으로** (or Home) puts everything
+- **Run and pause**: the run badge over the view is the one run control:
+  its button runs the flow and every robot with a program, as Space
+  does, pauses them (일시정지), and goes on from where they were paused;
+  − and + beside it set the clock's speed (as the − and + keys do).
+  Every deadline of the simulation is a time on its clock, and the clock
+  stands still while paused and while nothing runs: a cycle, a part on
+  its way or an AMR loading goes on from where it was, however long the
+  pause — nor does a page left alone run time on when next asked. A page
+  opened or reloaded pauses what was running, at 1×. The toolbar's **처음으로** (or Home) puts everything
   back as it was before the run: programs and the flow stopped, every product taken away, the
   robots posed as they stood when the run started.
 - **Smooth motion**: while a program or the flow runs, KYNEX tells poses
@@ -611,7 +626,9 @@ about a minute, as if it worked on it, then an AMR takes it to the
 assembly. There a yellow block on the left jig and a red or blue one on
 the right are put together side by side, and drawn so. The vision
 inspector checks the pair's colours, taking out one in fifty, and an AMR
-puts the pair on the shelves of the finished-goods slide racks. The AMRs
+puts the pair on the shelves of the finished-goods slide racks; from
+there, when one has nothing more pressing, an AMR takes each out to
+shipping (출하) by the shipping door — some 35 an hour. The AMRs
 drive one way round the aisle and park on spurs off its two ends. The
 blocks are drawn from a bag of two yellow, a red and a blue, shuffled, so
 that neither side of the assembly gets far ahead and jams its jig. It is
@@ -791,7 +808,8 @@ hides the arrows of the process flow on their own. They are shown at first, and
 the choice is kept in the browser too.
 
 **Space** runs the simulation: nothing going, it starts the process flow
-and every robot that has a program; anything going, it stops it all.
+and every robot that has a program; anything going, it pauses it all;
+paused, it goes on from there.
 **+** and **−** make the simulation's clock a step faster or slower
 (¼, ½, 1, 2, 5, 10, 20, 50, 100, 200 times).
 

@@ -5,7 +5,8 @@
 //! the aisle —, which keeps it a while as if it worked on it; then to the
 //! assembly, where a yellow block and a red or blue one are put together
 //! side by side; to the vision inspector, which checks the two colours are
-//! as they should be; and to the finished-goods store, onto its shelves.
+//! as they should be; to the finished-goods store, onto its shelves; and
+//! from there, by AMR, out through the shipping door.
 //! Run
 //!
 //!   cargo test -p kynex --release -- --ignored make_block_assembly --nocapture
@@ -271,6 +272,16 @@ fn lay_out() -> Plant {
         );
     }
 
+    // Shipping: what leaves the store, by the shipping door.
+    p.place(
+        "flow_sink",
+        "출하",
+        [15.6, 0.0, 0.0],
+        0.0,
+        json!({"base": 1.0}),
+        0.0,
+    );
+
     // The AMRs' stops and their parking places, and the AMRs, each a
     // mobile manipulator, parked.
     for (name, x, y) in LOOP {
@@ -432,23 +443,34 @@ fn build() -> (Vec<Value>, Vec<Value>) {
             "완제품 슬라이드 랙 4",
         ],
     );
+    // The store keeps them a while; an AMR takes each out to shipping
+    // when it has nothing more pressing — the line never waits on it.
     for k in 1..=4 {
+        let rack = format!("완제품 슬라이드 랙 {k}");
         role(
             &mut cell,
-            &format!("완제품 슬라이드 랙 {k}"),
+            &rack,
             "buffer",
-            json!({"capacity": 30}),
+            json!({"capacity": 30, "carrier": 1}),
         );
+        next(&mut cell, &rack, &["출하"]);
     }
+    role(&mut cell, "출하", "sink", json!({}));
     // Each process, the machine it is done on.
     let mut pairs: Vec<(String, String)> = Vec::new();
     for (colour, ..) in MACHINES {
         for side in ["북", "남"] {
-            pairs.push((format!("{colour} 가공 {side}"), format!("{colour} 목업 장비 {side}")));
+            pairs.push((
+                format!("{colour} 가공 {side}"),
+                format!("{colour} 목업 장비 {side}"),
+            ));
         }
     }
     pairs.push(("색상 조합 검사".into(), "비전 검사기".into()));
-    let pairs: Vec<(&str, &str)> = pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
     super::build::hosts(&plant, &mut cell, &doc, &roles, &pairs);
     // The AMRs' lanes: round the loop one way, each parking place a spur
     // off one of its ends, both ways.

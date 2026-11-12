@@ -193,6 +193,7 @@ mod refinery;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     /// Every demo is a project KYNEX reads as it is now: saved by an older
     /// KYNEX, it must still be read, its scenarios there, and the first of
@@ -213,6 +214,105 @@ mod tests {
             assert!(report["machines"].as_u64().unwrap() > 0, "{}", demo.name);
             assert!(report["alarm"].is_null(), "{}: {report}", demo.name);
         }
+    }
+
+    /// What each demo's first scenario makes in its first hour (seed 1),
+    /// and how busy its machines are on average, as last measured: the
+    /// figures a change is held to. A demo that makes much less than this
+    /// — or nothing — fails, as one that stops with an alarm does.
+    ///
+    /// The LCD and semiconductor fabs make nothing in their first hour (a
+    /// part's way through them is longer), so only how busy they are is
+    /// held to for them.
+    ///
+    /// A change meant to move these: run this test, and put what it
+    /// prints in place of the table.
+    const KPIS: &[(&str, u64, f64)] = &[
+        ("성능 데모 공장", 349, 0.4974),
+        ("공장 내부 전시", 24, 0.2619),
+        ("대규모 물류 창고", 65, 0.5564),
+        ("자동차 공장", 38, 0.9056),
+        ("LCD 공장", 0, 0.1049),
+        ("음료 공장", 6, 0.4699),
+        ("정유 공장", 14, 0.6127),
+        ("반도체 공장", 0, 0.0622),
+        ("블럭 조립 공장", 32, 0.4082),
+    ];
+
+    /// How far below its figure a demo may fall: simulations differ a
+    /// little from machine to machine, and a change may cost a little.
+    const KPI_SLACK: f64 = 0.85;
+
+    /// Each demo held to its figures (`KPIS`): an hour of each, all at
+    /// once. Slow — about a minute —, so run on its own, as CI does:
+    ///
+    ///   cargo test -p kynex --lib demo_kpis -- --ignored
+    #[test]
+    #[ignore = "an hour of every demo: about a minute; CI runs it"]
+    fn demo_kpis_hold() {
+        assert_eq!(KPIS.len(), DEMOS.len(), "a figure for every demo");
+        let measured: Vec<(&str, Value)> = std::thread::scope(|s| {
+            let runs: Vec<_> = DEMOS
+                .iter()
+                .map(|demo| {
+                    s.spawn(move || {
+                        let saved: Value = serde_json::from_str(demo.file).unwrap();
+                        let r = crate::scenario::simulate_seeded(
+                            &kreate_scene::Document::new(),
+                            &saved["scenarios"][0],
+                            3600.0,
+                            1,
+                        );
+                        (demo.name, r)
+                    })
+                })
+                .collect();
+            runs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut table = String::new();
+        let mut failed = Vec::new();
+        for (name, r) in &measured {
+            let lanes = r["machine_lanes"].as_array().cloned().unwrap_or_default();
+            let busy = lanes
+                .iter()
+                .filter_map(|l| l["utilization"].as_f64())
+                .sum::<f64>()
+                / lanes.len().max(1) as f64;
+            let parts = r["parts"].as_u64().unwrap_or(0);
+            table.push_str(&format!(
+                "        (\"{name}\", {parts}, {busy:.4}),
+"
+            ));
+            let Some(&(_, want_parts, want_busy)) = KPIS.iter().find(|k| k.0 == *name) else {
+                failed.push(format!("{name}: no figure"));
+                continue;
+            };
+            if r["ok"] != true || !r["alarm"].is_null() {
+                failed.push(format!("{name}: {r}"));
+            }
+            if (parts as f64) < (want_parts as f64 * KPI_SLACK).floor() {
+                failed.push(format!("{name}: {parts} made, was {want_parts}"));
+            }
+            if busy < want_busy * KPI_SLACK {
+                failed.push(format!(
+                    "{name}: machines {busy:.3} busy, was {want_busy:.3}"
+                ));
+            }
+        }
+        println!(
+            "measured:
+{table}"
+        );
+        assert!(
+            failed.is_empty(),
+            "{}
+measured:
+{table}",
+            failed.join(
+                "
+"
+            )
+        );
     }
 
     /// Every sample reads; one that runs by itself — a program, or a flow

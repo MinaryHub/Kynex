@@ -396,6 +396,8 @@ const _gp = new THREE.Vector3();
 const _gq = new THREE.Quaternion();
 const _gs = new THREE.Vector3();
 const running = () => !!timelinePanel.flowState?.on || robotPanel.going().length > 0;
+// Held where it is by the user: going on from there with Space.
+const paused = () => !!robotPanel.clock?.paused && running();
 
 // An update has come, made at `t` by KYNEX's clock (or now, if it does not
 // say): when it is due on the page's clock.
@@ -2370,16 +2372,11 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
 });
 
-// Space: everything going stopped, or, nothing going, the process flow and
-// every robot with a program set going.
+// Space: what is going paused, kept as it is; paused, going on from there;
+// nothing going, the process flow and every robot with a program set going.
+// (처음으로 puts it all back as it was before the run.)
 function playPause() {
-  const flow = timelinePanel.flowState;
-  const going = !!flow?.on || robotPanel.going().length > 0;
-  if (going) {
-    if (flow?.on) timelinePanel.flowOp('stop');
-    robotPanel.playAll(false);
-    return;
-  }
+  if (running()) return clockOp(paused() ? 'resume' : 'pause');
   const flows = (cellPanel.cell.components ?? []).some((c) => c.flow);
   if (flows) timelinePanel.flowOp('start');
   const robots = robotPanel.playAll(true);
@@ -2407,8 +2404,20 @@ async function resetRun() {
   }
 }
 
-// The page opened or reloaded: the simulation stopped, at 1×, as a fresh
-// start is — not running on at whatever speed it was left at.
+async function clockOp(op) {
+  try {
+    const answer = await fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op }) }).then((r) =>
+      r.ok ? r.json() : { ok: false, error: `HTTP ${r.status}` },
+    );
+    if (!answer.ok) toast(tr(answer.error) || t('요청을 처리하지 못했습니다'));
+  } catch (err) {
+    toast(t('KYNEX에 요청하지 못했습니다: {error}', { error: err.message }));
+  }
+}
+
+// The page opened or reloaded: the simulation paused, at 1×, as a fresh
+// start is — not running on at whatever speed it was left at, and not
+// stopped either: what was under way is kept, to go on with Space.
 let fresh = false;
 function freshStart() {
   if (fresh) return;
@@ -2419,15 +2428,13 @@ function freshStart() {
   // until it stands still at 1×, for half a minute at most.
   let tries = 0;
   const settle = async () => {
-    const going = !!timelinePanel.flowState?.on || robotPanel.going().length > 0;
     const speed = robotPanel.clock?.speed ?? 1;
-    if ((!going && speed === 1) || tries++ > 30) return;
-    if (robotPanel.going().length) await ask({ op: 'stop' });
-    if (timelinePanel.flowState?.on) await ask({ op: 'flow', action: 'stop' });
+    if (((!running() || paused()) && speed === 1) || tries++ > 30) return;
+    if (running() && !paused()) await ask({ op: 'pause' });
     if (speed !== 1) await ask({ op: 'speed', speed: 1 });
     setTimeout(settle, 1000);
   };
-  ask({ op: 'stop' }).then(() => setTimeout(settle, 500));
+  ask({ op: 'pause' }).then(() => setTimeout(settle, 500));
 }
 
 // + and −: the simulation's clock a step faster or slower, through the
@@ -2784,16 +2791,18 @@ const _xm = new THREE.Matrix4();
 // only when it changes.
 let playShown = '';
 function showPlay() {
-  const on = running();
+  const held = paused();
+  const on = running() && !held;
   const speed = robotPanel.clock?.speed ?? 1;
-  const key = `${on}|${speed}`;
+  const key = `${on}|${held}|${speed}`;
   if (key === playShown) return;
   playShown = key;
   // The badge over the view: the one run control.
   const badge = document.getElementById('run-badge');
   if (!badge) return;
   badge.classList.toggle('on', on);
-  badge.querySelector('.run-word').textContent = on ? t('실행 중') : t('정지');
+  badge.classList.toggle('held', held);
+  badge.querySelector('.run-word').textContent = on ? t('실행 중') : held ? t('일시정지') : t('정지');
   const sp = badge.querySelector('.run-speed');
   sp.textContent = `${speed}×`;
   sp.classList.toggle('fast', speed !== 1);

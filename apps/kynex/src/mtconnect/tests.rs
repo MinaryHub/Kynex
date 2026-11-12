@@ -84,7 +84,9 @@ fn the_public_demo_agent_is_read_live() {
     while mirror.observation().is_none() && start.elapsed() < Duration::from_secs(10) {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let seen = mirror.observation().expect(&mirror.to_json().to_string());
+    let seen = mirror
+        .observation()
+        .unwrap_or_else(|| panic!("{}", mirror.to_json()));
     println!("{}", seen.to_json());
     assert_eq!(seen.device, "OKUMA");
     assert!(seen.execution.is_some());

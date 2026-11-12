@@ -53,7 +53,13 @@ pub(super) fn ask(cell: &mut Cell, doc: &Document, req: Value) {
 
 /// Each flow piece named first stands for the equipment named second:
 /// picking the equipment shows the piece's role.
-pub(super) fn hosts(plant: &Plant, cell: &mut Cell, doc: &Document, roles: &[(u64, String, crate::cell::Kind)], pairs: &[(&str, &str)]) {
+pub(super) fn hosts(
+    plant: &Plant,
+    cell: &mut Cell,
+    doc: &Document,
+    roles: &[(u64, String, crate::cell::Kind)],
+    pairs: &[(&str, &str)],
+) {
     for (piece, equipment) in pairs {
         let id = plant
             .items

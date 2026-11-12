@@ -2,9 +2,13 @@ name: Release
 
 # Every commit on main is a build with its own number (tools/version.rs:
 # major.minor.<commits>), released for Windows, Linux and macOS as
-# v<version>. Or run by hand from the Actions tab.
+# v<version> — once CI has passed on it: format, clippy, the tests and the
+# demos' figures. A commit CI fails is not released. Or run by hand from
+# the Actions tab, for the commit chosen there.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -22,6 +26,11 @@ env:
 jobs:
   build:
     name: build (${{ matrix.name }})
+    # CI passed on a push to main (not a pull request's run).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +42,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # The commit CI passed on — not whatever main is by now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           # Every commit: the build number counts them.
           fetch-depth: 0
       # Pinned to commits: a job here builds what is released.
@@ -96,10 +107,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ needs.build.outputs.version }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           ls -l dist
           gh release create "v$V" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            --target "$SHA" \
             --title "KYNEX $V" \
-            --notes "KYNEX $V ($GITHUB_SHA) — Windows (설치 파일·MSI·zip), Linux x64, macOS arm64."
+            --notes "KYNEX $V ($SHA) — Windows (설치 파일·MSI·zip), Linux x64, macOS arm64."

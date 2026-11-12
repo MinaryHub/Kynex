@@ -254,6 +254,9 @@ type Importing = (
     bool,
 );
 
+/// A sweep running: what it varies, and its results to come.
+type Sweeping = (Value, Receiver<Result<Vec<Value>, String>>);
+
 /// What KYNEX adds to the session's scene: placed equipment, robots posed
 /// and their programs, the cell's roles and its parts, and the collision
 /// check over them all.
@@ -300,7 +303,7 @@ struct Stage {
     comparing: Option<Receiver<Vec<Value>>>,
     /// A sweep running there (what it varies, its results to come), and
     /// the last one done.
-    sweeping: Option<(Value, Receiver<Result<Vec<Value>, String>>)>,
+    sweeping: Option<Sweeping>,
     swept: Value,
     /// The PLC the cell's machines are wired to, and whether where it is
     /// changed since last saved.
@@ -494,6 +497,10 @@ impl Stage {
     /// anything to look at again.
     fn answer(&mut self, doc: &Document, asked: Vec<RobotRequest>) -> bool {
         let mut touched = false;
+        // Whether anything ran by the clock since it was last moved: as it
+        // was left then, before what is asked now changes it. A run started
+        // after the page was left alone starts from where the clock stood.
+        let kept = self.keeps_time();
         self.asked |= !asked.is_empty();
         for request in asked {
             let op = serde_json::from_str::<Value>(&request.body)
@@ -569,8 +576,13 @@ impl Stage {
             } else if op == "follow" {
                 touched = true;
                 self.follow_op(doc, &request.body)
-            } else if matches!(op.as_str(), "play" | "stop" | "speed" | "reset_run") {
-                if op == "play" && !self.running() {
+            } else if matches!(
+                op.as_str(),
+                "play" | "stop" | "speed" | "reset_run" | "pause" | "resume"
+            ) {
+                // The poses to go back to: as they stood before anything
+                // ran — not where a paused run left them.
+                if op == "play" && !self.running() && !self.active() {
                     self.before_run = Some(self.posing.held_now());
                 }
                 let answer = self.run_op(doc, &op, &request.body);
@@ -639,6 +651,10 @@ impl Stage {
                 let reply = self
                     .cell
                     .handle(posed.as_ref().unwrap_or(scene), &request.body);
+                // The flow set going goes: the clock is not left paused.
+                if op == "flow" && self.cell.flow_running() {
+                    self.clock.paused = false;
+                }
                 touched |= self.cell.take_changed();
                 // A process flow started with nothing else running: a new
                 // record of it.
@@ -673,7 +689,7 @@ impl Stage {
         touched |= self.imported(doc);
         // The clock: the program running moves on, the machines run.
         let now = Instant::now();
-        let time = self.clock.advance(now);
+        let time = self.clock.advance(now, kept);
         let scene = self.base.as_ref().unwrap_or(doc);
         for runner in &mut self.runners {
             if runner.tick(time, now, &mut self.posing, &mut self.cell, scene) {
@@ -897,10 +913,22 @@ impl Stage {
         due
     }
 
-    /// Whether anything runs by the clock: the loop then keeps time.
+    /// Whether the simulation's clock moves on: a program or the cell
+    /// running, and not paused. A PLC or a real machine linked does not by
+    /// itself: what they change, they change at once.
+    fn keeps_time(&self) -> bool {
+        !self.clock.paused && self.active()
+    }
+
+    /// Whether a program or the cell is running, paused or not.
+    fn active(&self) -> bool {
+        self.runners.iter().any(|r| !r.stopped()) || self.cell.is_running()
+    }
+
+    /// Whether anything is to be looked at by the clock: the loop then
+    /// keeps time, rather than waiting for the next request.
     fn running(&self) -> bool {
-        self.runners.iter().any(|r| !r.stopped())
-            || self.cell.is_running()
+        self.keeps_time()
             || self.plc.on()
             || !self.mirrors.is_empty()
             || !self.followers.is_empty()
@@ -914,14 +942,19 @@ impl Stage {
     /// worked out again, a second apart at most, when the links, their
     /// ends or the robots have moved — not as doors and arms move.
     fn link_reach(&mut self, doc: &Document, now: Instant) {
-        if self.reach_at.is_some_and(|t| now.duration_since(t).as_secs_f64() < 1.0) {
+        if self
+            .reach_at
+            .is_some_and(|t| now.duration_since(t).as_secs_f64() < 1.0)
+        {
             return;
         }
         self.reach_at = Some(now);
         let base = self.base.take();
         let scene = base.as_ref().unwrap_or(doc);
         let links = self.cell.robot_links();
-        let cm = |v: kreate_math::DVec3| format!("{:.0},{:.0},{:.0}", v.x * 100.0, v.y * 100.0, v.z * 100.0);
+        let cm = |v: kreate_math::DVec3| {
+            format!("{:.0},{:.0},{:.0}", v.x * 100.0, v.y * 100.0, v.z * 100.0)
+        };
         let mut key = String::new();
         let mut ends = Vec::new();
         for (a, b, r) in &links {
@@ -998,6 +1031,8 @@ impl Stage {
         }
         // Its calls replaced by what they call.
         let (program, origin) = self.posing.runnable(root)?;
+        // A program set going goes: the clock is not left paused.
+        self.clock.paused = false;
         let scene = self.base.as_ref().unwrap_or(doc);
         let mut runner = Runner::new(root, program, scene, self.clock.time)?;
         runner.origin = origin;
@@ -1028,7 +1063,17 @@ impl Stage {
             // Everything back as it was before the run: programs and the
             // flow stopped, every part taken away, the robots posed as they
             // stood when it started.
+            // Everything held where it is, to go on from there.
+            "pause" => {
+                self.clock.paused = true;
+                Ok(())
+            }
+            "resume" => {
+                self.clock.paused = false;
+                Ok(())
+            }
             "reset_run" => {
+                self.clock.paused = false;
                 self.runners.clear();
                 self.carrying = Default::default();
                 let scene = self.base.as_ref().unwrap_or(doc);
@@ -1045,7 +1090,10 @@ impl Stage {
             "stop" => {
                 match req["robot"].as_str().and_then(|s| s.parse::<u64>().ok()) {
                     Some(root) => self.runners.retain(|r| r.root != root),
-                    None => self.runners.clear(),
+                    None => {
+                        self.runners.clear();
+                        self.clock.paused = false;
+                    }
                 }
                 Ok(())
             }
@@ -2180,6 +2228,89 @@ mod tests {
     /// Equipment placed, moved (twice, close together: one edit) and
     /// removed; each undone in turn and done again; a new edit leaves
     /// nothing to redo; never from another computer.
+    /// The clock counts only the time something ran, paused not: a run
+    /// paused, or a page left alone, loses nothing and gains nothing.
+    #[test]
+    fn a_paused_run_or_one_left_alone_goes_on_where_it_stood() {
+        let dir = std::env::temp_dir().join(format!("kynex-pause-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("line.json");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/demos/samples/01-line-on-plan.json"
+            ),
+            &file,
+        )
+        .unwrap();
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(file)).unwrap();
+        stage.replaced(&doc);
+        let wait = || std::thread::sleep(Duration::from_millis(60));
+        let look = |stage: &mut Stage| {
+            ask(stage, &doc, json!({"op": "speed", "speed": 100}), true);
+            stage.clock.time
+        };
+        // Nothing running: the time left alone is not counted.
+        look(&mut stage);
+        wait();
+        assert_eq!(look(&mut stage), 0.0);
+        // The flow set going: its first look starts from 0, not from the
+        // time left alone.
+        wait();
+        let started = ask(
+            &mut stage,
+            &doc,
+            json!({"op": "flow", "action": "start"}),
+            true,
+        );
+        assert_eq!(started["ok"], true, "{started}");
+        assert!(stage.clock.time < 1.0, "{}", stage.clock.time);
+        wait();
+        let ran = look(&mut stage);
+        assert!(ran > 1.0, "{ran}");
+        // Paused: it stands, the flow still on, and says so.
+        ask(&mut stage, &doc, json!({"op": "pause"}), true);
+        let held = stage.clock.time;
+        wait();
+        assert_eq!(look(&mut stage), held);
+        assert!(stage.cell.flow_running());
+        assert_eq!(stage.clock.to_json()["paused"], true);
+        // Going on from where it stood.
+        ask(&mut stage, &doc, json!({"op": "resume"}), true);
+        wait();
+        let on = look(&mut stage);
+        assert!(on > held && on < held + 30.0, "{held} → {on}");
+        // The flow stopped: once nothing moves, the clock stands, so its
+        // cycles and parts under way are found as they were when it starts
+        // again — not all finished at once.
+        ask(
+            &mut stage,
+            &doc,
+            json!({"op": "flow", "action": "stop"}),
+            true,
+        );
+        assert!(!stage.cell.is_running());
+        let stopped = look(&mut stage);
+        wait();
+        assert_eq!(look(&mut stage), stopped);
+        // Paused, then set going by starting the flow again: not paused.
+        ask(&mut stage, &doc, json!({"op": "pause"}), true);
+        ask(
+            &mut stage,
+            &doc,
+            json!({"op": "flow", "action": "start"}),
+            true,
+        );
+        assert!(!stage.clock.paused);
+        // Back to the start: not paused either.
+        ask(&mut stage, &doc, json!({"op": "pause"}), true);
+        ask(&mut stage, &doc, json!({"op": "reset_run"}), true);
+        assert!(!stage.clock.paused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn edits_are_undone_and_redone() {
         let dir = std::env::temp_dir().join(format!("kynex-undo-{}", std::process::id()));

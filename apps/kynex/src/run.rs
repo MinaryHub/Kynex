@@ -27,10 +27,18 @@ use crate::program::{Action, Cond, Point, Program, Step};
 const FRAME: Duration = Duration::from_millis(33);
 
 /// The simulation's clock: seconds, running at `speed` times real time.
+///
+/// It stands still while paused, and while nothing runs by it: every
+/// deadline of the simulation — a cycle's end, a part's arrival, a
+/// breakdown's repair — is a time on this clock, so a clock that stood
+/// still finds each where it was left, and a run paused for an hour, or a
+/// page left alone, goes on as if it had never stopped.
 #[derive(Debug)]
 pub struct Clock {
     pub speed: f64,
     pub time: f64,
+    /// Held by the user: what was running is kept as it was, to go on.
+    pub paused: bool,
     last: Option<Instant>,
 }
 
@@ -39,23 +47,28 @@ impl Default for Clock {
         Self {
             speed: 1.0,
             time: 0.0,
+            paused: false,
             last: None,
         }
     }
 }
 
 impl Clock {
-    /// Moves the clock on to real time `now`, and returns where it is.
-    pub fn advance(&mut self, now: Instant) -> f64 {
+    /// Moves the clock on to real time `now`, and returns where it is:
+    /// by the real time since it was last moved, if anything ran by it
+    /// meanwhile (`kept`) and it is not paused; else it stays where it is.
+    pub fn advance(&mut self, now: Instant, kept: bool) -> f64 {
         if let Some(last) = self.last {
-            self.time += now.duration_since(last).as_secs_f64() * self.speed;
+            if kept && !self.paused {
+                self.time += now.duration_since(last).as_secs_f64() * self.speed;
+            }
         }
         self.last = Some(now);
         self.time
     }
 
     pub fn to_json(&self) -> Value {
-        json!({ "speed": self.speed, "time": self.time })
+        json!({ "speed": self.speed, "time": self.time, "paused": self.paused })
     }
 }
 

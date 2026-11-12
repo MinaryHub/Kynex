@@ -106,7 +106,7 @@ impl Keys {
 
     /// AES-256-CBC of `data`, whole blocks of it, in place.
     pub fn encrypt(&self, data: &mut [u8]) -> Result<(), String> {
-        if data.len() % 16 != 0 {
+        if !data.len().is_multiple_of(16) {
             return Err("OPC UA: 암호화할 길이가 블록 단위가 아닙니다".into());
         }
         let mut c = Aes256CbcEnc::new(&self.encrypt.into(), &self.iv.into());
@@ -117,7 +117,7 @@ impl Keys {
     }
 
     pub fn decrypt(&self, data: &mut [u8]) -> Result<(), String> {
-        if data.len() % 16 != 0 {
+        if !data.len().is_multiple_of(16) {
             return Err("OPC UA: 암호문 길이가 블록 단위가 아닙니다".into());
         }
         let mut c = Aes256CbcDec::new(&self.encrypt.into(), &self.iv.into());
@@ -324,7 +324,7 @@ impl Identity {
     /// RSA-OAEP (SHA-1) undone on `data`, block by block.
     pub fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let block = self.key_bytes();
-        if data.len() % block != 0 {
+        if !data.len().is_multiple_of(block) {
             return Err("OPC UA: 암호문 길이가 키 블록 단위가 아닙니다".into());
         }
         let mut out = Vec::with_capacity(data.len());

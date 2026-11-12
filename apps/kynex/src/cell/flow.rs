@@ -287,6 +287,8 @@ impl Settings {
     }
 }
 
+/// Each piece's dock: where a carrier stops at it, by the piece.
+type DockPoints = BTreeMap<u64, (DVec3, DVec3, DVec3)>;
 impl Cell {
     /// The next random number of the flow, uniform in (0, 1): SplitMix64,
     /// the same sequence for one seed.
@@ -365,7 +367,8 @@ impl Cell {
                 self.jobs.clear();
                 // The AMRs, people and turntables back where they were
                 // placed, charged, holding no stop.
-                self.sent_home.extend(std::mem::take(&mut self.rovers).into_keys());
+                self.sent_home
+                    .extend(std::mem::take(&mut self.rovers).into_keys());
                 self.holds.clear();
                 self.blocked.clear();
                 self.energy.clear();
@@ -421,11 +424,17 @@ impl Cell {
         if bag {
             if self.bags.get(&object).is_none_or(|b| b.is_empty()) {
                 // As many of each as its share of the least, shuffled.
-                let least = mix.iter().copied().filter(|w| *w > 0.0).fold(f64::INFINITY, f64::min);
+                let least = mix
+                    .iter()
+                    .copied()
+                    .filter(|w| *w > 0.0)
+                    .fold(f64::INFINITY, f64::min);
                 let mut fill: Vec<u8> = mix
                     .iter()
                     .enumerate()
-                    .flat_map(|(k, w)| std::iter::repeat_n(k as u8, (w / least).round().min(100.0) as usize))
+                    .flat_map(|(k, w)| {
+                        std::iter::repeat_n(k as u8, (w / least).round().min(100.0) as usize)
+                    })
                     .collect();
                 for i in (1..fill.len()).rev() {
                     let j = ((self.uniform() * (i + 1) as f64) as usize).min(i);
@@ -573,10 +582,7 @@ impl Cell {
         &mut self,
         doc: &Document,
         flow: &[Component],
-    ) -> (
-        BTreeMap<u64, (DVec3, DVec3, DVec3)>,
-        BTreeMap<u64, Vec<DVec3>>,
-    ) {
+    ) -> (DockPoints, BTreeMap<u64, Vec<DVec3>>) {
         // The pieces, and the equipment each stands for.
         let key: Vec<u64> = flow
             .iter()

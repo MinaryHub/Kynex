@@ -253,6 +253,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   background: #aab2be;
 }
 .run-badge.on .run-state { background: #1f8f55; }
+.run-badge.held .run-state { background: #8a6a1f; }
+.run-badge.held .run-dot {
+  width: 10px;
+  border-radius: 0;
+  background: none;
+  border-left: 3px solid #ffe2a3;
+  border-right: 3px solid #ffe2a3;
+}
 .run-badge.on .run-dot {
   border-radius: 50%;
   background: #b9ffd8;

@@ -29,6 +29,8 @@ export default {
   // ---- run badge
   '실행 상태': 'Run state',
   '실행/정지 (스페이스)': 'Run/Stop (Space)',
+  '실행/일시정지 (스페이스)': 'Run/Pause (Space)',
+  '일시정지': 'Paused',
   '정지': 'Stop',
   '느리게 (−)': 'Slower (−)',
   '배속': 'Speed',

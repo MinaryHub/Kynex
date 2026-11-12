@@ -907,13 +907,10 @@ impl Posing {
                     return Err("관절이 다른 로봇에서 복사한 지점이라 붙여 넣을 수 없습니다".into());
                 }
                 let n = pasted.steps.len();
-                let mut at = req["after"].as_u64().map_or(program.steps.len(), |i| {
-                    (i as usize + 1).min(program.steps.len())
+                let at = req["after"].as_u64().map_or(program.steps.len(), |i| {
+                    (i as usize).saturating_add(1).min(program.steps.len())
                 });
-                for step in pasted.steps {
-                    program.steps.insert(at, step);
-                    at += 1;
-                }
+                program.steps.splice(at..at, pasted.steps);
                 self.programs_changed = true;
                 return Ok(json!({ "ok": true, "pasted": n }));
             }

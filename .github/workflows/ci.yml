@@ -35,3 +35,10 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      # Each demo run an hour and held to what it made when last measured
+      # (demos::tests::KPIS): a change that makes one make much less, or
+      # stop, fails here — and is not released. Once, not on every system.
+      - name: Demo KPIs
+        if: runner.os == 'Linux'
+        run: cargo test -p kynex --lib demo_kpis -- --ignored

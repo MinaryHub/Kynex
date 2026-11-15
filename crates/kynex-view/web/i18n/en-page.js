@@ -370,7 +370,8 @@ export default {
   '모델': 'Model',
   'API 키': 'API key',
   '키를 붙여 넣으세요': 'Paste your key',
-  '키는 이 브라우저에만 저장되고, 대화는 이 페이지에서 바로 그 회사로 보냅니다.': 'The key is kept in this browser only; the conversation goes from this page straight to the provider.',
   '예: 공정 흐름을 시작하고 병목을 알려줘 (Enter: 보내기, Shift+Enter: 줄바꿈)': 'e.g. Start the process flow and tell me the bottleneck (Enter: send, Shift+Enter: new line)',
   '보내기': 'Send',
+  '키를 보이거나 가립니다': 'Show or hide the key',
+  '키는 이 컴퓨터의 KYNEX 설정에 저장되고(프로젝트 파일에는 들어가지 않습니다), 대화는 이 페이지에서 바로 그 회사로 보냅니다. 키를 지우려면 칸을 비우고 저장하세요.': "The key is kept in KYNEX's settings on this computer (never in a project file); the conversation goes from this page straight to the provider. To remove a key, clear the field and save.",
 };

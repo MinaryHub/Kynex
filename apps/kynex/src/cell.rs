@@ -514,6 +514,10 @@ pub struct Props {
     pub speed: f64,
     pub feed: f64,
     pub drain: f64,
+    /// Conveyor: run the other way (1) than its links would have it — or,
+    /// with no links, than its own X: for where they do not say, a belt
+    /// fed and emptied from the same side.
+    pub reverse: u32,
     /// Door: whether it swings (1) about its axis rather than slides (0)
     /// along it; the axis, its own X, Y or Z (0, 1, 2); how far it slides,
     /// metres (0: aside by its own width, along its machine's X); how far
@@ -630,6 +634,7 @@ impl Default for Props {
             speed: 0.2,
             feed: 0.0,
             drain: 0.0,
+            reverse: 0,
             swing: 0.0,
             axis: 0,
             travel: 0.0,
@@ -744,6 +749,9 @@ impl Props {
             .as_f64()
             .map_or(self.speed, |x| x.clamp(0.01, 3.0));
         self.feed = time("feed", self.feed);
+        self.reverse = v["reverse"]
+            .as_f64()
+            .map_or(self.reverse, |x| if x > 0.5 { 1 } else { 0 });
         self.drain = v["drain"]
             .as_f64()
             .map_or(self.drain, |x| if x > 0.5 { 1.0 } else { 0.0 });
@@ -891,6 +899,7 @@ impl Props {
         });
         // Apart: one map of them all is more than `json!` takes at once.
         v["pm_every"] = json!(self.pm_every);
+        v["reverse"] = json!(self.reverse);
         v["gather"] = json!(self.gather);
         v["pm_time"] = json!(self.pm_time);
         v
@@ -2777,16 +2786,27 @@ impl Cell {
         &self.parts
     }
 
-    /// The parts being held: left out of the collision check, as the
-    /// gripper's own.
-    pub fn held(&self) -> HashSet<u64> {
+    /// The parts a robot's contact with is its work, not a collision: those
+    /// held in a gripper, those a station is working on — a body under its
+    /// welding robots, a sheet on a glass robot's fork — and those gliding
+    /// from one place to the next, which is no path a thing really takes.
+    pub fn not_obstacles(&self) -> HashSet<u64> {
+        let worked: HashSet<u64> = self
+            .stations
+            .values()
+            .filter_map(|s| s.working.as_ref())
+            .flat_map(|(_, parts)| parts.iter().copied())
+            .collect();
         self.parts
             .iter()
-            .filter(|p| p.held.is_some())
-            // A part drawn as a look, its pieces with it: they are what
-            // meshes it has.
+            .filter(|p| {
+                p.held.is_some()
+                    || worked.contains(&p.uid)
+                    || matches!(p.flow, Some(flow::Place::Moving { .. }))
+            })
             .flat_map(|p| {
-                let pieces = (p.look > 0).then(|| (0..LOOK_PIECES).map(move |k| look_piece(p.uid, k)));
+                let pieces =
+                    (p.look > 0).then(|| (0..LOOK_PIECES).map(move |k| look_piece(p.uid, k)));
                 std::iter::once(p.uid).chain(pieces.into_iter().flatten())
             })
             .collect()
@@ -4663,7 +4683,8 @@ impl Cell {
                     .filter_map(|(o, _)| where_is(*o))
                     .map(lean)
                     .sum();
-                to - from > 1e-6
+                // Or the other way, if it is set to.
+                (to - from > 1e-6) != (b.props.reverse == 1)
             })
             .collect();
         for (b, turn) in belts.iter_mut().zip(turn) {
@@ -5992,7 +6013,7 @@ mod tests {
             json!({"op": "grip", "gripper": grip.to_string()}),
         );
         assert_eq!(a["ok"], true, "{a}");
-        assert!(cell.held().len() == 1);
+        assert!(cell.not_obstacles().len() == 1);
 
         // Carried: it follows the grip point in the scene shown.
         let seat = cell
@@ -6023,7 +6044,7 @@ mod tests {
             json!({"op": "release", "gripper": grip.to_string()}),
         );
         assert_eq!(a["ok"], true, "{a}");
-        assert!(cell.held().is_empty());
+        assert!(cell.not_obstacles().is_empty());
         let part = cell.parts().iter().find(|p| p.uid == uid).unwrap();
         assert!((part.world.translation - seat).length() < 1e-9);
         // And the place it left on the pallet is free again.

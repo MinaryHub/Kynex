@@ -796,7 +796,10 @@ function connect() {
   });
   source.addEventListener('programs', (e) => robotPanel.setPrograms(JSON.parse(e.data)));
   source.addEventListener('contacts', (e) => setContacts(JSON.parse(e.data)));
-  source.addEventListener('library', (e) => libraryPanel.setLibrary(JSON.parse(e.data)));
+  source.addEventListener('library', (e) => {
+    libraryPanel.setLibrary(JSON.parse(e.data));
+    chatPanel.notify();
+  });
   source.addEventListener('templates', (e) => libraryPanel.setThumbnails(JSON.parse(e.data)));
   source.addEventListener('timeline', (e) => timelinePanel.setTimeline(JSON.parse(e.data)));
   source.addEventListener('scenarios', (e) => timelinePanel.setScenarios(JSON.parse(e.data)));
@@ -810,6 +813,7 @@ function connect() {
     timelinePanel.setFlow(cell);
     robotPanel.setCell(cell);
     plcPanel.setCell(cell);
+    chatPanel.notify();
     freshStart();
   });
   // A page served by one KYNEX that reconnects to a newer one would read
@@ -1188,6 +1192,8 @@ const chatPanel = new ChatPanel({
   library: () => libraryPanel.library,
   cell: () => cellPanel.cell,
   project: () => projectPanel.state?.name ?? null,
+  paused: () => paused(),
+  speed: () => robotPanel.clock?.speed ?? 1,
   toast,
 });
 

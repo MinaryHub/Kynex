@@ -80,6 +80,7 @@ export default {
   '속도': 'Speed',
   '공급 간격': 'Feed interval',
   '끝에서 치움': 'Clear at end',
+  '방향 반전': 'Reverse direction',
   '아니오': 'No',
   '예': 'Yes',
   '주행 속도': 'Travel speed',

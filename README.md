@@ -163,7 +163,8 @@ is marked **로컬 자세** and keeps that pose while the session moves on.
   pause — nor does a page left alone run time on when next asked. A page
   opened or reloaded pauses what was running, at 1×. The toolbar's **처음으로** (or Home) puts everything
   back as it was before the run: programs and the flow stopped, every product taken away, the
-  robots posed as they stood when the run started.
+  robots posed as they stood when the run started, AMRs and people where they were placed, the
+  clock at 1×.
 - **Smooth motion**: while a program or the flow runs, KYNEX tells poses
   some twenty times a second, not evenly, each stamped with when it was
   made. The page keeps each moving part's last few poses on that clock and
@@ -553,19 +554,25 @@ them is clicked, or on Esc.
 **AI 채팅.** The right panel's second tab is a chat with Claude, GPT or Gemini that works the
 simulation. Pick the provider, the model (Claude Opus 5.5, GPT-5 and
 Gemini 2.5 Pro to start with; any other can be typed in) and paste an API
-key. The key is kept in that browser only (localStorage), and the page
-calls the provider itself (`web/chat.js`). The model works through tools
+key, then press 저장. The key is kept by KYNEX with the user's settings
+(`ai.json` beside `recent.json`, for the user alone to read; never in a
+project file), so it is there in whichever window or port the page opens;
+the panel shows only its last four characters. The page calls the provider
+itself (`web/chat.js`). The model works through tools
 that are the page's own requests to KYNEX:
 - read the scene, the flow and its figures (`get_state`) and the library's templates;
 - place, move, resize and remove equipment;
 - set a flow component's role and props, link components;
-- start, stop or reset the run, set its speed, and wait while it runs;
+- start, pause, resume, stop or reset the run, set its speed, and wait
+  while it runs;
 - send any other request (`kynex_request`).
 
 What it changes can be undone as any change can. Each tool call shows in
 the conversation, a failed one in red, and 중지 stops it between calls.
-With Claude, a request its safeguards decline goes to a fallback model
-(`fallbacks: "default"`).
+After a change it waits for KYNEX to tell the page of it before it reads
+the state again. With Claude, a request its safeguards decline goes to a
+fallback model (`fallbacks: "default"`), and the conversation so far is
+read from the prompt cache on each round.
 
 **예제 (demos).** Under the projects, the panel lists the demo projects
 that come with KYNEX, built into it (`apps/kynex/demos`, `demos.rs`), so
@@ -574,8 +581,10 @@ every build and installer has them: 성능 데모 공장, 공장 내부 전시, 
 공장 — each with its
 process flow and its scenarios to compare. One clicked is copied into the projects
 folder under its name and opened; what is changed is saved to the copy.
-Opened again, it is another copy (`자동차 공장 2`, …), never over a project
-already there, so the demo can always be had as it came. A test runs each
+Opened again, a copy still as the demo came — run, perhaps, but nothing
+changed in it — is opened again; one changed is left alone and another
+copy made (`자동차 공장 2`, …), never over a project already there, so the
+demo can always be had as it came. A test runs each
 demo's first scenario, so a demo the program no longer reads is caught;
 to change a demo, open its copy, change it, and copy the file over the
 one in `apps/kynex/demos`.
@@ -1024,7 +1033,10 @@ not change the session's scene.
 - **Gripping**: the robot card lists its grip points with **잡기** and
   **놓기**, and the TCP can be any of them. **잡기** takes the part within
   20 mm of the grip point. The part then moves with the gripper and is not
-  counted as a collision. **놓기** sets the part into a free pallet place or
+  counted as a collision; nor is a part a station is working on — a body
+  under its welding robots — or one gliding from one place to the next. A
+  flow part a robot does run into is named for what it is (차체, 블럭), not
+  for the piece it is drawn with. **놓기** sets the part into a free pallet place or
   chuck within 30 mm, or leaves it where it is.
 - **CNC machines run**: in the inspector of a CNC machine:
   - **문 열기/닫기** slides its door aside over the door time.
@@ -1047,6 +1059,9 @@ not change the session's scene.
     start, if there is room (0: none).
   - 끝에서 치움: a part reaching the end is taken away and counted, as at
     an outfeed (1: yes).
+  - 방향 반전: a belt runs the way its links do; set, it runs the other
+    way, for where the links alone get it wrong — fed and emptied from
+    the same side.
 
   A program waits for a part with the conveyor's signal 부품 도착, its
   sensor at the end. A scenario comparison counts the parts taken away at
@@ -1288,7 +1303,8 @@ not change the session's scene.
     change it. Opening or reloading the page stops the run and sets 1×.
   - A buffer's **꺼내는 순서**: first in first out, or last in first out.
     Library **랙 창고**: a pallet rack whose parts sit on its shelves,
-    ten to a shelf, the lowest first. Its **랙 형태: 슬라이드 랙** has roller
+    ten to a shelf, the lowest first (more, in closer rows, if it holds
+    more than ten a shelf: each part still in a place of its own). Its **랙 형태: 슬라이드 랙** has roller
     lanes front to back, guides between them and a stop along the front,
     its lowest shelf at a waist's height (0.6 m) and the others 0.7 m apart.
     A rack's **폭** sets how wide it is (1.2 m to start with). A slide rack's
@@ -1807,6 +1823,27 @@ WiX 5 (`dotnet tool install --global wix --version 5.0.2`; WiX 6 and later
 come with a maintenance-fee licence). The installers are not code-signed:
 Windows SmartScreen warns about an unsigned setup.exe until a code-signing
 certificate signs it.
+
+### Android
+
+KYNEX runs on an Android phone or tablet (Android 8 and on, arm64) as the
+same program the desktop runs. The app (`android/`) carries KYNEX built
+for the device, starts it, and shows its viewer in a WebView from
+127.0.0.1: nothing of KYNEX is written again for it.
+
+    tools/android.sh            # → android/app/build/outputs/apk/release/app-release.apk
+    tools/android.sh install    # and installed on the device or emulator connected
+
+It needs the Android SDK with an NDK, a JDK 17 and the Rust target
+(`rustup target add aarch64-linux-android`); the script says what it
+misses. The APK is signed as a debug build is, to install by hand, unless
+a key is given (`KYNEX_KEYSTORE`, `KYNEX_KEYSTORE_PASSWORD`,
+`KYNEX_KEY_ALIAS`), as publishing asks. Projects are kept in the app's own
+folder, `Android/data/kr.smic.kynex/files/projects`, where a file manager
+or a computer reaches them; the AI chat's keys in the app's private
+settings. KYNEX ends when the app is closed, and saves the project as it
+goes. The page is the desktop's: on a phone the side panels are drawers,
+and it is easier used on a tablet or turned on its side.
 
 ## Benchmark
 

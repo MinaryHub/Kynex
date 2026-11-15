@@ -4,8 +4,10 @@
 // the flow — each a request to KYNEX (`/robot`) as the page's own panels
 // make them, so that what it does can be undone as theirs can.
 //
-// The page calls the provider itself, with the user's own key, kept in this
-// browser only (localStorage); nothing goes through KYNEX but the tools.
+// The page calls the provider itself, with the user's own key. The key,
+// the provider and each one's model are kept by KYNEX with the user's
+// settings (`ai_settings`: a file of the user's own, not the project), so
+// they are there whichever window or port the page is opened in.
 
 import { tFor } from './i18n.js';
 
@@ -133,10 +135,11 @@ const TOOLS = [
   },
   {
     name: 'run_flow',
-    description: 'Starts the run, stops it where it is, or takes it back to the start (all parts taken away).',
+    description:
+      'Starts the run, pauses it (the clock stands still, everything as it is), resumes it, stops the flow, or takes it back to the start (all parts taken away, speed 1×).',
     parameters: {
       type: 'object',
-      properties: { action: { type: 'string', description: 'start, stop or reset.' } },
+      properties: { action: { type: 'string', description: 'start, pause, resume, stop or reset.' } },
       required: ['action'],
     },
   },
@@ -170,18 +173,40 @@ const TOOLS = [
   },
 ];
 
+// The settings as KYNEX keeps them: `{provider, claude: {key, model}, …}`.
+// Read once as the page opens; each change sent back.
 const store = {
-  get(key, fallback) {
+  kept: {},
+  async load() {
     try {
-      return localStorage.getItem(`kynex.chat.${key}`) ?? fallback;
-    } catch {
-      return fallback;
-    }
-  },
-  set(key, value) {
-    try {
-      localStorage.setItem(`kynex.chat.${key}`, value);
+      const a = await post({ op: 'ai_settings' });
+      if (a.ok) this.kept = a.settings ?? {};
     } catch {}
+    // Keys this browser kept before KYNEX did: handed over, once.
+    const old = {};
+    try {
+      for (const p of Object.keys(PROVIDERS)) {
+        const key = localStorage.getItem(`kynex.chat.${p}.key`);
+        if (key && !this.kept[p]?.key) old[p] = { key, model: localStorage.getItem(`kynex.chat.${p}.model`) ?? '' };
+        localStorage.removeItem(`kynex.chat.${p}.key`);
+      }
+    } catch {}
+    if (Object.keys(old).length) await this.set(old);
+  },
+  get(key, fallback) {
+    const [p, field] = key.split('.');
+    const v = field ? this.kept[p]?.[field] : this.kept[p];
+    return v == null || v === '' ? fallback : v;
+  },
+  // `set`: `{provider}` or `{<provider>: {key, model}}`. Returns whether kept.
+  async set(set) {
+    try {
+      const a = await post({ op: 'ai_settings', set });
+      if (a.ok) this.kept = a.settings ?? this.kept;
+      return a;
+    } catch (err) {
+      return { ok: false, error: String(err.message ?? err) };
+    }
   },
 };
 
@@ -212,11 +237,17 @@ export class ChatPanel {
     this.log = this.el.querySelector('.chat-log');
     this.input = this.el.querySelector('.chat-input');
     this.sendBtn = this.el.querySelector('[data-chat="send"]');
-    this.provider = store.get('provider', 'claude');
+    this.provider = 'claude';
     this.history = [];
     this.busy = false;
     this.stopped = false;
+    // Those waiting for KYNEX to tell the page of a change (`settle`).
+    this.waiting = [];
     this.renderSettings();
+    store.load().then(() => {
+      this.provider = store.get('provider', 'claude');
+      this.renderSettings();
+    });
     this.el.addEventListener('click', (e) => this.onClick(e));
     this.el.addEventListener('change', (e) => this.onChange(e));
     this.input.addEventListener('keydown', (e) => {
@@ -232,29 +263,45 @@ export class ChatPanel {
   renderSettings() {
     const p = PROVIDERS[this.provider];
     const box = this.el.querySelector('.chat-settings');
+    const key = store.get(`${this.provider}.key`, '');
     box.querySelector('[data-chat="provider"]').value = this.provider;
     box.querySelector('[data-chat="model"]').value = store.get(`${this.provider}.model`, p.model);
-    box.querySelector('[data-chat="key"]').value = store.get(`${this.provider}.key`, '');
+    box.querySelector('[data-chat="key"]').value = key;
     const link = box.querySelector('[data-chat="keys"]');
     link.href = p.keys;
     link.textContent = t('{name} API 키 발급', { name: p.name });
     this.el.querySelector('.chat-who').textContent = `${p.name} · ${store.get(`${this.provider}.model`, p.model)}`;
-    if (!store.get(`${this.provider}.key`, '')) box.open = true;
+    // Whether a key is kept, by its last four: not the key itself.
+    const state = box.querySelector('.chat-key-state');
+    state.textContent = key ? t('저장된 키: …{tail}', { tail: key.slice(-4) }) : t('아직 키가 없습니다. 아래에 넣고 저장을 누르세요');
+    state.classList.toggle('missing', !key);
+    if (!key) box.open = true;
+  }
+
+  // The key and model typed, kept by KYNEX.
+  async saveKey() {
+    const box = this.el.querySelector('.chat-settings');
+    const key = box.querySelector('[data-chat="key"]').value.trim();
+    const model = box.querySelector('[data-chat="model"]').value.trim() || PROVIDERS[this.provider].model;
+    const a = await store.set({ provider: this.provider, [this.provider]: { key, model } });
+    this.renderSettings();
+    this.ctx.toast(a.ok ? (key ? t('API 키를 저장했습니다') : t('API 키를 지웠습니다')) : t('저장하지 못했습니다: {error}', { error: a.error ?? '' }));
+    if (a.ok && key) {
+      box.open = false;
+      this.input.focus();
+    }
   }
 
   onChange(e) {
     const what = e.target.dataset.chat;
     if (what === 'provider') {
       this.provider = e.target.value;
-      store.set('provider', this.provider);
+      store.set({ provider: this.provider });
       // Another provider's turns are not this one's to read on.
       this.clear();
       this.renderSettings();
     } else if (what === 'model') {
-      store.set(`${this.provider}.model`, e.target.value.trim() || PROVIDERS[this.provider].model);
-      this.renderSettings();
-    } else if (what === 'key') {
-      store.set(`${this.provider}.key`, e.target.value.trim());
+      store.set({ [this.provider]: { model: e.target.value.trim() || PROVIDERS[this.provider].model } }).then(() => this.renderSettings());
     }
   }
 
@@ -262,6 +309,11 @@ export class ChatPanel {
     const what = e.target.closest('[data-chat]')?.dataset.chat;
     if (what === 'send') this.busy ? (this.stopped = true) : this.send();
     else if (what === 'clear') this.clear();
+    else if (what === 'save-key') this.saveKey();
+    else if (what === 'show-key') {
+      const input = this.el.querySelector('[data-chat="key"]');
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }
   }
 
   clear() {
@@ -291,8 +343,10 @@ export class ChatPanel {
     if (!text || this.busy) return;
     const key = store.get(`${this.provider}.key`, '');
     if (!key) {
-      this.el.querySelector('.chat-settings').open = true;
-      return this.ctx.toast(t('API 키를 먼저 넣으세요'));
+      const box = this.el.querySelector('.chat-settings');
+      box.open = true;
+      box.querySelector('[data-chat="key"]').focus();
+      return this.ctx.toast(t('API 키를 먼저 넣고 저장하세요'));
     }
     this.input.value = '';
     this.add('user', text);
@@ -397,9 +451,17 @@ export class ChatPanel {
     return item?.name ?? c.name;
   }
 
-  // After a change, the page's state once KYNEX has told it.
+  // KYNEX has told the page of the scene or the cell: those waiting go on.
+  notify() {
+    for (const done of this.waiting.splice(0)) done();
+  }
+
+  // After a change, the page's state once KYNEX has told it of it — or
+  // after a moment, if it has nothing to tell.
   async settle() {
-    await sleep(450);
+    await Promise.race([new Promise((done) => this.waiting.push(done)), sleep(1500)]);
+    // What comes with it — the library, then the cell — a moment more.
+    await sleep(120);
   }
 
   async run(name, a) {
@@ -466,8 +528,13 @@ export class ChatPanel {
         return r;
       }
       case 'run_flow': {
-        const r =
-          a.action === 'reset' ? await post({ op: 'reset_run' }) : await post({ op: 'flow', action: a.action === 'stop' ? 'stop' : 'start' });
+        const op = {
+          reset: { op: 'reset_run' },
+          pause: { op: 'pause' },
+          resume: { op: 'resume' },
+          stop: { op: 'flow', action: 'stop' },
+        }[a.action] ?? { op: 'flow', action: 'start' };
+        const r = await post(op);
         await this.settle();
         return r;
       }
@@ -499,7 +566,9 @@ export class ChatPanel {
       ok: true,
       project: this.ctx.project?.() ?? null,
       flow: {
-        running: !!f.on,
+        running: !!f.on && !this.ctx.paused?.(),
+        paused: !!f.on && !!this.ctx.paused?.(),
+        speed: this.ctx.speed?.() ?? null,
         elapsed_s: f.elapsed != null ? Math.round(f.elapsed) : null,
         parts_out: f.sunk,
         per_hour: f.per_hour != null ? Math.round(f.per_hour * 10) / 10 : null,
@@ -606,6 +675,9 @@ async function askClaude(key, model, history) {
     system: SYSTEM,
     tools: TOOLS.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })),
     messages,
+    // The conversation so far read from the cache on each round: a long
+    // one, its tool results with it, is not paid for anew every time.
+    cache_control: { type: 'ephemeral' },
   };
   if (fallback) body.fallbacks = 'default';
   const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });

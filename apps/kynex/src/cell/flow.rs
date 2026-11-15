@@ -1696,6 +1696,12 @@ impl Cell {
             } else {
                 PITCH
             };
+            // How many it holds, for a rack's shelves to share.
+            let holds = self
+                .components
+                .iter()
+                .find(|c| c.object == *object)
+                .map_or(0, |c| c.props.capacity as usize);
             for uid in &order {
                 let k = match self.slots.get(uid) {
                     Some(&(o, k)) if o == *object => k,
@@ -1707,15 +1713,29 @@ impl Cell {
                     }
                 };
                 placed.insert(*uid);
-                // On a rack: ten to a shelf, the lowest first; else rows of
-                // five across the top, from its middle.
-                let (level, i) = match shelves {
-                    Some(tops) => (Some(tops[(k / 10).min(tops.len() - 1)]), k % 10),
-                    None => (None, k),
+                // On a rack: ten to a shelf, the lowest first — more, in
+                // closer rows, if it holds more than ten a shelf, each still
+                // in a place of its own; else rows of five across the top,
+                // from its middle.
+                let (level, i, rows) = match shelves {
+                    Some(tops) => {
+                        let per = (holds.div_ceil(tops.len())).max(10);
+                        (
+                            Some(tops[(k / per).min(tops.len() - 1)]),
+                            k % per,
+                            per.div_ceil(5),
+                        )
+                    }
+                    None => (None, k, 2),
                 };
                 let (col, row) = ((i % 5) as f64 - 2.0, (i / 5) as f64);
                 let base = level.unwrap_or(top);
-                spots.insert(*uid, base + along * col * pitch + across * row * pitch);
+                let deep = if rows > 2 {
+                    pitch / (rows - 1) as f64
+                } else {
+                    pitch
+                };
+                spots.insert(*uid, base + along * col * pitch + across * row * deep);
             }
         }
         // A part no longer set out on a table gives up its place.

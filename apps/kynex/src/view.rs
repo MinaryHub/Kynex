@@ -236,7 +236,7 @@ pub fn run_with(
             let shown = owed.take();
             let shown = shown.as_ref().unwrap_or(link.document());
             let started = Instant::now();
-            let contacts = stage.collider.contacts(shown, &stage.cell.held());
+            let contacts = stage.collider.contacts(shown, &stage.cell.not_obstacles());
             server.state("contacts", &collide::contacts_json(shown, &contacts));
             checks.done(started.elapsed());
         }
@@ -588,6 +588,24 @@ impl Stage {
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
                 answer
+            } else if op == "ai_settings" {
+                // The AI chat's provider, models and keys: kept for the
+                // user (`paths::ai_settings`), told back as they now are.
+                // `set` changes what it names, the rest as it was; a key
+                // set to "" is forgotten.
+                let req: Value = serde_json::from_str(&request.body).unwrap_or(Value::Null);
+                let mut kept = crate::paths::ai_settings();
+                let answer = match req["set"].as_object() {
+                    Some(set) => {
+                        merge_settings(&mut kept, set);
+                        match crate::paths::keep_ai_settings(&kept) {
+                            Ok(()) => serde_json::json!({ "ok": true, "settings": kept }),
+                            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+                        }
+                    }
+                    None => serde_json::json!({ "ok": true, "settings": kept }),
+                };
+                answer.to_string()
             } else if op == "save_custom" {
                 // An object of the scene, and what is below it, kept as
                 // equipment of the user's own, its roles with it.
@@ -1073,7 +1091,9 @@ impl Stage {
                 Ok(())
             }
             "reset_run" => {
+                // A fresh start: not paused, at 1×.
                 self.clock.paused = false;
+                self.clock.speed = 1.0;
                 self.runners.clear();
                 self.carrying = Default::default();
                 let scene = self.base.as_ref().unwrap_or(doc);
@@ -1503,7 +1523,13 @@ impl Stage {
                 .and_then(|demo| crate::demos::copy(demo, &dir))
                 .and_then(|file| {
                     let name = file.file_stem().map(|s| s.to_string_lossy().to_string());
+                    // A copy opened again while another's work was shown
+                    // in it is the demo's no more.
+                    let again = file == self.file;
                     self.switch(doc, &file, keep)?;
+                    if !again {
+                        crate::demos::opened(&file);
+                    }
                     Ok(serde_json::json!({ "name": name }))
                 }),
             "new" => named().and_then(|file| {
@@ -1894,7 +1920,7 @@ fn offline(
             } else {
                 server.update(shown, Some(&more));
             }
-            let contacts = stage.collider.contacts(shown, &stage.cell.held());
+            let contacts = stage.collider.contacts(shown, &stage.cell.not_obstacles());
             server.state("contacts", &collide::contacts_json(shown, &contacts));
         }
         if any_asked || touched || reset || stage.ticking() {
@@ -2110,6 +2136,40 @@ pub(crate) fn open_browser(url: &str) {
     };
     if result.is_err() {
         println!("브라우저를 열지 못했습니다. 주소를 직접 여세요: {url}");
+    }
+}
+
+/// `set` merged into the AI chat's settings `kept`: each provider's
+/// fields over what it had, text only and not over-long; an empty one
+/// taken away.
+fn merge_settings(kept: &mut Value, set: &serde_json::Map<String, Value>) {
+    for (k, v) in set {
+        match v {
+            Value::Object(fields) if ["claude", "openai", "gemini"].contains(&k.as_str()) => {
+                if !kept[k].is_object() {
+                    kept[k] = serde_json::json!({});
+                }
+                for (f, x) in fields {
+                    let Some(text) = x.as_str().filter(|t| t.len() <= 400) else {
+                        continue;
+                    };
+                    if !["key", "model"].contains(&f.as_str()) {
+                        continue;
+                    }
+                    if text.trim().is_empty() {
+                        kept[k].as_object_mut().unwrap().remove(f);
+                    } else {
+                        kept[k][f] = Value::String(text.trim().to_string());
+                    }
+                }
+            }
+            Value::String(p)
+                if k == "provider" && ["claude", "openai", "gemini"].contains(&p.as_str()) =>
+            {
+                kept["provider"] = v.clone();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -2549,12 +2609,41 @@ mod tests {
         assert!(stage.take_reset());
         assert!(!stage.library.items().is_empty(), "its equipment");
         assert_eq!(stage.file, dir.join("LCD 공장.json"));
+        // Opened again untouched: the same copy, not another.
         let again = ask(&mut stage, &doc, project("demo", "LCD 공장"), true);
-        assert_eq!(again["name"], "LCD 공장 2", "{again}");
+        assert_eq!(again["name"], "LCD 공장", "{again}");
         assert!(dir.join("LCD 공장.json").is_file());
+        assert!(!dir.join("LCD 공장 2.json").exists());
         let missing = ask(&mut stage, &doc, project("demo", "없는 예제"), true);
         assert_eq!(missing["ok"], false, "{missing}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The AI chat's settings take a provider's key and model, trimmed; an
+    /// empty key forgets it; anything else asked is left out.
+    #[test]
+    fn ai_settings_keep_only_keys_and_models() {
+        let mut kept = json!({"openai": {"key": "old", "model": "gpt-5"}});
+        let set = json!({
+            "provider": "gemini",
+            "claude": {"key": "  sk-1  ", "model": "claude-opus-5-5", "other": "x"},
+            "openai": {"key": ""},
+            "elsewhere": {"key": "y"},
+            "gemini": {"key": 5},
+        });
+        merge_settings(&mut kept, set.as_object().unwrap());
+        assert_eq!(
+            kept,
+            json!({
+                "provider": "gemini",
+                "claude": {"key": "sk-1", "model": "claude-opus-5-5"},
+                "openai": {"model": "gpt-5"},
+                "gemini": {},
+            })
+        );
+        let wrong = json!({"provider": "nobody"});
+        merge_settings(&mut kept, wrong.as_object().unwrap());
+        assert_eq!(kept["provider"], "gemini");
     }
 
     #[test]

@@ -319,7 +319,7 @@ fn a_machine_tending_program_loads_waits_for_the_cycle_and_unloads() {
     // Nothing held in a gripper ran into anything along the way: the
     // check sees the robot where it stopped, clear of the cell.
     let shown = c.posing.shown(&c.doc).unwrap();
-    let contacts = Collider::default().contacts(&shown, &c.cell.held());
+    let contacts = Collider::default().contacts(&shown, &c.cell.not_obstacles());
     assert!(contacts.is_empty(), "{contacts:?}");
 }
 

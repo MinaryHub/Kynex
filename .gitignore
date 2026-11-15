@@ -12,3 +12,10 @@
 /kynex-programs.json
 /kynex-programs.json.new
 __pycache__/
+
+# Android: what Gradle builds, and KYNEX as built for the app.
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/app/src/main/jniLibs/
+/android/local.properties

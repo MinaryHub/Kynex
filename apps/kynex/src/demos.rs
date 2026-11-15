@@ -165,19 +165,96 @@ pub fn demo(name: &str) -> Option<&'static Demo> {
 }
 
 /// Demo `demo` copied into `dir` for opening: as `<name>.json`, or, that
-/// taken — the user's own work, or a copy opened before — `<name> 2.json`
-/// and on. Returns the copy's file.
+/// taken — the user's own work, or a copy opened before and changed —
+/// `<name> 2.json` and on. A copy there already that is still the demo as
+/// it came (`untouched`) is opened again, not copied once more: opening a
+/// demo time and again does not fill the folder. Returns the copy's file.
 pub fn copy(demo: &Demo, dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let file = (1..=100)
-        .map(|n| match n {
+    let names = || {
+        (1..=100).map(|n| match n {
             1 => dir.join(format!("{}.json", demo.name)),
             n => dir.join(format!("{} {n}.json", demo.name)),
         })
+    };
+    if let Some(file) = names()
+        .take_while(|f| f.exists())
+        .find(|f| untouched(demo, f))
+    {
+        return Ok(file);
+    }
+    let file = names()
         .find(|f| !f.exists())
         .ok_or_else(|| format!("{}: 사본이 너무 많습니다", demo.name))?;
     std::fs::write(&file, demo.file).map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(file)
+}
+
+/// What a project file says, as one number: the same for the same project
+/// however it is spaced.
+fn print_of(text: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    // FNV-1a over it written out the one way.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in v.to_string().bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    Some(h)
+}
+
+/// Each demo copy as KYNEX first saved it, by its file: the demo as it
+/// came, in the form this KYNEX writes. Kept with the user's settings
+/// (`demos.json`) — not while testing, which keeps them only as it runs.
+fn prints() -> &'static std::sync::Mutex<std::collections::BTreeMap<String, u64>> {
+    static KEPT: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    KEPT.get_or_init(|| {
+        let kept = (!cfg!(test))
+            .then(|| std::fs::read_to_string(crate::paths::app_dir().join("demos.json")).ok())
+            .flatten()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        std::sync::Mutex::new(kept)
+    })
+}
+
+/// The copy `file`, just opened and saved, is the demo as it came: known
+/// by what it now says, to be opened again while it still says that.
+pub fn opened(file: &Path) {
+    let Some(print) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| print_of(&t))
+    else {
+        return;
+    };
+    let mut kept = prints().lock().unwrap_or_else(|e| e.into_inner());
+    // Those whose files are gone, forgotten.
+    kept.retain(|f, _| Path::new(f).exists());
+    kept.insert(file.display().to_string(), print);
+    if !cfg!(test) {
+        let dir = crate::paths::app_dir();
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(
+                dir.join("demos.json"),
+                serde_json::to_string_pretty(&*kept).unwrap_or_default(),
+            );
+        }
+    }
+}
+
+/// Whether the copy `file` is still demo `demo` as it came: the demo's own
+/// file, or what KYNEX made of it when it first opened it — nothing changed
+/// in it since.
+fn untouched(demo: &Demo, file: &Path) -> bool {
+    let Some(now) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| print_of(&t))
+    else {
+        return false;
+    };
+    let kept = prints().lock().unwrap_or_else(|e| e.into_inner());
+    Some(now) == print_of(demo.file) || kept.get(&file.display().to_string()) == Some(&now)
 }
 
 /// The demos' makers (see `demos/`), and what they are built with.
@@ -356,6 +433,9 @@ measured:
         assert_eq!(second, dir.join("자동차 공장 2.json"));
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "mine");
         assert_eq!(std::fs::read_to_string(&second).unwrap(), demo.file);
+        // Opened once more, untouched: the same copy, no third.
+        assert_eq!(copy(demo, &dir).unwrap(), second);
+        assert!(!dir.join("자동차 공장 3.json").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

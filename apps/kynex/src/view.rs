@@ -18,7 +18,9 @@ use crate::library::{self, Library};
 use crate::pose::{Posing, Project};
 use crate::run::{Clock, Runner};
 use crate::scenario;
+use crate::share::Share;
 use crate::timeline::{Now, Timeline};
+use crate::update::Updater;
 
 const PORT: u16 = 8090;
 
@@ -77,6 +79,14 @@ pub fn run_with(
         }
     }
 
+    // Started again by an update: once the KYNEX before has let go, and
+    // the browser it had open reconnects by itself.
+    if crate::update::relaunched() {
+        open = false;
+    }
+    // An update fetched earlier, installed before anything is opened.
+    crate::update::on_start();
+
     // The project first: one another KYNEX holds is not served at all.
     let mut stage = Stage::open(project)?;
 
@@ -93,12 +103,14 @@ pub fn run_with(
     // shown in KYNEX's window or the browser in its place.
     let local = format!("http://127.0.0.1:{}", server.addr().port());
     println!("KYNEX 뷰어: {local}");
-    if lan {
-        println!(
-            "  같은 네트워크의 다른 기기: http://{}:{}",
-            lan_address(),
-            server.addr().port()
-        );
+    crate::update::serving_on(server.addr().port());
+    let mut system = System {
+        share: Share::start(&server, server.addr().port(), lan),
+        updater: Updater::start(&server),
+    };
+    system.tell_share(&server);
+    if let Some(url) = system.share.url() {
+        println!("  같은 네트워크의 태블릿·다른 기기: {url}");
     }
     if open {
         open_browser(&local);
@@ -113,13 +125,22 @@ pub fn run_with(
         let loaded = kreate_io::container::read(std::io::BufReader::new(file))
             .map_err(|e| format!("{path}: {e}"))?;
         let status = Status::File { path: path.clone() };
-        return offline(&server, &requests, stage, loaded.document, &path, status);
+        return offline(
+            &server,
+            &requests,
+            &mut system,
+            stage,
+            loaded.document,
+            &path,
+            status,
+        );
     }
     // KYNEX on its own, unless a Kreate session is named.
     if address.is_none() && !kreate {
         return offline(
             &server,
             &requests,
+            &mut system,
             stage,
             Document::new(),
             "단독 실행",
@@ -202,6 +223,7 @@ pub fn run_with(
         if quiet && asked.is_empty() && !replaced && changes.is_none() {
             asked.extend(requests.recv_timeout(Duration::from_millis(3)).ok());
         }
+        let asked = system.take(&server, asked);
         let any_asked = !asked.is_empty();
         let touched = stage.answer(link.document(), asked);
         // Another project opened: everything shown anew.
@@ -588,6 +610,11 @@ impl Stage {
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
                 answer
+            } else if op == "ai_settings" && !request.local {
+                // The user's API keys never leave this computer: a tablet
+                // the viewer is shared with keeps its own, in its browser.
+                serde_json::json!({ "ok": false, "error": "AI 키는 KYNEX를 실행한 컴퓨터에서만 읽고 바꿀 수 있습니다" })
+                    .to_string()
             } else if op == "ai_settings" {
                 // The AI chat's provider, models and keys: kept for the
                 // user (`paths::ai_settings`), told back as they now are.
@@ -1440,7 +1467,13 @@ impl Stage {
         let scenarios = std::mem::take(&mut self.scenarios_changed);
         let plc = std::mem::take(&mut self.plc_changed);
         server.state("plc", &self.plc.to_json().to_string());
-        server.state("project", &self.project_json().to_string());
+        // Another device is told the project's name, not where this
+        // computer keeps it (its user's name is in the path).
+        let project = self.project_json();
+        let mut named = project.clone();
+        named["path"] = Value::Null;
+        named["dir"] = Value::Null;
+        server.state_for("project", &project.to_string(), Some(&named.to_string()));
         // The drawing only when it changed: it may be megabytes.
         if !self.floor_told {
             server.state("floor", &self.floor.to_json().to_string());
@@ -1590,12 +1623,35 @@ impl Stage {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
+        // The project open now, opened again (a demo's copy, the current
+        // one in the list): saved or put back first, then let go of — it is
+        // this KYNEX's own lock that would turn it away (on Windows).
+        let same = file == self.file
+            || (file.exists()
+                && std::fs::canonicalize(file).ok() == std::fs::canonicalize(&self.file).ok());
+        if same {
+            let left = if keep { self.save(doc) } else { self.discard() };
+            if let Err(e) = left {
+                println!("프로젝트를 저장하지 못했습니다: {e}");
+            }
+            self._lock = None;
+        }
         // Read first: a file that cannot be read leaves this project open.
-        let mut next = Stage::open(Some(file.to_path_buf()))?;
+        let mut next = match Stage::open(Some(file.to_path_buf())) {
+            Ok(next) => next,
+            Err(e) => {
+                if same {
+                    self._lock = crate::paths::hold(&self.file).ok().flatten();
+                }
+                return Err(e);
+            }
+        };
         next.projects = self.projects.clone();
-        let left = if keep { self.save(doc) } else { self.discard() };
-        if let Err(e) = left {
-            println!("프로젝트를 저장하지 못했습니다: {e}");
+        if !same {
+            let left = if keep { self.save(doc) } else { self.discard() };
+            if let Err(e) = left {
+                println!("프로젝트를 저장하지 못했습니다: {e}");
+            }
         }
         *self = next;
         self.replaced(doc);
@@ -1876,6 +1932,7 @@ impl Checks {
 fn offline(
     server: &Server,
     requests: &Receiver<RobotRequest>,
+    system: &mut System,
     mut stage: Stage,
     doc: Document,
     label: &str,
@@ -1907,6 +1964,7 @@ fn offline(
             }
         };
         let asked: Vec<RobotRequest> = first.into_iter().chain(requests.try_iter()).collect();
+        let asked = system.take(server, asked);
         let any_asked = !asked.is_empty();
         // Asked, or moved on by the clock: a door sliding, a cycle running.
         let touched = stage.answer(&doc, asked);
@@ -2111,9 +2169,44 @@ fn names(peers: &[(u16, String)]) -> Vec<String> {
     peers.iter().map(|(_, n)| n.clone()).collect()
 }
 
+/// What KYNEX itself is asked, beside the scene: sharing the viewer with
+/// tablets (`share`), and updating KYNEX (`update`).
+struct System {
+    share: Share,
+    updater: Updater,
+}
+
+impl System {
+    fn tell_share(&self, server: &Server) {
+        // The address and its code: for this computer's page alone.
+        server.state_for("share", &self.share.to_json().to_string(), None);
+    }
+
+    /// Answers the requests that are KYNEX's own; the rest are the stage's.
+    fn take(&mut self, server: &Server, asked: Vec<RobotRequest>) -> Vec<RobotRequest> {
+        asked
+            .into_iter()
+            .filter_map(|request| {
+                let body: Value = serde_json::from_str(&request.body).unwrap_or_default();
+                let answer = match body["op"].as_str() {
+                    Some("share") => {
+                        let answer = self.share.op(server, &body, request.local);
+                        self.tell_share(server);
+                        answer
+                    }
+                    Some("update") => self.updater.op(&body, request.local),
+                    _ => return Some(request),
+                };
+                let _ = request.reply.send(answer.to_string());
+                None
+            })
+            .collect()
+    }
+}
+
 /// This machine's address on the local network: the interface a packet to
 /// the outside would leave by. Nothing is sent.
-fn lan_address() -> String {
+pub(crate) fn lan_address() -> String {
     std::net::UdpSocket::bind("0.0.0.0:0")
         .and_then(|s| {
             s.connect("192.0.2.1:9")?;
@@ -2644,6 +2737,25 @@ mod tests {
         let wrong = json!({"provider": "nobody"});
         merge_settings(&mut kept, wrong.as_object().unwrap());
         assert_eq!(kept["provider"], "gemini");
+    }
+
+    /// Another device the viewer is shared with neither reads the user's
+    /// AI keys nor sets them.
+    #[test]
+    fn ai_keys_stay_on_this_computer() {
+        let dir = std::env::temp_dir().join(format!("kynex-ai-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(dir.join("ai.json"))).unwrap();
+        for body in [
+            json!({"op": "ai_settings"}),
+            json!({"op": "ai_settings", "set": {"claude": {"key": "sk-x"}}}),
+        ] {
+            let answer = ask(&mut stage, &doc, body, false);
+            assert_eq!(answer["ok"], false, "{answer}");
+            assert!(answer.get("settings").is_none(), "{answer}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

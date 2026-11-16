@@ -31,6 +31,9 @@ const-oid = "0.9"
 # and kept in the project (base64).
 zip = { version = "6", default-features = false, features = ["deflate"] }
 base64 = "0.22"
+# The address a tablet opens the viewer by, as a QR code to point its camera
+# at (`share`).
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 # KYNEX's own window (`studio`): the system's WebView2 in a window of its
 # own, on Windows.

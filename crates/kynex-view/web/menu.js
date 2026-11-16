@@ -138,4 +138,10 @@ window.addEventListener(
   true,
 );
 window.addEventListener('blur', closeMenu);
-window.addEventListener('resize', closeMenu);
+// Only when the window's width changes: a tablet's browser shows and hides
+// its address bar, and its keyboard, by changing the height alone.
+let width = window.innerWidth;
+window.addEventListener('resize', () => {
+  if (window.innerWidth !== width) closeMenu();
+  width = window.innerWidth;
+});

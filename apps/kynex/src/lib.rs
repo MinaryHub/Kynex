@@ -6,6 +6,7 @@
 //! kynex view ADDRESS|--kreate [--key KEY] [--port 8090] [--lan] [--open]
 //! kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 //! kynex inspect FILE.kreate [--json]
+//! kynex update [--check]
 //! kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--reps 1] [--json]
 //! ```
 //!
@@ -53,9 +54,11 @@ mod program;
 mod rtde;
 mod run;
 mod scenario;
+mod share;
 pub mod studio;
 mod timeline;
 mod umati;
+mod update;
 mod view;
 
 const USAGE: &str = "\
@@ -66,6 +69,7 @@ kynex view --file FILE.kreate [--port 8090] [--lan] [--open] [--project FILE]
 kynex compare [--project FILE] [--file FILE.kreate] [--hours 1] [--reps 1] [--json]
 kynex link [ADDRESS] [--key KEY] [--name NAME] [--json]
 kynex inspect FILE.kreate [--json]
+kynex update [--check]                  (the latest release, installed now)
 kynex bench [--tier cell|line|factory|factory-xl|all] [--browser] [--port 8091]";
 
 /// The command line: `kynex …` (see [`USAGE`]).
@@ -77,6 +81,7 @@ pub fn cli() {
         Some("compare") => scenario::run(args.collect()),
         Some("link") => link(args.collect()),
         Some("inspect") => inspect(args.collect()),
+        Some("update") => update::run(args.collect()),
         // Started with nothing, as an installed program is: on its own,
         // in the browser.
         None => view::run(vec!["--open".into()]),

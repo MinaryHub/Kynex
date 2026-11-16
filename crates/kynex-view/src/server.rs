@@ -102,7 +102,9 @@ impl Status {
     }
 }
 
-/// A running viewer server.
+/// A running viewer server. A clone is the same server: another thread
+/// can tell the viewers what it knows.
+#[derive(Clone)]
 pub struct Server {
     addr: SocketAddr,
     hub: Arc<Mutex<Hub>>,
@@ -115,7 +117,11 @@ struct Hub {
     view: ViewState,
     has_scene: bool,
     status: String,
-    viewers: Vec<Sender<Arc<str>>>,
+    /// Each viewer's stream, and whether it is this computer's.
+    viewers: Vec<(Sender<Arc<str>>, bool)>,
+    /// What another computer on the network must show to be let in (the
+    /// access code of a viewer shared for tablets): none, none is.
+    lan_key: Option<String>,
     /// Where a benchmark page's report goes, when one was asked for.
     bench: Option<Sender<String>>,
     /// Where the page's robot requests go, when something takes them.
@@ -123,16 +129,40 @@ struct Hub {
     /// What KYNEX keeps beside the scene — the robots posed here, their
     /// programs — as the last event of each name said: a tab that opens
     /// later is told too.
-    states: BTreeMap<String, String>,
+    states: BTreeMap<String, Told>,
+    /// This KYNEX, as against another started since on the same port: a
+    /// page that reconnects to another starts its scene over.
+    instance: String,
     /// The scene as `/scene.bin` serves it, made when first asked for after
     /// a change and shared by every viewer that asks before the next.
     bin: Option<Arc<Vec<u8>>>,
 }
 
+/// A state as this computer's viewers are told it, and as another
+/// device's are, if at all: what is this computer's alone — its paths, the
+/// viewer's access code, its updates — is not told to the others.
+#[derive(Clone, PartialEq)]
+struct Told {
+    local: String,
+    remote: Option<String>,
+}
+
 impl Hub {
     fn broadcast(&mut self, event: &str, data: &str) {
         let message: Arc<str> = frame(event, data).into();
-        self.viewers.retain(|v| v.send(message.clone()).is_ok());
+        self.viewers
+            .retain(|(v, _)| v.send(message.clone()).is_ok());
+    }
+
+    /// `told` to each viewer, as it is for that viewer.
+    fn broadcast_told(&mut self, event: &str, told: &Told) {
+        let local: Arc<str> = frame(event, &told.local).into();
+        let remote: Option<Arc<str>> = told.remote.as_deref().map(|r| frame(event, r).into());
+        self.viewers.retain(|(v, here)| match (here, &remote) {
+            (true, _) => v.send(local.clone()).is_ok(),
+            (false, Some(r)) => v.send(r.clone()).is_ok(),
+            (false, None) => true,
+        });
     }
 }
 
@@ -159,47 +189,48 @@ impl Server {
             }
             .to_json(),
             viewers: Vec::new(),
+            lan_key: None,
             bench: None,
             robot: None,
             states: BTreeMap::new(),
+            instance: format!(
+                "{:x}{:x}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            ),
             bin: None,
         }));
-        {
-            let hub = hub.clone();
-            thread::Builder::new()
-                .name("kynex-view".into())
-                .spawn(move || {
-                    let gate = Arc::new(Mutex::new(Gate::default()));
-                    for stream in listener.incoming().flatten() {
-                        // A thread per connection, so a bounded number of
-                        // them, and a share of those per peer: past either,
-                        // a connection is closed at the door.
-                        let Ok(peer) = stream.peer_addr().map(|a| a.ip()) else {
-                            continue;
-                        };
-                        if !Gate::enter(&gate, peer) {
-                            drop(stream);
-                            continue;
-                        }
-                        let hub = hub.clone();
-                        let done = gate.clone();
-                        let spawned = thread::Builder::new()
-                            .name("kynex-view-client".into())
-                            .spawn(move || {
-                                let _ = serve(stream, &hub);
-                                Gate::leave(&done, peer);
-                            });
-                        if spawned.is_err() {
-                            Gate::leave(&gate, peer);
-                        }
-                    }
-                })?;
-        }
+        accept(listener, hub.clone())?;
         Ok(Self {
             addr,
             hub,
             started: std::time::Instant::now(),
         })
+    }
+
+    /// Serves the same viewer on `bind` as well, e.g. `0.0.0.0:8190`: for
+    /// the other computers, tablets and phones on the network, once
+    /// [`Server::set_lan_key`] lets them in. Where it listens.
+    pub fn share(&self, bind: &str) -> io::Result<SocketAddr> {
+        let listener = TcpListener::bind(bind)?;
+        let addr = listener.local_addr()?;
+        accept(listener, self.hub.clone())?;
+        Ok(addr)
+    }
+
+    /// What another computer must show to be let in: the access code in
+    /// the address it opened (`?key=…`), then kept by its browser. `None`
+    /// turns every other computer away. Another code, or none, lets go of
+    /// every other computer watching: they come back only with the new one.
+    pub fn set_lan_key(&self, key: Option<String>) {
+        let key = key.filter(|k| !k.is_empty());
+        let mut hub = self.hub.lock().expect("viewer hub");
+        if hub.lan_key != key {
+            hub.viewers.retain(|(_, local)| *local);
+        }
+        hub.lan_key = key;
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -261,10 +292,24 @@ impl Server {
     /// scene: the JSON goes out as the `event` event when it differs from
     /// the last of that name. `pose` and `programs` are what the page reads.
     pub fn state(&self, event: &str, json: &str) {
+        self.state_for(event, json, Some(json));
+    }
+
+    /// [`Server::state`], told to this computer's viewers as `local` and to
+    /// another device's as `remote` — or not at all.
+    pub fn state_for(&self, event: &str, local: &str, remote: Option<&str>) {
         let mut hub = self.hub.lock().expect("viewer hub");
-        if hub.states.get(event).map(String::as_str) != Some(json) {
-            hub.states.insert(event.to_string(), json.to_string());
-            hub.broadcast(event, json);
+        let same = hub
+            .states
+            .get(event)
+            .is_some_and(|t| t.local == local && t.remote.as_deref() == remote);
+        if !same {
+            let told = Told {
+                local: local.to_string(),
+                remote: remote.map(str::to_string),
+            };
+            hub.broadcast_told(event, &told);
+            hub.states.insert(event.to_string(), told);
         }
     }
 
@@ -276,6 +321,40 @@ impl Server {
             hub.broadcast("status", &json);
         }
     }
+}
+
+/// Takes `listener`'s connections on a thread of its own, each served on
+/// one of its own.
+fn accept(listener: TcpListener, hub: Arc<Mutex<Hub>>) -> io::Result<()> {
+    thread::Builder::new()
+        .name("kynex-view".into())
+        .spawn(move || {
+            let gate = Arc::new(Mutex::new(Gate::default()));
+            for stream in listener.incoming().flatten() {
+                // A thread per connection, so a bounded number of them,
+                // and a share of those per peer: past either, a connection
+                // is closed at the door.
+                let Ok(peer) = stream.peer_addr().map(|a| a.ip()) else {
+                    continue;
+                };
+                if !Gate::enter(&gate, peer) {
+                    drop(stream);
+                    continue;
+                }
+                let hub = hub.clone();
+                let done = gate.clone();
+                let spawned = thread::Builder::new()
+                    .name("kynex-view-client".into())
+                    .spawn(move || {
+                        let _ = serve(stream, &hub);
+                        Gate::leave(&done, peer);
+                    });
+                if spawned.is_err() {
+                    Gate::leave(&gate, peer);
+                }
+            }
+        })?;
+    Ok(())
 }
 
 /// A reader that gives up at a point in time rather than after a quiet
@@ -373,6 +452,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let mut request = String::new();
     let mut length = 0usize;
     let mut host = None;
+    let mut cookie = String::new();
     let mut json_body = false;
     let mut octet_body = false;
     {
@@ -391,6 +471,8 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
                     length = value.trim().parse().unwrap_or(0);
                 } else if name.eq_ignore_ascii_case("host") {
                     host = Some(value.trim().to_string());
+                } else if name.eq_ignore_ascii_case("cookie") {
+                    cookie = value.trim().to_string();
                 } else if name.eq_ignore_ascii_case("content-type") {
                     let kind = value.trim().to_ascii_lowercase();
                     json_body = kind.starts_with("application/json");
@@ -407,6 +489,30 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     if !host_allowed(host.as_deref()) {
         return respond(&mut out, "403 Forbidden", "text/plain", b"unknown host");
     }
+    // Another computer: only with the access code, while the viewer is
+    // shared. The code it came with is kept by its browser, for the
+    // scripts, the stream and the requests that follow.
+    let given = query_value(query, "key");
+    // The code another computer was let in with: its stream is taken only
+    // while that is still the code.
+    let (set_cookie, admitted_with) = {
+        let hub = hub.lock().expect("viewer hub");
+        let admitted_with = hub.lan_key.clone();
+        let set_cookie = match admit(local, hub.lan_key.as_deref(), &cookie, given.as_deref()) {
+            Admit::No => {
+                drop(hub);
+                return respond(
+                    &mut out,
+                    "403 Forbidden",
+                    "text/html; charset=utf-8",
+                    REFUSED_PAGE.as_bytes(),
+                );
+            }
+            Admit::Yes => None,
+            Admit::Remember(key) => Some(key),
+        };
+        (set_cookie, admitted_with)
+    };
     if method == "POST" && path == "/bench" {
         let Some(bench) = hub.lock().expect("viewer hub").bench.clone() else {
             return respond(&mut out, "404 Not Found", "text/plain", b"not benchmarking");
@@ -470,17 +576,10 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         };
     }
     // A model file, as raw bytes, its name and unit in the query: from this
-    // computer only, and as octet-stream, which a page elsewhere cannot
-    // send without first asking this server — which never says yes.
+    // computer, or a tablet let in with the access code; and as
+    // octet-stream, which a page elsewhere cannot send without first
+    // asking this server — which never says yes.
     if method == "POST" && path == "/import" {
-        if !local {
-            return respond(
-                &mut out,
-                "403 Forbidden",
-                "text/plain",
-                b"this computer only",
-            );
-        }
         if !octet_body {
             return respond(
                 &mut out,
@@ -503,13 +602,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         reader.get_mut().until = Instant::now() + UPLOAD_DEADLINE;
         let mut file = vec![0u8; length];
         reader.read_exact(&mut file)?;
-        let query = |key: &str| {
-            query
-                .split('&')
-                .filter_map(|kv| kv.split_once('='))
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| percent_decode(v))
-        };
+        let query = |key: &str| query_value(query, key);
         let body = json!({
             "op": "import",
             "name": query("name").unwrap_or_default(),
@@ -562,12 +655,82 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         return respond(&mut out, "200 OK", "application/octet-stream", &bin);
     }
     if path == "/events" {
-        return stream_events(out, hub);
+        return stream_events(out, hub, local, admitted_with);
     }
     match assets::get(path) {
-        Some((mime, body)) => respond(&mut out, "200 OK", mime, body),
+        Some((mime, body)) => match set_cookie {
+            // A year: the tablet's bookmark of the plain address works on.
+            Some(key) => respond_with(
+                &mut out,
+                "200 OK",
+                mime,
+                &format!(
+                    "Set-Cookie: {COOKIE}={key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict\r\n"
+                ),
+                body,
+            ),
+            None => respond(&mut out, "200 OK", mime, body),
+        },
         None => respond(&mut out, "404 Not Found", "text/plain", b"not found"),
     }
+}
+
+/// The cookie a tablet's browser keeps the access code in.
+const COOKIE: &str = "kynex_key";
+
+/// What another computer is shown when it is not let in.
+const REFUSED_PAGE: &str = "<!doctype html><meta charset=utf-8>\
+<meta name=viewport content=\"width=device-width,initial-scale=1\"><title>KYNEX</title>\
+<body style=\"margin:0;display:grid;place-items:center;min-height:100vh;background:#15181d;color:#e6e8eb;font:16px system-ui,sans-serif\">\
+<div style=\"max-width:520px;padding:24px;line-height:1.6\"><h2 style=\"color:#ff8a3d\">KYNEX</h2>\
+<p>이 KYNEX는 지금 다른 기기에 공유되어 있지 않거나, 접속 코드가 맞지 않습니다.</p>\
+<p>KYNEX를 실행한 컴퓨터에서 <b>도구 ▸ 태블릿·모바일에서 열기</b>를 켜고, 거기 나온 QR 코드나 주소로 다시 여세요.</p>\
+<p style=\"color:#9aa3ad\">This KYNEX is not shared, or the access code is wrong. On the computer running KYNEX, turn on <b>Tools ▸ Open on a tablet or phone</b> and open the QR code or address it shows.</p></div>";
+
+/// Whether a request is let in, and whether its browser is to keep the
+/// access code it came with.
+#[derive(Debug, PartialEq)]
+enum Admit {
+    No,
+    Yes,
+    Remember(String),
+}
+
+/// This computer always; another only while the viewer is shared
+/// (`lan_key`), with the access code in its cookie or in the address.
+fn admit(local: bool, lan_key: Option<&str>, cookie: &str, given: Option<&str>) -> Admit {
+    if local {
+        return Admit::Yes;
+    }
+    let Some(key) = lan_key else {
+        return Admit::No;
+    };
+    if given.is_some_and(|g| same(g, key)) {
+        return Admit::Remember(key.to_string());
+    }
+    let kept = cookie
+        .split(';')
+        .filter_map(|c| c.trim().split_once('='))
+        .any(|(name, value)| name == COOKIE && same(value, key));
+    if kept {
+        Admit::Yes
+    } else {
+        Admit::No
+    }
+}
+
+/// `a` is `b`, taking as long whichever byte differs.
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// The value of `key` in `query` (`a=1&b=2`), decoded.
+fn query_value(query: &str, key: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| percent_decode(v))
 }
 
 /// Whether a request named a host this server answers to: `localhost`, or
@@ -593,23 +756,35 @@ fn host_allowed(host: Option<&str>) -> bool {
 }
 
 fn respond(out: &mut TcpStream, status: &str, mime: &str, body: &[u8]) -> io::Result<()> {
+    respond_with(out, status, mime, "", body)
+}
+
+/// [`respond`], with `extra` headers (each ending `\r\n`).
+fn respond_with(
+    out: &mut TcpStream,
+    status: &str,
+    mime: &str,
+    extra: &str,
+    body: &[u8],
+) -> io::Result<()> {
     write!(
         out,
         "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n\
-         Cache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+         Cache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\n{extra}Connection: close\r\n\r\n",
         body.len()
     )?;
     out.write_all(body)?;
     out.flush()
 }
 
-fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
+fn stream_events(
+    mut out: TcpStream,
+    hub: &Mutex<Hub>,
+    local: bool,
+    admitted_with: Option<String>,
+) -> io::Result<()> {
     out.set_read_timeout(None)?;
     out.set_nodelay(true)?;
-    out.write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\
-          Connection: keep-alive\r\n\r\n",
-    )?;
     // What there is now, then everything from here on. Taking the one and
     // joining the other under the same lock means no edit falls between the
     // two; the writing happens after it is let go, so a viewer that reads
@@ -617,23 +792,37 @@ fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let (tx, rx): (Sender<Arc<str>>, Receiver<Arc<str>>) = mpsc::channel();
     let opening = {
         let mut hub = hub.lock().expect("viewer hub");
-        let mut opening = frame(
+        // The code changed, or sharing stopped, since this was let in.
+        if !local && (hub.lan_key.is_none() || hub.lan_key != admitted_with) {
+            drop(hub);
+            return respond(&mut out, "403 Forbidden", "text/plain", b"not shared");
+        }
+        let mut opening = String::from(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\
+             Connection: keep-alive\r\n\r\n",
+        );
+        opening.push_str(&frame(
             "hello",
             &format!(
-                "{{\"build\":\"{}\",\"version\":\"{}\",\"commit\":\"{}\"}}",
+                "{{\"build\":\"{}\",\"version\":\"{}\",\"commit\":\"{}\",\"instance\":\"{}\"}}",
                 assets::build_id(),
                 assets::VERSION,
-                assets::COMMIT
+                assets::COMMIT,
+                hub.instance
             ),
-        );
+        ));
         opening.push_str(&frame("status", &hub.status));
-        for (event, json) in &hub.states {
-            opening.push_str(&frame(event, json));
+        for (event, told) in &hub.states {
+            match (local, &told.remote) {
+                (true, _) => opening.push_str(&frame(event, &told.local)),
+                (false, Some(remote)) => opening.push_str(&frame(event, remote)),
+                (false, None) => {}
+            }
         }
         if hub.has_scene {
             opening.push_str(&frame("scene", &scene_notice(&hub.view)));
         }
-        hub.viewers.push(tx);
+        hub.viewers.push((tx, local));
         opening
     };
     out.write_all(opening.as_bytes())?;
@@ -933,5 +1122,85 @@ mod tests {
         let data: serde_json::Value =
             serde_json::from_str(line.trim_start_matches("data: ").trim()).unwrap();
         assert_eq!(data["objects"][0]["matrix"][14], 1.5);
+    }
+
+    /// This computer always; another only while shared, with the code.
+    #[test]
+    fn other_computers_need_the_access_code() {
+        assert_eq!(admit(true, None, "", None), Admit::Yes);
+        assert_eq!(admit(false, None, "", Some("abc")), Admit::No);
+        assert_eq!(admit(false, Some("abc"), "", None), Admit::No);
+        assert_eq!(admit(false, Some("abc"), "", Some("abd")), Admit::No);
+        assert_eq!(
+            admit(false, Some("abc"), "", Some("abc")),
+            Admit::Remember("abc".into())
+        );
+        assert_eq!(
+            admit(false, Some("abc"), "a=1; kynex_key=abc", None),
+            Admit::Yes
+        );
+        assert_eq!(admit(false, Some("abc"), "kynex_key=ab", None), Admit::No);
+        // A code no longer shared: the old one kept is not enough.
+        assert_eq!(admit(false, Some("new"), "kynex_key=abc", None), Admit::No);
+    }
+
+    /// A second listener serves the same viewer.
+    #[test]
+    fn a_shared_listener_serves_the_same_viewer() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        let shared = server.share("127.0.0.1:0").unwrap();
+        assert_ne!(shared.port(), server.addr().port());
+        assert!(get(shared, "/").starts_with("HTTP/1.1 200"));
+    }
+
+    /// Another device's stream: refused once the code it came with is no
+    /// longer the code; let go of when the code changes; never told what is
+    /// this computer's alone.
+    #[test]
+    fn another_device_is_let_go_with_its_code_and_told_only_its_share() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        server.set_lan_key(Some("old".into()));
+        server.state_for("share", "{\"key\":\"old\"}", None);
+        server.state_for(
+            "project",
+            "{\"path\":\"C:/Users/me\"}",
+            Some("{\"path\":null}"),
+        );
+        let remote = |admitted: Option<&str>| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect(addr).unwrap();
+            let (conn, _) = listener.accept().unwrap();
+            let hub = server.hub.clone();
+            let admitted = admitted.map(str::to_string);
+            thread::spawn(move || stream_events(conn, &hub, false, admitted));
+            client
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = client.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+            }
+            String::from_utf8_lossy(&got).into_owned()
+        };
+        let seen = remote(Some("old"));
+        assert!(seen.starts_with("HTTP/1.1 200"), "{seen}");
+        assert!(!seen.contains("event: share"), "{seen}");
+        assert!(
+            seen.contains("{\"path\":null}") && !seen.contains("C:/Users"),
+            "{seen}"
+        );
+        assert_eq!(server.hub.lock().unwrap().viewers.len(), 1);
+        // A new code: the device watching is let go, and comes back only
+        // with the new one.
+        server.set_lan_key(Some("new".into()));
+        assert_eq!(server.hub.lock().unwrap().viewers.len(), 0);
+        assert!(remote(Some("old")).starts_with("HTTP/1.1 403"));
+        server.set_lan_key(None);
+        assert!(remote(None).starts_with("HTTP/1.1 403"));
     }
 }

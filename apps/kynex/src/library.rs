@@ -1388,6 +1388,8 @@ pub struct Library {
     items_changed: bool,
 }
 
+/// Where a copy goes, and turned to what, if not where it was.
+type Copied = (DVec3, Option<f64>);
 impl Library {
     pub fn from_saved(saved: &[Value]) -> Self {
         let mut library = Self {
@@ -1613,7 +1615,7 @@ impl Library {
         // Or each copy where `copies` puts it: `{item, at, yaw}`, an item
         // copied as often as it is listed — an array, a mirrored copy.
         if op == "duplicate" {
-            let placed: Vec<(u64, Option<(DVec3, Option<f64>)>)> = match req["copies"].as_array() {
+            let placed: Vec<(u64, Option<Copied>)> = match req["copies"].as_array() {
                 Some(copies) => {
                     if copies.is_empty() || copies.len() > MOST_AT_ONCE {
                         return Err(format!("복사본은 1–{MOST_AT_ONCE}개입니다"));
@@ -2642,7 +2644,13 @@ fn build(item: &Item) -> Result<Built, String> {
                 item.param("height"),
             );
             if item.param("arm").round() as usize == 1 {
-                amr_arm(&mut doc, &c, item.param("length"), item.param("height"), amr);
+                amr_arm(
+                    &mut doc,
+                    &c,
+                    item.param("length"),
+                    item.param("height"),
+                    amr,
+                );
             }
             roles.push((amr, Kind::Amr));
         }
@@ -2670,7 +2678,11 @@ fn build(item: &Item) -> Result<Built, String> {
             // its posts as far out as it is wide — clear of a robot's arm
             // swinging past.
             let (w, d) = (item.param("width"), 0.5);
-            let (first, step, top) = if slide { (0.6, 0.7, 0.3) } else { (0.1, 0.45, 0.45) };
+            let (first, step, top) = if slide {
+                (0.6, 0.7, 0.3)
+            } else {
+                (0.1, 0.45, 0.45)
+            };
             let h = first + step * (levels - 1) as f64 + top;
             for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 block(
@@ -3341,7 +3353,7 @@ fn corner_conveyor(doc: &mut Document, c: &Colours, corner: Corner, w: f64, h: f
     paint(doc, belt, c.belt);
     doc.object_mut(belt).unwrap().transform.translation = DVec3::new(pivot.x, pivot.y, h);
     for (side, r) in [("inner", r - w / 2.0 - 0.04), ("outer", r + w / 2.0)] {
-        let frame = doc.add_mesh_object(&format!("frame_{side}"), sector(r, r + 0.04, -0.14, 0.0));
+        let frame = doc.add_mesh_object(format!("frame_{side}"), sector(r, r + 0.04, -0.14, 0.0));
         paint(doc, frame, c.steel);
         doc.object_mut(frame).unwrap().transform.translation =
             DVec3::new(pivot.x, pivot.y, h + 0.01);
@@ -3556,10 +3568,43 @@ fn amr_arm(doc: &mut Document, c: &Colours, l: f64, h: f64, amr: ObjectId) {
     let x = l / 2.0 - 0.15;
     let load = -0.1;
     post(doc, "arm base", 0.075, 0.1, [x, 0.0, h + 0.05], c.dark, m);
-    post(doc, "arm turret", 0.065, 0.12, [x, 0.0, h + 0.16], c.machine, m);
-    bar(doc, "arm shoulder", 0.06, 0.16, [x, 0.0, h + 0.24], false, c.accent, m);
-    block(doc, "arm upper", [0.08, 0.08, 0.36], [x, 0.0, h + 0.42], c.machine, m);
-    bar(doc, "arm elbow", 0.05, 0.14, [x, 0.0, h + 0.6], false, c.accent, m);
+    post(
+        doc,
+        "arm turret",
+        0.065,
+        0.12,
+        [x, 0.0, h + 0.16],
+        c.machine,
+        m,
+    );
+    bar(
+        doc,
+        "arm shoulder",
+        0.06,
+        0.16,
+        [x, 0.0, h + 0.24],
+        false,
+        c.accent,
+        m,
+    );
+    block(
+        doc,
+        "arm upper",
+        [0.08, 0.08, 0.36],
+        [x, 0.0, h + 0.42],
+        c.machine,
+        m,
+    );
+    bar(
+        doc,
+        "arm elbow",
+        0.05,
+        0.14,
+        [x, 0.0, h + 0.6],
+        false,
+        c.accent,
+        m,
+    );
     let reach = x - load;
     block(
         doc,
@@ -3569,10 +3614,32 @@ fn amr_arm(doc: &mut Document, c: &Colours, l: f64, h: f64, amr: ObjectId) {
         c.machine,
         m,
     );
-    post(doc, "arm wrist", 0.035, 0.12, [load, 0.0, h + 0.54], c.accent, m);
-    block(doc, "gripper", [0.05, 0.1, 0.04], [load, 0.0, h + 0.46], c.dark, m);
+    post(
+        doc,
+        "arm wrist",
+        0.035,
+        0.12,
+        [load, 0.0, h + 0.54],
+        c.accent,
+        m,
+    );
+    block(
+        doc,
+        "gripper",
+        [0.05, 0.1, 0.04],
+        [load, 0.0, h + 0.46],
+        c.dark,
+        m,
+    );
     for y in [-0.045, 0.045] {
-        block(doc, "finger", [0.02, 0.012, 0.06], [load, y, h + 0.41], c.steel, m);
+        block(
+            doc,
+            "finger",
+            [0.02, 0.012, 0.06],
+            [load, y, h + 0.41],
+            c.steel,
+            m,
+        );
     }
 }
 

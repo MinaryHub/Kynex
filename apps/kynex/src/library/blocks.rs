@@ -58,9 +58,24 @@ pub(crate) fn block_look(a: usize, b: Option<usize>) -> LookMeshes {
     for (product, y) in cubes {
         let paint = material(&mut doc, "block", block_colour(product), 0.0);
         // A hair short of touching, so that two read as two.
-        block(&mut doc, "block", [s, s - 0.002, s], [0.0, y, s / 2.0], paint, None);
+        block(
+            &mut doc,
+            "block",
+            [s, s - 0.002, s],
+            [0.0, y, s / 2.0],
+            paint,
+            None,
+        );
         for x in [-s / 4.0, s / 4.0] {
-            post(&mut doc, "stud", s * 0.17, s * 0.15, [x, y, s * 1.075], paint, None);
+            post(
+                &mut doc,
+                "stud",
+                s * 0.17,
+                s * 0.15,
+                [x, y, s * 1.075],
+                paint,
+                None,
+            );
         }
     }
     super::look_of(&doc)
@@ -87,16 +102,51 @@ fn vision_inspector(doc: &mut Document, m: Option<ObjectId>) {
     let light = material(doc, "ring light", [0.92, 0.96, 1.0], 0.0);
     let screen = material(doc, "screen", [0.10, 0.45, 0.30], 0.0);
     block(doc, "table", [0.9, 0.8, 0.77], [0.0, 0.0, 0.385], panel, m);
-    block(doc, "table top", [0.9, 0.8, 0.03], [0.0, 0.0, 0.785], steel, m);
+    block(
+        doc,
+        "table top",
+        [0.9, 0.8, 0.03],
+        [0.0, 0.0, 0.785],
+        steel,
+        m,
+    );
     for y in [-0.36, 0.36] {
         block(doc, "arch post", [0.06, 0.06, 0.8], [-0.2, y, 1.2], dark, m);
     }
-    block(doc, "arch beam", [0.08, 0.78, 0.08], [-0.2, 0.0, 1.56], dark, m);
-    block(doc, "camera arm", [0.24, 0.06, 0.05], [-0.08, 0.0, 1.5], dark, m);
+    block(
+        doc,
+        "arch beam",
+        [0.08, 0.78, 0.08],
+        [-0.2, 0.0, 1.56],
+        dark,
+        m,
+    );
+    block(
+        doc,
+        "camera arm",
+        [0.24, 0.06, 0.05],
+        [-0.08, 0.0, 1.5],
+        dark,
+        m,
+    );
     block(doc, "camera", [0.08, 0.08, 0.12], [0.0, 0.0, 1.42], dark, m);
     post(doc, "ring light", 0.07, 0.02, [0.0, 0.0, 1.35], light, m);
-    block(doc, "monitor", [0.03, 0.34, 0.22], [-0.2, 0.0, 1.3], dark, m);
-    block(doc, "monitor screen", [0.005, 0.3, 0.18], [-0.18, 0.0, 1.3], screen, m);
+    block(
+        doc,
+        "monitor",
+        [0.03, 0.34, 0.22],
+        [-0.2, 0.0, 1.3],
+        dark,
+        m,
+    );
+    block(
+        doc,
+        "monitor screen",
+        [0.005, 0.3, 0.18],
+        [-0.18, 0.0, 1.3],
+        screen,
+        m,
+    );
 }
 
 /// A mock-up machine, 1.4 × 1.1 × 1.7 m: a cabinet on a plinth, a band of
@@ -119,16 +169,72 @@ fn mock_machine(doc: &mut Document, band: usize, m: Option<ObjectId>) {
     let red = material(doc, "lamp red", [0.85, 0.20, 0.15], 0.0);
     let (l, w, h) = (1.1, 1.4, 1.7);
     block(doc, "plinth", [l, w, 0.1], [0.0, 0.0, 0.05], dark, m);
-    block(doc, "cabinet", [l, w, h - 0.1], [0.0, 0.0, 0.1 + (h - 0.1) / 2.0], panel, m);
-    block(doc, "band", [l + 0.01, w + 0.01, 0.12], [0.0, 0.0, h - 0.2], colour, m);
+    block(
+        doc,
+        "cabinet",
+        [l, w, h - 0.1],
+        [0.0, 0.0, 0.1 + (h - 0.1) / 2.0],
+        panel,
+        m,
+    );
+    block(
+        doc,
+        "band",
+        [l + 0.01, w + 0.01, 0.12],
+        [0.0, 0.0, h - 0.2],
+        colour,
+        m,
+    );
     // The front: the window over the hatch, the panel beside them.
     let front = l / 2.0;
-    block(doc, "window", [0.02, 0.7, 0.4], [front + 0.005, -0.15, 1.3], glass, m);
-    block(doc, "hatch frame", [0.03, 0.4, 0.3], [front + 0.01, -0.15, 0.9], dark, m);
-    block(doc, "hatch", [0.02, 0.32, 0.22], [front + 0.02, -0.15, 0.9], colour, m);
-    block(doc, "ledge", [0.2, 0.4, 0.03], [front + 0.1, -0.15, 0.735], dark, m);
-    block(doc, "control panel", [0.06, 0.3, 0.4], [front + 0.03, 0.47, 1.2], dark, m);
-    block(doc, "screen", [0.01, 0.22, 0.14], [front + 0.065, 0.47, 1.28], glass, m);
+    block(
+        doc,
+        "window",
+        [0.02, 0.7, 0.4],
+        [front + 0.005, -0.15, 1.3],
+        glass,
+        m,
+    );
+    block(
+        doc,
+        "hatch frame",
+        [0.03, 0.4, 0.3],
+        [front + 0.01, -0.15, 0.9],
+        dark,
+        m,
+    );
+    block(
+        doc,
+        "hatch",
+        [0.02, 0.32, 0.22],
+        [front + 0.02, -0.15, 0.9],
+        colour,
+        m,
+    );
+    block(
+        doc,
+        "ledge",
+        [0.2, 0.4, 0.03],
+        [front + 0.1, -0.15, 0.735],
+        dark,
+        m,
+    );
+    block(
+        doc,
+        "control panel",
+        [0.06, 0.3, 0.4],
+        [front + 0.03, 0.47, 1.2],
+        dark,
+        m,
+    );
+    block(
+        doc,
+        "screen",
+        [0.01, 0.22, 0.14],
+        [front + 0.065, 0.47, 1.28],
+        glass,
+        m,
+    );
     // The signal tower, at the back corner of the roof.
     let (x, y, z) = (-l / 2.0 + 0.15, w / 2.0 - 0.15, h);
     post(doc, "tower post", 0.02, 0.2, [x, y, z + 0.1], dark, m);

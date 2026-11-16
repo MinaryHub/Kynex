@@ -51,11 +51,13 @@ fn kind_of(bytes: &[u8]) -> Option<&'static str> {
 impl Floor {
     /// As the project file keeps it; none, the usual.
     pub fn of(v: &Value) -> Self {
-        let mut f = Self::default();
-        f.image = v["image"]
-            .as_str()
-            .filter(|s| s.starts_with("data:image/"))
-            .map(str::to_string);
+        let mut f = Self {
+            image: v["image"]
+                .as_str()
+                .filter(|s| s.starts_with("data:image/"))
+                .map(str::to_string),
+            ..Self::default()
+        };
         f.place(v);
         f
     }

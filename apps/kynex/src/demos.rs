@@ -165,19 +165,96 @@ pub fn demo(name: &str) -> Option<&'static Demo> {
 }
 
 /// Demo `demo` copied into `dir` for opening: as `<name>.json`, or, that
-/// taken — the user's own work, or a copy opened before — `<name> 2.json`
-/// and on. Returns the copy's file.
+/// taken — the user's own work, or a copy opened before and changed —
+/// `<name> 2.json` and on. A copy there already that is still the demo as
+/// it came (`untouched`) is opened again, not copied once more: opening a
+/// demo time and again does not fill the folder. Returns the copy's file.
 pub fn copy(demo: &Demo, dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let file = (1..=100)
-        .map(|n| match n {
+    let names = || {
+        (1..=100).map(|n| match n {
             1 => dir.join(format!("{}.json", demo.name)),
             n => dir.join(format!("{} {n}.json", demo.name)),
         })
+    };
+    if let Some(file) = names()
+        .take_while(|f| f.exists())
+        .find(|f| untouched(demo, f))
+    {
+        return Ok(file);
+    }
+    let file = names()
         .find(|f| !f.exists())
         .ok_or_else(|| format!("{}: 사본이 너무 많습니다", demo.name))?;
     std::fs::write(&file, demo.file).map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(file)
+}
+
+/// What a project file says, as one number: the same for the same project
+/// however it is spaced.
+fn print_of(text: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    // FNV-1a over it written out the one way.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in v.to_string().bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    Some(h)
+}
+
+/// Each demo copy as KYNEX first saved it, by its file: the demo as it
+/// came, in the form this KYNEX writes. Kept with the user's settings
+/// (`demos.json`) — not while testing, which keeps them only as it runs.
+fn prints() -> &'static std::sync::Mutex<std::collections::BTreeMap<String, u64>> {
+    static KEPT: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    KEPT.get_or_init(|| {
+        let kept = (!cfg!(test))
+            .then(|| std::fs::read_to_string(crate::paths::app_dir().join("demos.json")).ok())
+            .flatten()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        std::sync::Mutex::new(kept)
+    })
+}
+
+/// The copy `file`, just opened and saved, is the demo as it came: known
+/// by what it now says, to be opened again while it still says that.
+pub fn opened(file: &Path) {
+    let Some(print) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| print_of(&t))
+    else {
+        return;
+    };
+    let mut kept = prints().lock().unwrap_or_else(|e| e.into_inner());
+    // Those whose files are gone, forgotten.
+    kept.retain(|f, _| Path::new(f).exists());
+    kept.insert(file.display().to_string(), print);
+    if !cfg!(test) {
+        let dir = crate::paths::app_dir();
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(
+                dir.join("demos.json"),
+                serde_json::to_string_pretty(&*kept).unwrap_or_default(),
+            );
+        }
+    }
+}
+
+/// Whether the copy `file` is still demo `demo` as it came: the demo's own
+/// file, or what KYNEX made of it when it first opened it — nothing changed
+/// in it since.
+fn untouched(demo: &Demo, file: &Path) -> bool {
+    let Some(now) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| print_of(&t))
+    else {
+        return false;
+    };
+    let kept = prints().lock().unwrap_or_else(|e| e.into_inner());
+    Some(now) == print_of(demo.file) || kept.get(&file.display().to_string()) == Some(&now)
 }
 
 /// The demos' makers (see `demos/`), and what they are built with.
@@ -193,6 +270,7 @@ mod refinery;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     /// Every demo is a project KYNEX reads as it is now: saved by an older
     /// KYNEX, it must still be read, its scenarios there, and the first of
@@ -213,6 +291,105 @@ mod tests {
             assert!(report["machines"].as_u64().unwrap() > 0, "{}", demo.name);
             assert!(report["alarm"].is_null(), "{}: {report}", demo.name);
         }
+    }
+
+    /// What each demo's first scenario makes in its first hour (seed 1),
+    /// and how busy its machines are on average, as last measured: the
+    /// figures a change is held to. A demo that makes much less than this
+    /// — or nothing — fails, as one that stops with an alarm does.
+    ///
+    /// The LCD and semiconductor fabs make nothing in their first hour (a
+    /// part's way through them is longer), so only how busy they are is
+    /// held to for them.
+    ///
+    /// A change meant to move these: run this test, and put what it
+    /// prints in place of the table.
+    const KPIS: &[(&str, u64, f64)] = &[
+        ("성능 데모 공장", 349, 0.4974),
+        ("공장 내부 전시", 24, 0.2619),
+        ("대규모 물류 창고", 65, 0.5564),
+        ("자동차 공장", 38, 0.9056),
+        ("LCD 공장", 0, 0.1049),
+        ("음료 공장", 6, 0.4699),
+        ("정유 공장", 14, 0.6127),
+        ("반도체 공장", 0, 0.0622),
+        ("블럭 조립 공장", 32, 0.4082),
+    ];
+
+    /// How far below its figure a demo may fall: simulations differ a
+    /// little from machine to machine, and a change may cost a little.
+    const KPI_SLACK: f64 = 0.85;
+
+    /// Each demo held to its figures (`KPIS`): an hour of each, all at
+    /// once. Slow — about a minute —, so run on its own, as CI does:
+    ///
+    ///   cargo test -p kynex --lib demo_kpis -- --ignored
+    #[test]
+    #[ignore = "an hour of every demo: about a minute; CI runs it"]
+    fn demo_kpis_hold() {
+        assert_eq!(KPIS.len(), DEMOS.len(), "a figure for every demo");
+        let measured: Vec<(&str, Value)> = std::thread::scope(|s| {
+            let runs: Vec<_> = DEMOS
+                .iter()
+                .map(|demo| {
+                    s.spawn(move || {
+                        let saved: Value = serde_json::from_str(demo.file).unwrap();
+                        let r = crate::scenario::simulate_seeded(
+                            &kreate_scene::Document::new(),
+                            &saved["scenarios"][0],
+                            3600.0,
+                            1,
+                        );
+                        (demo.name, r)
+                    })
+                })
+                .collect();
+            runs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut table = String::new();
+        let mut failed = Vec::new();
+        for (name, r) in &measured {
+            let lanes = r["machine_lanes"].as_array().cloned().unwrap_or_default();
+            let busy = lanes
+                .iter()
+                .filter_map(|l| l["utilization"].as_f64())
+                .sum::<f64>()
+                / lanes.len().max(1) as f64;
+            let parts = r["parts"].as_u64().unwrap_or(0);
+            table.push_str(&format!(
+                "        (\"{name}\", {parts}, {busy:.4}),
+"
+            ));
+            let Some(&(_, want_parts, want_busy)) = KPIS.iter().find(|k| k.0 == *name) else {
+                failed.push(format!("{name}: no figure"));
+                continue;
+            };
+            if r["ok"] != true || !r["alarm"].is_null() {
+                failed.push(format!("{name}: {r}"));
+            }
+            if (parts as f64) < (want_parts as f64 * KPI_SLACK).floor() {
+                failed.push(format!("{name}: {parts} made, was {want_parts}"));
+            }
+            if busy < want_busy * KPI_SLACK {
+                failed.push(format!(
+                    "{name}: machines {busy:.3} busy, was {want_busy:.3}"
+                ));
+            }
+        }
+        println!(
+            "measured:
+{table}"
+        );
+        assert!(
+            failed.is_empty(),
+            "{}
+measured:
+{table}",
+            failed.join(
+                "
+"
+            )
+        );
     }
 
     /// Every sample reads; one that runs by itself — a program, or a flow
@@ -256,6 +433,9 @@ mod tests {
         assert_eq!(second, dir.join("자동차 공장 2.json"));
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "mine");
         assert_eq!(std::fs::read_to_string(&second).unwrap(), demo.file);
+        // Opened once more, untouched: the same copy, no third.
+        assert_eq!(copy(demo, &dir).unwrap(), second);
+        assert!(!dir.join("자동차 공장 3.json").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

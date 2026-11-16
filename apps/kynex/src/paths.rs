@@ -70,6 +70,48 @@ pub fn remember(file: &Path) {
     }
 }
 
+/// The AI chat's settings for this user — which provider, and each one's
+/// model and API key —, kept with KYNEX's own (`ai.json`), not in a
+/// project: a project shared does not carry its maker's keys. `{}` if
+/// none are kept.
+pub fn ai_settings() -> serde_json::Value {
+    std::fs::read_to_string(app_dir().join("ai.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// The AI chat's settings kept: for the user alone to read, where the
+/// system has it so. Not while testing.
+pub fn keep_ai_settings(settings: &serde_json::Value) -> Result<(), String> {
+    if cfg!(test) {
+        return Ok(());
+    }
+    let dir = app_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let file = dir.join("ai.json");
+    let text = serde_json::to_string_pretty(settings).unwrap_or_default();
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&file)
+            .map_err(|e| format!("{}: {e}", file.display()))?;
+        f.write_all(text.as_bytes())
+            .map_err(|e| format!("{}: {e}", file.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&file, text).map_err(|e| format!("{}: {e}", file.display()))
+    }
+}
+
 /// Project `file` held for this KYNEX: two writing one file would undo each
 /// other's work. A file beside it (`<project>.lock`) kept open with no
 /// sharing while the project is: another KYNEX cannot open it, and the
@@ -144,7 +186,7 @@ pub fn open_default() -> Result<(PathBuf, Option<std::fs::File>), String> {
     Err(last)
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

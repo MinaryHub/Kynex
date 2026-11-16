@@ -63,7 +63,11 @@ fn fixed(v: f64, digits: usize) -> String {
 pub fn zyz(r: DMat3) -> [f64; 3] {
     let m = |row: usize, col: usize| r.col(col)[row];
     let b = m(2, 2).clamp(-1.0, 1.0).acos();
-    if b.sin() > 1e-9 {
+    // Its Z along the base's, or all but: the angle found from a cosine a
+    // rounding off 1 is some 1e-8 already, and the two turns about Z read
+    // from what is left of the matrix would be read from its noise — half
+    // a turn where there is none, on one processor and not another.
+    if b.sin() > 1e-6 {
         [m(1, 2).atan2(m(0, 2)), b, m(2, 1).atan2(-m(2, 0))]
     } else if m(2, 2) > 0.0 {
         [m(1, 0).atan2(m(0, 0)), 0.0, 0.0]

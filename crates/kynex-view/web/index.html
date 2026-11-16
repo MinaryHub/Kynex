@@ -70,7 +70,7 @@
     <canvas id="canvas"></canvas>
 
     <div class="run-badge" id="run-badge" role="group" aria-label="실행 상태">
-      <button class="run-state" data-run="toggle" title="실행/정지 (스페이스)"><i class="run-dot"></i><b class="run-word">정지</b></button>
+      <button class="run-state" data-run="toggle" title="실행/일시정지 (스페이스)"><i class="run-dot"></i><b class="run-word">정지</b></button>
       <button class="run-step" data-run="slower" title="느리게 (−)">−</button>
       <span class="run-speed num" title="배속">1×</span>
       <button class="run-step" data-run="faster" title="빠르게 (+)">+</button>
@@ -334,8 +334,10 @@
         <summary>모델과 API 키</summary>
         <label>모델 회사<select data-chat="provider"><option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option><option value="gemini">Gemini (Google)</option></select></label>
         <label>모델<input data-chat="model" type="text" spellcheck="false" autocomplete="off"></label>
-        <label>API 키<input data-chat="key" type="password" spellcheck="false" autocomplete="off" placeholder="키를 붙여 넣으세요"></label>
-        <p class="muted">키는 이 브라우저에만 저장되고, 대화는 이 페이지에서 바로 그 회사로 보냅니다. <a data-chat="keys" target="_blank" rel="noopener"></a></p>
+        <p class="chat-key-state"></p>
+        <label>API 키<input data-chat="key" type="password" spellcheck="false" autocomplete="off" placeholder="키를 붙여 넣으세요"><button class="text-btn quiet" data-chat="show-key" type="button" title="키를 보이거나 가립니다">보기</button></label>
+        <div class="chat-key-actions"><button class="text-btn on" data-chat="save-key" type="button">저장</button><a data-chat="keys" target="_blank" rel="noopener"></a></div>
+        <p class="muted">키는 이 컴퓨터의 KYNEX 설정에 저장되고(프로젝트 파일에는 들어가지 않습니다), 대화는 이 페이지에서 바로 그 회사로 보냅니다. 키를 지우려면 칸을 비우고 저장하세요.</p>
       </details>
       <div class="chat-log" aria-live="polite"></div>
       <div class="chat-compose">

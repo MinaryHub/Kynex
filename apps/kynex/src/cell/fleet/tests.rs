@@ -1182,10 +1182,13 @@ fn a_stop_has_lanes_with_four_others_at_most() {
     ]);
     let hub = u[0];
     let lane = |cell: &mut Cell, x: u64, y: u64, way: &str| -> Value {
-        serde_json::from_str(&cell.handle(
-            &doc,
-            &json!({"op": "amr_lane", "from": x.to_string(), "to": y.to_string(), "way": way}).to_string(),
-        ))
+        serde_json::from_str(
+            &cell.handle(
+                &doc,
+                &json!({"op": "amr_lane", "from": x.to_string(), "to": y.to_string(), "way": way})
+                    .to_string(),
+            ),
+        )
         .unwrap()
     };
     // Four ways out of the hub: two both ways, one out, one in.
@@ -1197,7 +1200,10 @@ fn a_stop_has_lanes_with_four_others_at_most() {
     assert_eq!(fifth["ok"], false, "{fifth}");
     assert!(fifth["error"].as_str().unwrap().contains('4'), "{fifth}");
     let list: Vec<String> = u[1..].iter().map(u64::to_string).collect();
-    let all = cell.handle(&doc, &json!({"op": "amr_lanes", "object": hub.to_string(), "next": list}).to_string());
+    let all = cell.handle(
+        &doc,
+        &json!({"op": "amr_lanes", "object": hub.to_string(), "next": list}).to_string(),
+    );
     assert!(all.contains("\"ok\":false"), "{all}");
     assert_eq!(cell.lanes, before);
     // A way already there turned both ways is no new other.
@@ -1220,11 +1226,18 @@ fn a_reset_sends_the_amrs_back_where_they_were_placed() {
     assert!(cell.rovers.is_empty() && cell.holds.is_empty());
     let mut shown = doc.clone();
     let told = cell.apply(&mut shown);
-    assert!(told.changed.contains(&(DatablockKind::Object, Uid::from_raw(amr))), "{:?}", told.changed);
+    assert!(
+        told.changed
+            .contains(&(DatablockKind::Object, Uid::from_raw(amr))),
+        "{:?}",
+        told.changed
+    );
     let id = id_of(&shown, amr).unwrap();
     let (p, _) = floor_pose(&shown.world_transform(id));
     assert!(p.truncate().length() < 1e-6, "{p}");
     // Told once.
     let again = cell.untouched(&doc);
-    assert!(!again.changed.contains(&(DatablockKind::Object, Uid::from_raw(amr))));
+    assert!(!again
+        .changed
+        .contains(&(DatablockKind::Object, Uid::from_raw(amr))));
 }

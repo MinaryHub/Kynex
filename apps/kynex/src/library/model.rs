@@ -359,7 +359,10 @@ fn normal(path: &Path) -> Option<PathBuf> {
 /// Whether `path` names a file within a folder: relative, with no `..`.
 fn within(path: &str) -> bool {
     let p = Path::new(path);
+    // By the path's text on any system: a drive (`C:`) or a backslash is
+    // a way out on Windows, where a project made elsewhere may be opened.
     !path.is_empty()
+        && !path.contains([':', '\\'])
         && p.components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }

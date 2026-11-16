@@ -39,7 +39,7 @@ impl Model {
 /// What a file brings: a shape, kept as equipment of the user's own, or a
 /// robot (its description, as a zip of its folder or a `.urdf`).
 pub enum Imported {
-    Shape(Model),
+    Shape(Box<Model>),
     Robot(crate::library::RobotModel),
 }
 
@@ -50,7 +50,7 @@ pub fn read_any(name: &str, bytes: &[u8], unit: Option<f64>) -> Result<Imported,
         return crate::library::RobotModel::from_file(String::new(), name, bytes)
             .map(Imported::Robot);
     }
-    read(name, bytes, unit).map(Imported::Shape)
+    read(name, bytes, unit).map(|m| Imported::Shape(Box::new(m)))
 }
 
 /// File `name`'s bytes read as a model. `unit` is metres per the file's

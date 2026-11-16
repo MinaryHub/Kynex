@@ -319,7 +319,7 @@ fn a_machine_tending_program_loads_waits_for_the_cycle_and_unloads() {
     // Nothing held in a gripper ran into anything along the way: the
     // check sees the robot where it stopped, clear of the cell.
     let shown = c.posing.shown(&c.doc).unwrap();
-    let contacts = Collider::default().contacts(&shown, &c.cell.held());
+    let contacts = Collider::default().contacts(&shown, &c.cell.not_obstacles());
     assert!(contacts.is_empty(), "{contacts:?}");
 }
 
@@ -363,9 +363,25 @@ fn a_cycle_runs_again_and_is_timed() {
 fn the_clock_runs_at_its_speed() {
     let mut clock = Clock::default();
     let t0 = Instant::now();
-    clock.advance(t0);
+    clock.advance(t0, true);
     clock.speed = 10.0;
-    assert!((clock.advance(t0 + Duration::from_secs(2)) - 20.0).abs() < 1e-9);
+    assert!((clock.advance(t0 + Duration::from_secs(2), true) - 20.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_clock_stands_still_while_paused_or_idle() {
+    let mut clock = Clock::default();
+    let t0 = Instant::now();
+    clock.advance(t0, true);
+    assert_eq!(clock.advance(t0 + Duration::from_secs(1), true), 1.0);
+    // Nothing ran meanwhile: the minute left alone is not counted.
+    assert_eq!(clock.advance(t0 + Duration::from_secs(61), false), 1.0);
+    // Paused: running or not, it stays.
+    clock.paused = true;
+    assert_eq!(clock.advance(t0 + Duration::from_secs(70), true), 1.0);
+    // Going on from where it stood, not from where real time is.
+    clock.paused = false;
+    assert_eq!(clock.advance(t0 + Duration::from_secs(72), true), 3.0);
 }
 
 #[test]

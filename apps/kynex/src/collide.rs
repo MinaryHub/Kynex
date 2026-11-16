@@ -453,7 +453,18 @@ pub fn label(doc: &Document, uid: u64) -> String {
     let Some(id) = doc.object_by_uid(kreate_scene::Uid::from_raw(uid)) else {
         return String::new();
     };
-    let own = doc.object(id).map(|o| o.name.clone()).unwrap_or_default();
+    let mut own = doc.object(id).map(|o| o.name.clone()).unwrap_or_default();
+    // A flow part drawn in pieces is known by what it is — a body, a
+    // block —, its piece's name saying nothing.
+    if own == "piece" {
+        let above = doc
+            .object(id)
+            .and_then(|o| o.parent)
+            .and_then(|p| doc.object(p));
+        if let Some(part) = above {
+            own = part.name.clone();
+        }
+    }
     let mut at = Some(id);
     for _ in 0..=doc.object_count() {
         let Some(here) = at else { break };

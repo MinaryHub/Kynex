@@ -512,7 +512,7 @@ enum Conn {
         tid: u16,
         unit: u8,
     },
-    OpcUa(opcua::Session),
+    OpcUa(Box<opcua::Session>),
     S7(s7::Client),
     Xgt(xgt::Client),
 }
@@ -575,7 +575,7 @@ impl Conn {
         }
         drop(stream);
         let (session, thumbprint) = open_opcua(settings)?;
-        Ok((Conn::OpcUa(session), thumbprint))
+        Ok((Conn::OpcUa(Box::new(session)), thumbprint))
     }
 
     /// What is at `addresses`, and the addresses that could not be read.

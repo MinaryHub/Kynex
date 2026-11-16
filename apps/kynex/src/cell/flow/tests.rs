@@ -713,7 +713,7 @@ fn a_big_flow_keeps_up() {
         tick += a.elapsed();
         most_parts = most_parts.max(cell.parts.len());
         // Told once a second of the simulation.
-        if (t * 10.0).round() as u64 % 10 == 0 {
+        if ((t * 10.0).round() as u64).is_multiple_of(10) {
             let a = Instant::now();
             std::hint::black_box(cell.to_json(&doc));
             json += a.elapsed();
@@ -1329,7 +1329,11 @@ fn belts_run_the_way_they_are_linked() {
 #[test]
 fn a_source_s_bag_keeps_its_mix_close() {
     let (doc, mut cell, u) = line(&[
-        ("flow_source", 0.0, json!({"feed": 1.0, "capacity": 100, "policy": 1})),
+        (
+            "flow_source",
+            0.0,
+            json!({"feed": 1.0, "capacity": 100, "policy": 1}),
+        ),
         ("flow_sink", 2.0, json!({})),
     ]);
     link(&mut cell, &doc, u[0], &[u[1]]);
@@ -1349,4 +1353,26 @@ fn a_source_s_bag_keeps_its_mix_close() {
     }
     // Not the same order every time.
     assert!(drawn.chunks(4).any(|b| b != &drawn[..4]), "{drawn:?}");
+}
+
+/// A belt set to run the other way does, against its own X with no links
+/// and against its links with them.
+#[test]
+fn a_belt_reversed_runs_the_other_way() {
+    let (doc, mut cell, u) = line(&[
+        ("conveyor", 0.0, json!({"speed": 0.5, "reverse": 1})),
+        ("conveyor", 2.1, json!({"speed": 0.5})),
+    ]);
+    let along = |cell: &Cell, o: u64| {
+        cell.belts(&doc)
+            .into_iter()
+            .find(|b| b.object == o)
+            .unwrap()
+            .along
+            .x
+    };
+    assert!(along(&cell, u[0]) < -0.99 && along(&cell, u[1]) > 0.99);
+    // Linked first on to second: +X by the link, −X reversed.
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    assert!(along(&cell, u[0]) < -0.99 && along(&cell, u[1]) > 0.99);
 }

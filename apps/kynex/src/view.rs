@@ -258,7 +258,7 @@ pub fn run_with(
             let shown = owed.take();
             let shown = shown.as_ref().unwrap_or(link.document());
             let started = Instant::now();
-            let contacts = stage.collider.contacts(shown, &stage.cell.held());
+            let contacts = stage.collider.contacts(shown, &stage.cell.not_obstacles());
             server.state("contacts", &collide::contacts_json(shown, &contacts));
             checks.done(started.elapsed());
         }
@@ -275,6 +275,9 @@ type Importing = (
     std::sync::mpsc::Sender<String>,
     bool,
 );
+
+/// A sweep running: what it varies, and its results to come.
+type Sweeping = (Value, Receiver<Result<Vec<Value>, String>>);
 
 /// What KYNEX adds to the session's scene: placed equipment, robots posed
 /// and their programs, the cell's roles and its parts, and the collision
@@ -322,7 +325,7 @@ struct Stage {
     comparing: Option<Receiver<Vec<Value>>>,
     /// A sweep running there (what it varies, its results to come), and
     /// the last one done.
-    sweeping: Option<(Value, Receiver<Result<Vec<Value>, String>>)>,
+    sweeping: Option<Sweeping>,
     swept: Value,
     /// The PLC the cell's machines are wired to, and whether where it is
     /// changed since last saved.
@@ -516,6 +519,10 @@ impl Stage {
     /// anything to look at again.
     fn answer(&mut self, doc: &Document, asked: Vec<RobotRequest>) -> bool {
         let mut touched = false;
+        // Whether anything ran by the clock since it was last moved: as it
+        // was left then, before what is asked now changes it. A run started
+        // after the page was left alone starts from where the clock stood.
+        let kept = self.keeps_time();
         self.asked |= !asked.is_empty();
         for request in asked {
             let op = serde_json::from_str::<Value>(&request.body)
@@ -591,13 +598,36 @@ impl Stage {
             } else if op == "follow" {
                 touched = true;
                 self.follow_op(doc, &request.body)
-            } else if matches!(op.as_str(), "play" | "stop" | "speed" | "reset_run") {
-                if op == "play" && !self.running() {
+            } else if matches!(
+                op.as_str(),
+                "play" | "stop" | "speed" | "reset_run" | "pause" | "resume"
+            ) {
+                // The poses to go back to: as they stood before anything
+                // ran — not where a paused run left them.
+                if op == "play" && !self.running() && !self.active() {
                     self.before_run = Some(self.posing.held_now());
                 }
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
                 answer
+            } else if op == "ai_settings" {
+                // The AI chat's provider, models and keys: kept for the
+                // user (`paths::ai_settings`), told back as they now are.
+                // `set` changes what it names, the rest as it was; a key
+                // set to "" is forgotten.
+                let req: Value = serde_json::from_str(&request.body).unwrap_or(Value::Null);
+                let mut kept = crate::paths::ai_settings();
+                let answer = match req["set"].as_object() {
+                    Some(set) => {
+                        merge_settings(&mut kept, set);
+                        match crate::paths::keep_ai_settings(&kept) {
+                            Ok(()) => serde_json::json!({ "ok": true, "settings": kept }),
+                            Err(e) => serde_json::json!({ "ok": false, "error": e }),
+                        }
+                    }
+                    None => serde_json::json!({ "ok": true, "settings": kept }),
+                };
+                answer.to_string()
             } else if op == "save_custom" {
                 // An object of the scene, and what is below it, kept as
                 // equipment of the user's own, its roles with it.
@@ -661,6 +691,10 @@ impl Stage {
                 let reply = self
                     .cell
                     .handle(posed.as_ref().unwrap_or(scene), &request.body);
+                // The flow set going goes: the clock is not left paused.
+                if op == "flow" && self.cell.flow_running() {
+                    self.clock.paused = false;
+                }
                 touched |= self.cell.take_changed();
                 // A process flow started with nothing else running: a new
                 // record of it.
@@ -695,7 +729,7 @@ impl Stage {
         touched |= self.imported(doc);
         // The clock: the program running moves on, the machines run.
         let now = Instant::now();
-        let time = self.clock.advance(now);
+        let time = self.clock.advance(now, kept);
         let scene = self.base.as_ref().unwrap_or(doc);
         for runner in &mut self.runners {
             if runner.tick(time, now, &mut self.posing, &mut self.cell, scene) {
@@ -919,10 +953,22 @@ impl Stage {
         due
     }
 
-    /// Whether anything runs by the clock: the loop then keeps time.
+    /// Whether the simulation's clock moves on: a program or the cell
+    /// running, and not paused. A PLC or a real machine linked does not by
+    /// itself: what they change, they change at once.
+    fn keeps_time(&self) -> bool {
+        !self.clock.paused && self.active()
+    }
+
+    /// Whether a program or the cell is running, paused or not.
+    fn active(&self) -> bool {
+        self.runners.iter().any(|r| !r.stopped()) || self.cell.is_running()
+    }
+
+    /// Whether anything is to be looked at by the clock: the loop then
+    /// keeps time, rather than waiting for the next request.
     fn running(&self) -> bool {
-        self.runners.iter().any(|r| !r.stopped())
-            || self.cell.is_running()
+        self.keeps_time()
             || self.plc.on()
             || !self.mirrors.is_empty()
             || !self.followers.is_empty()
@@ -936,14 +982,19 @@ impl Stage {
     /// worked out again, a second apart at most, when the links, their
     /// ends or the robots have moved — not as doors and arms move.
     fn link_reach(&mut self, doc: &Document, now: Instant) {
-        if self.reach_at.is_some_and(|t| now.duration_since(t).as_secs_f64() < 1.0) {
+        if self
+            .reach_at
+            .is_some_and(|t| now.duration_since(t).as_secs_f64() < 1.0)
+        {
             return;
         }
         self.reach_at = Some(now);
         let base = self.base.take();
         let scene = base.as_ref().unwrap_or(doc);
         let links = self.cell.robot_links();
-        let cm = |v: kreate_math::DVec3| format!("{:.0},{:.0},{:.0}", v.x * 100.0, v.y * 100.0, v.z * 100.0);
+        let cm = |v: kreate_math::DVec3| {
+            format!("{:.0},{:.0},{:.0}", v.x * 100.0, v.y * 100.0, v.z * 100.0)
+        };
         let mut key = String::new();
         let mut ends = Vec::new();
         for (a, b, r) in &links {
@@ -1020,6 +1071,8 @@ impl Stage {
         }
         // Its calls replaced by what they call.
         let (program, origin) = self.posing.runnable(root)?;
+        // A program set going goes: the clock is not left paused.
+        self.clock.paused = false;
         let scene = self.base.as_ref().unwrap_or(doc);
         let mut runner = Runner::new(root, program, scene, self.clock.time)?;
         runner.origin = origin;
@@ -1050,7 +1103,19 @@ impl Stage {
             // Everything back as it was before the run: programs and the
             // flow stopped, every part taken away, the robots posed as they
             // stood when it started.
+            // Everything held where it is, to go on from there.
+            "pause" => {
+                self.clock.paused = true;
+                Ok(())
+            }
+            "resume" => {
+                self.clock.paused = false;
+                Ok(())
+            }
             "reset_run" => {
+                // A fresh start: not paused, at 1×.
+                self.clock.paused = false;
+                self.clock.speed = 1.0;
                 self.runners.clear();
                 self.carrying = Default::default();
                 let scene = self.base.as_ref().unwrap_or(doc);
@@ -1067,7 +1132,10 @@ impl Stage {
             "stop" => {
                 match req["robot"].as_str().and_then(|s| s.parse::<u64>().ok()) {
                     Some(root) => self.runners.retain(|r| r.root != root),
-                    None => self.runners.clear(),
+                    None => {
+                        self.runners.clear();
+                        self.clock.paused = false;
+                    }
                 }
                 Ok(())
             }
@@ -1477,7 +1545,13 @@ impl Stage {
                 .and_then(|demo| crate::demos::copy(demo, &dir))
                 .and_then(|file| {
                     let name = file.file_stem().map(|s| s.to_string_lossy().to_string());
+                    // A copy opened again while another's work was shown
+                    // in it is the demo's no more.
+                    let again = file == self.file;
                     self.switch(doc, &file, keep)?;
+                    if !again {
+                        crate::demos::opened(&file);
+                    }
                     Ok(serde_json::json!({ "name": name }))
                 }),
             "new" => named().and_then(|file| {
@@ -1870,7 +1944,7 @@ fn offline(
             } else {
                 server.update(shown, Some(&more));
             }
-            let contacts = stage.collider.contacts(shown, &stage.cell.held());
+            let contacts = stage.collider.contacts(shown, &stage.cell.not_obstacles());
             server.state("contacts", &collide::contacts_json(shown, &contacts));
         }
         if any_asked || touched || reset || stage.ticking() {
@@ -2123,6 +2197,40 @@ pub(crate) fn open_browser(url: &str) {
     }
 }
 
+/// `set` merged into the AI chat's settings `kept`: each provider's
+/// fields over what it had, text only and not over-long; an empty one
+/// taken away.
+fn merge_settings(kept: &mut Value, set: &serde_json::Map<String, Value>) {
+    for (k, v) in set {
+        match v {
+            Value::Object(fields) if ["claude", "openai", "gemini"].contains(&k.as_str()) => {
+                if !kept[k].is_object() {
+                    kept[k] = serde_json::json!({});
+                }
+                for (f, x) in fields {
+                    let Some(text) = x.as_str().filter(|t| t.len() <= 400) else {
+                        continue;
+                    };
+                    if !["key", "model"].contains(&f.as_str()) {
+                        continue;
+                    }
+                    if text.trim().is_empty() {
+                        kept[k].as_object_mut().unwrap().remove(f);
+                    } else {
+                        kept[k][f] = Value::String(text.trim().to_string());
+                    }
+                }
+            }
+            Value::String(p)
+                if k == "provider" && ["claude", "openai", "gemini"].contains(&p.as_str()) =>
+            {
+                kept["provider"] = v.clone();
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2238,6 +2346,89 @@ mod tests {
     /// Equipment placed, moved (twice, close together: one edit) and
     /// removed; each undone in turn and done again; a new edit leaves
     /// nothing to redo; never from another computer.
+    /// The clock counts only the time something ran, paused not: a run
+    /// paused, or a page left alone, loses nothing and gains nothing.
+    #[test]
+    fn a_paused_run_or_one_left_alone_goes_on_where_it_stood() {
+        let dir = std::env::temp_dir().join(format!("kynex-pause-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("line.json");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/demos/samples/01-line-on-plan.json"
+            ),
+            &file,
+        )
+        .unwrap();
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(file)).unwrap();
+        stage.replaced(&doc);
+        let wait = || std::thread::sleep(Duration::from_millis(60));
+        let look = |stage: &mut Stage| {
+            ask(stage, &doc, json!({"op": "speed", "speed": 100}), true);
+            stage.clock.time
+        };
+        // Nothing running: the time left alone is not counted.
+        look(&mut stage);
+        wait();
+        assert_eq!(look(&mut stage), 0.0);
+        // The flow set going: its first look starts from 0, not from the
+        // time left alone.
+        wait();
+        let started = ask(
+            &mut stage,
+            &doc,
+            json!({"op": "flow", "action": "start"}),
+            true,
+        );
+        assert_eq!(started["ok"], true, "{started}");
+        assert!(stage.clock.time < 1.0, "{}", stage.clock.time);
+        wait();
+        let ran = look(&mut stage);
+        assert!(ran > 1.0, "{ran}");
+        // Paused: it stands, the flow still on, and says so.
+        ask(&mut stage, &doc, json!({"op": "pause"}), true);
+        let held = stage.clock.time;
+        wait();
+        assert_eq!(look(&mut stage), held);
+        assert!(stage.cell.flow_running());
+        assert_eq!(stage.clock.to_json()["paused"], true);
+        // Going on from where it stood.
+        ask(&mut stage, &doc, json!({"op": "resume"}), true);
+        wait();
+        let on = look(&mut stage);
+        assert!(on > held && on < held + 30.0, "{held} → {on}");
+        // The flow stopped: once nothing moves, the clock stands, so its
+        // cycles and parts under way are found as they were when it starts
+        // again — not all finished at once.
+        ask(
+            &mut stage,
+            &doc,
+            json!({"op": "flow", "action": "stop"}),
+            true,
+        );
+        assert!(!stage.cell.is_running());
+        let stopped = look(&mut stage);
+        wait();
+        assert_eq!(look(&mut stage), stopped);
+        // Paused, then set going by starting the flow again: not paused.
+        ask(&mut stage, &doc, json!({"op": "pause"}), true);
+        ask(
+            &mut stage,
+            &doc,
+            json!({"op": "flow", "action": "start"}),
+            true,
+        );
+        assert!(!stage.clock.paused);
+        // Back to the start: not paused either.
+        ask(&mut stage, &doc, json!({"op": "pause"}), true);
+        ask(&mut stage, &doc, json!({"op": "reset_run"}), true);
+        assert!(!stage.clock.paused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn edits_are_undone_and_redone() {
         let dir = std::env::temp_dir().join(format!("kynex-undo-{}", std::process::id()));
@@ -2476,12 +2667,41 @@ mod tests {
         assert!(stage.take_reset());
         assert!(!stage.library.items().is_empty(), "its equipment");
         assert_eq!(stage.file, dir.join("LCD 공장.json"));
+        // Opened again untouched: the same copy, not another.
         let again = ask(&mut stage, &doc, project("demo", "LCD 공장"), true);
-        assert_eq!(again["name"], "LCD 공장 2", "{again}");
+        assert_eq!(again["name"], "LCD 공장", "{again}");
         assert!(dir.join("LCD 공장.json").is_file());
+        assert!(!dir.join("LCD 공장 2.json").exists());
         let missing = ask(&mut stage, &doc, project("demo", "없는 예제"), true);
         assert_eq!(missing["ok"], false, "{missing}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The AI chat's settings take a provider's key and model, trimmed; an
+    /// empty key forgets it; anything else asked is left out.
+    #[test]
+    fn ai_settings_keep_only_keys_and_models() {
+        let mut kept = json!({"openai": {"key": "old", "model": "gpt-5"}});
+        let set = json!({
+            "provider": "gemini",
+            "claude": {"key": "  sk-1  ", "model": "claude-opus-5-5", "other": "x"},
+            "openai": {"key": ""},
+            "elsewhere": {"key": "y"},
+            "gemini": {"key": 5},
+        });
+        merge_settings(&mut kept, set.as_object().unwrap());
+        assert_eq!(
+            kept,
+            json!({
+                "provider": "gemini",
+                "claude": {"key": "sk-1", "model": "claude-opus-5-5"},
+                "openai": {"model": "gpt-5"},
+                "gemini": {},
+            })
+        );
+        let wrong = json!({"provider": "nobody"});
+        merge_settings(&mut kept, wrong.as_object().unwrap());
+        assert_eq!(kept["provider"], "gemini");
     }
 
     #[test]

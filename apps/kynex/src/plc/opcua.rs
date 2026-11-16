@@ -543,6 +543,8 @@ pub struct Session {
     types: std::collections::HashMap<NodeId, u8>,
 }
 
+/// A session created: the server's endpoints, its nonce and its certificate.
+type Created = (Vec<Endpoint>, Vec<u8>, Vec<u8>);
 impl Session {
     fn new(stream: TcpStream) -> Self {
         Self {
@@ -702,7 +704,7 @@ impl Session {
 
     /// Creates a session; returns the server's endpoints, its nonce and
     /// its certificate.
-    fn create_session(&mut self, url: &str) -> Result<(Vec<Endpoint>, Vec<u8>, Vec<u8>), String> {
+    fn create_session(&mut self, url: &str) -> Result<Created, String> {
         let mut body = Out::default();
         body.type_id(id::CREATE_SESSION_REQUEST);
         let handle = self.next_request();

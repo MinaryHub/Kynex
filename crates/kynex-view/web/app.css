@@ -254,6 +254,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   background: #aab2be;
 }
 .run-badge.on .run-state { background: #1f8f55; }
+.run-badge.held .run-state { background: #8a6a1f; }
+.run-badge.held .run-dot {
+  width: 10px;
+  border-radius: 0;
+  background: none;
+  border-left: 3px solid #ffe2a3;
+  border-right: 3px solid #ffe2a3;
+}
 .run-badge.on .run-dot {
   border-radius: 50%;
   background: #b9ffd8;
@@ -909,6 +917,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .chat-settings select, .chat-settings input { flex: 1; min-width: 0; }
 .chat-settings p { margin: 6px 0 0; font-size: 11px; line-height: 1.4; }
 .chat-settings a { color: var(--accent); }
+.chat-key-state { color: var(--muted); }
+.chat-key-state.missing { color: var(--accent); }
+.chat-key-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
 .chat-log { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 2px; }
 .chat-empty { font-size: 12px; line-height: 1.5; }
 .chat-msg { font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 8px; padding: 6px 9px; max-width: 92%; }

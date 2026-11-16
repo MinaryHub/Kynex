@@ -126,6 +126,7 @@ export const FIELDS = {
     ['speed', t('속도'), 'mm/s', 1000],
     ['feed', t('공급 간격'), 's', 1],
     ['drain', t('끝에서 치움'), '', 1, [[0, t('아니오')], [1, t('예')]]],
+    ['reverse', t('방향 반전'), '', 1, [[0, t('아니오')], [1, t('예')]]],
   ],
   amr: [
     ['speed', t('주행 속도'), 'mm/s', 1000],
@@ -1344,10 +1345,11 @@ export class CellPanel {
 
   // The lane between stops `a` and `b`: both ways, `a` to `b` (to), `b` to
   // `a` (from), or none.
-  setLane(a, b, way) {
+  setLane(a, b, way, hint) {
     const [p, q] = [this.stopNumber(a), this.stopNumber(b)];
     const said = { both: t('{p} ↔ {q} 양방향', { p, q }), to: t('{p} → {q} 한 방향', { p, q }), from: t('{p} → {q} 한 방향', { p: q, q: p }), none: t('{p} – {q} 길을 끊었습니다', { p, q }) }[way];
-    this.send({ op: 'amr_lane', from: a, to: b, way }, () => this.ctx.toast(t('AMR 길: {said}', { said })));
+    // Said once it is done: refused, KYNEX's reason is what is said.
+    this.send({ op: 'amr_lane', from: a, to: b, way }, () => this.ctx.toast(hint ?? t('AMR 길: {said}', { said })));
   }
 
   // A lane dragged from stop `a` onto stop `b`: one way, `a` to `b`; the
@@ -1355,8 +1357,7 @@ export class CellPanel {
   dragLane(a, b) {
     if (a === b) return;
     const back = (this.componentOf(b)?.lanes ?? []).includes(a);
-    this.setLane(a, b, back ? 'both' : 'to');
-    if (!back) this.ctx.toast(t('AMR 길: {p} → {q} 한 방향 · 반대로도 끌거나 길을 오른쪽 클릭하면 양방향', { p: this.stopNumber(a), q: this.stopNumber(b) }));
+    this.setLane(a, b, back ? 'both' : 'to', back ? undefined : t('AMR 길: {p} → {q} 한 방향 · 반대로도 끌거나 길을 오른쪽 클릭하면 양방향', { p: this.stopNumber(a), q: this.stopNumber(b) }));
   }
 
   // The menu for a right click on a lane.

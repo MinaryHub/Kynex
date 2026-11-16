@@ -287,6 +287,8 @@ impl Settings {
     }
 }
 
+/// Each piece's dock: where a carrier stops at it, by the piece.
+type DockPoints = BTreeMap<u64, (DVec3, DVec3, DVec3)>;
 impl Cell {
     /// The next random number of the flow, uniform in (0, 1): SplitMix64,
     /// the same sequence for one seed.
@@ -365,7 +367,8 @@ impl Cell {
                 self.jobs.clear();
                 // The AMRs, people and turntables back where they were
                 // placed, charged, holding no stop.
-                self.sent_home.extend(std::mem::take(&mut self.rovers).into_keys());
+                self.sent_home
+                    .extend(std::mem::take(&mut self.rovers).into_keys());
                 self.holds.clear();
                 self.blocked.clear();
                 self.energy.clear();
@@ -421,11 +424,17 @@ impl Cell {
         if bag {
             if self.bags.get(&object).is_none_or(|b| b.is_empty()) {
                 // As many of each as its share of the least, shuffled.
-                let least = mix.iter().copied().filter(|w| *w > 0.0).fold(f64::INFINITY, f64::min);
+                let least = mix
+                    .iter()
+                    .copied()
+                    .filter(|w| *w > 0.0)
+                    .fold(f64::INFINITY, f64::min);
                 let mut fill: Vec<u8> = mix
                     .iter()
                     .enumerate()
-                    .flat_map(|(k, w)| std::iter::repeat_n(k as u8, (w / least).round().min(100.0) as usize))
+                    .flat_map(|(k, w)| {
+                        std::iter::repeat_n(k as u8, (w / least).round().min(100.0) as usize)
+                    })
                     .collect();
                 for i in (1..fill.len()).rev() {
                     let j = ((self.uniform() * (i + 1) as f64) as usize).min(i);
@@ -573,10 +582,7 @@ impl Cell {
         &mut self,
         doc: &Document,
         flow: &[Component],
-    ) -> (
-        BTreeMap<u64, (DVec3, DVec3, DVec3)>,
-        BTreeMap<u64, Vec<DVec3>>,
-    ) {
+    ) -> (DockPoints, BTreeMap<u64, Vec<DVec3>>) {
         // The pieces, and the equipment each stands for.
         let key: Vec<u64> = flow
             .iter()
@@ -1690,6 +1696,12 @@ impl Cell {
             } else {
                 PITCH
             };
+            // How many it holds, for a rack's shelves to share.
+            let holds = self
+                .components
+                .iter()
+                .find(|c| c.object == *object)
+                .map_or(0, |c| c.props.capacity as usize);
             for uid in &order {
                 let k = match self.slots.get(uid) {
                     Some(&(o, k)) if o == *object => k,
@@ -1701,15 +1713,29 @@ impl Cell {
                     }
                 };
                 placed.insert(*uid);
-                // On a rack: ten to a shelf, the lowest first; else rows of
-                // five across the top, from its middle.
-                let (level, i) = match shelves {
-                    Some(tops) => (Some(tops[(k / 10).min(tops.len() - 1)]), k % 10),
-                    None => (None, k),
+                // On a rack: ten to a shelf, the lowest first — more, in
+                // closer rows, if it holds more than ten a shelf, each still
+                // in a place of its own; else rows of five across the top,
+                // from its middle.
+                let (level, i, rows) = match shelves {
+                    Some(tops) => {
+                        let per = (holds.div_ceil(tops.len())).max(10);
+                        (
+                            Some(tops[(k / per).min(tops.len() - 1)]),
+                            k % per,
+                            per.div_ceil(5),
+                        )
+                    }
+                    None => (None, k, 2),
                 };
                 let (col, row) = ((i % 5) as f64 - 2.0, (i / 5) as f64);
                 let base = level.unwrap_or(top);
-                spots.insert(*uid, base + along * col * pitch + across * row * pitch);
+                let deep = if rows > 2 {
+                    pitch / (rows - 1) as f64
+                } else {
+                    pitch
+                };
+                spots.insert(*uid, base + along * col * pitch + across * row * deep);
             }
         }
         // A part no longer set out on a table gives up its place.

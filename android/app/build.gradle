@@ -1,0 +1,55 @@
+plugins {
+    id "com.android.application"
+}
+
+// KYNEX's version, as its build scripts have it (`tools/version.rs`): the
+// workspace's major.minor and the number of commits; `KYNEX_BUILD` instead.
+def build = System.getenv("KYNEX_BUILD") ?: providers.exec {
+    commandLine "git", "rev-list", "--count", "HEAD"
+}.standardOutput.asText.get().trim()
+
+android {
+    namespace "kr.smic.kynex"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "kr.smic.kynex"
+        // Android 8: where a program carried as a native library may be run.
+        minSdk 26
+        targetSdk 36
+        versionCode build as Integer
+        versionName "0.1.${build}"
+        ndk { abiFilters "arm64-v8a" }
+    }
+
+    // A key of the maker's own, where one is given (`KYNEX_KEYSTORE` and
+    // its passwords in the environment): else the release is signed as a
+    // debug build is, to install by hand but not to publish.
+    signingConfigs {
+        release {
+            def store = System.getenv("KYNEX_KEYSTORE")
+            if (store) {
+                storeFile file(store)
+                storePassword System.getenv("KYNEX_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KYNEX_KEY_ALIAS") ?: "kynex"
+                keyPassword System.getenv("KYNEX_KEY_PASSWORD") ?: System.getenv("KYNEX_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv("KYNEX_KEYSTORE") ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    // KYNEX is a program, not a library: kept on the device as a file, to
+    // be run (see MainActivity).
+    packagingOptions {
+        jniLibs { useLegacyPackaging true }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

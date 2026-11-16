@@ -5,20 +5,13 @@
 
 import { showMenu } from './menu.js';
 import { tFor, tr } from './i18n.js';
+import { ask } from './ui.js';
 
 const t = tFor('page');
 
 // This computer's page, not one opened from another device.
 export const here = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
 
-async function ask(body) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return response.json();
-}
 
 export class SystemPanel {
   constructor({ toast }) {

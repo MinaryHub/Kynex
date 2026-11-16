@@ -7,18 +7,13 @@
 import * as THREE from 'three';
 import { TransformControls } from '/vendor/TransformControls.js';
 import { tFor, tr, getLang } from './i18n.js';
+import { post, editing } from './ui.js';
+
+// A touch screen: what is said is pressed, not clicked with a key held.
+const TOUCH = matchMedia('(pointer: coarse)').matches;
 
 const t = tFor('panels');
 
-async function post(request) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
 
 // Thumbnails, drawn at twice the size they show at.
 const THUMB = [160, 120];
@@ -653,7 +648,7 @@ export class LibraryPanel {
     const many = this.groupItems().length;
     const lock = item.locked ? ' disabled' : '';
     const hidden = this.hidden.has(item.id);
-    this.box.innerHTML = `
+    const html = `
       <div class="insp-item-head"><span class="insp-kind">${t('장비')}</span><input class="insp-name" data-rename value="${escapeHtml(tr(item.name))}" maxlength="60" spellcheck="false" title="${t('이름 바꾸기 (프로그램은 이 이름으로 장비를 찾습니다)')}">
         <button class="icon-mini${item.locked ? ' on' : ''}" data-item-act="lock" title="${item.locked ? t('잠금 풀기') : t('잠그기: 옮기거나 지울 수 없게')}">${item.locked ? '🔒' : '🔓'}</button>
         <button class="icon-mini${hidden ? ' on' : ''}" data-item-act="hide" title="${hidden ? t('다시 보이기') : t('이 화면에서만 숨기기')}">${hidden ? '◌' : '◉'}</button></div>
@@ -707,7 +702,15 @@ export class LibraryPanel {
           <select data-array="axis"><option value="x">${t('X 방향으로 (YZ면)')}</option><option value="y">${t('Y 방향으로 (XZ면)')}</option></select>
           <button class="text-btn quiet" data-item-act="mirror" title="${t('선택한 장비 상자의 끝에 붙여, 위치와 방향을 거울처럼 뒤집은 복사본을 놓습니다. 장비 형상 자체는 뒤집지 않습니다')}">${t('만들기')}</button></div>
       </details>
-      <div class="muted insp-hint">${t('Ctrl+클릭: 여러 개 · Alt+클릭: 안의 부품')}</div>`;
+      <div class="muted insp-hint">${TOUCH ? t('다른 장비를 길게 눌러 \'선택에 추가\': 여러 개') : t('Ctrl+클릭: 여러 개 · Alt+클릭: 안의 부품')}</div>`;
+    // Drawn anew only when it changed, and not while a field of the same
+    // item is being typed in; the sections opened stay open.
+    if (html === this.drawnHtml || (editing(this.box) && this.drawnItem === item.id)) return;
+    const open = [...this.box.querySelectorAll('details')].map((d) => d.open);
+    this.box.innerHTML = html;
+    this.box.querySelectorAll('details').forEach((d, i) => (d.open = this.drawnItem === item.id && !!open[i]));
+    this.drawnHtml = html;
+    this.drawnItem = item.id;
   }
 
   // The array and mirror numbers as typed.

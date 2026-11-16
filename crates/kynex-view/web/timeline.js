@@ -10,6 +10,7 @@
 import { costCards, csv, csvText, figures, laneTable, oeeTable, reportHtml, seriesCharts, stateChart, summary, sweepChart, throughputChart } from './stats.js';
 import { FIELDS } from './cell.js';
 import { tFor, tr } from './i18n.js';
+import { post } from './ui.js';
 
 const t = tFor('panels');
 
@@ -31,15 +32,6 @@ function stamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
-async function post(request) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
 
 const ACTIVITIES = {
   move: [t('이동'), '#5aa9ff'],
@@ -106,7 +98,12 @@ export class TimelinePanel {
       const b = e.target.closest('[data-sc]');
       if (!b) return;
       const index = Number(b.closest('[data-index]').dataset.index);
-      if (b.dataset.sc === 'remove') this.send({ action: 'remove', index });
+      // Gone for good, and its comparison with it: asked first, as every
+      // removal that cannot be undone is.
+      if (b.dataset.sc === 'remove') {
+        const name = tr(this.scenarios?.list?.[index]?.name ?? '');
+        if (confirm(t('시나리오 "{name}"를 지울까요? 되돌릴 수 없고, 비교 결과도 함께 지워집니다.', { name }))) this.send({ action: 'remove', index });
+      }
       if (b.dataset.sc === 'load') {
         this.send({ action: 'load', index }, () => this.ctx.toast(t('시나리오의 장비, 셀 역할, 프로그램을 불러왔습니다')));
       }

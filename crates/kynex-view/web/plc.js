@@ -3,18 +3,10 @@
 // coils in the inspector (cell.js).
 
 import { tFor, tr } from './i18n.js';
+import { post, editing } from './ui.js';
 
 const t = tFor('panels');
 
-async function post(request) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
 
 export class PlcPanel {
   // ctx: { toast, escapeHtml, robots() }
@@ -139,7 +131,9 @@ export class PlcPanel {
   // The `cell` event: the signals as KYNEX has them, and their values.
   setCell(cell) {
     this.cell = cell;
-    if (!this.draft) this.drawSignals(cell.signals ?? []);
+    // Not drawn anew under a field being set (a select chosen from changes
+    // nothing typed, and is no draft yet): only its values.
+    if (!this.draft && !editing(this.table)) this.drawSignals(cell.signals ?? []);
     else this.drawValues();
   }
 

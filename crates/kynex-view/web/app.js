@@ -487,12 +487,21 @@ function removeObject(uid) {
   if (selected === uid) select(null);
 }
 
+let robotsKey = '';
 function setRobots(list) {
   robots = list;
-  // The flow's signs name robots: drawn again with their names.
-  try {
-    cellPanel.drawMarkers();
-  } catch {}
+  // The flow's signs name robots: drawn again when the robots or their
+  // names change — not on every joint moved, which the cell's own event
+  // redraws them for often enough.
+  const key = list.map((r) => `${r.root}:${r.name}`).join('|');
+  if (key !== robotsKey) {
+    robotsKey = key;
+    try {
+      cellPanel.drawMarkers();
+    } catch (err) {
+      console.error('markers', err);
+    }
+  }
   jointKinds.clear();
   for (const r of list) for (const j of r.joints) jointKinds.set(j.uid, j.kind);
   // A joint whose kind changed draws a different gizmo.
@@ -632,7 +641,7 @@ function onUpdate(data) {
   for (const uid of data.removed) removeObject(uid);
   if (data.robots) setRobots(data.robots);
   else robotPanel.refresh();
-  if (treeChanged) renderTree();
+  if (treeChanged) treeSoon();
   if (selected != null) showInspector(selected);
   // A joint still being dragged: shown where the slider is, over the pose
   // just told; let go and caught up with, as told.
@@ -890,7 +899,20 @@ const treeList = document.getElementById('tree');
 const treeSpacer = document.getElementById('tree-spacer');
 const treeWindow = document.getElementById('tree-window');
 
+// The tree drawn again a moment after what changed it, once for all that
+// changed meanwhile: a running flow adds and takes away parts all the time.
+let treeTimer = 0;
+function treeSoon(ms = 200) {
+  if (treeTimer) return;
+  treeTimer = setTimeout(() => {
+    treeTimer = 0;
+    renderTree();
+  }, ms);
+}
+
 function renderTree() {
+  clearTimeout(treeTimer);
+  treeTimer = 0;
   const query = document.getElementById('search').value.trim().toLowerCase();
   const children = new Map();
   for (const rec of records.values()) {
@@ -1006,7 +1028,12 @@ document.getElementById('tree').addEventListener('dblclick', (e) => {
   const item = e.target.closest('.node');
   if (item) frame(item.dataset.uid);
 });
-document.getElementById('search').addEventListener('input', renderTree);
+// Searched as typing pauses, not at every key in a large scene.
+document.getElementById('search').addEventListener('input', () => {
+  clearTimeout(treeTimer);
+  treeTimer = 0;
+  treeSoon(150);
+});
 
 const robotPanel = new RobotPanel({
   host: document.getElementById('robots'),
@@ -1910,7 +1937,15 @@ function sceneMenu(x, y) {
   const hit = under;
   if (hit) {
     const uids = chainOf(hit.uid);
-    const entries = cellPanel.equipmentMenu(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
+    const item = libraryPanel.itemOf(uids[0]);
+    let entries = cellPanel.equipmentMenu(uids, item?.root ?? null);
+    // Several pieces of equipment chosen together, as Ctrl+click does: the
+    // only way there on a touch screen.
+    const primary = libraryPanel.selectedItem();
+    if (item && primary && primary.root !== item.root) {
+      entries ??= [{ title: tr(item.name) }];
+      entries.push({ sep: true }, { label: group.has(item.root) ? t('선택에서 빼기') : t('선택에 추가'), hint: 'Ctrl+클릭', run: () => toggleGroup(item.root) });
+    }
     if (entries) return showMenu(x, y, entries);
   }
   showMenu(x, y, [
@@ -1938,6 +1973,9 @@ document.addEventListener(
     const p = { x: e.clientX, y: e.clientY, target: e.target, done: false };
     p.timer = setTimeout(() => {
       if (press !== p || p.done) return;
+      // Held still at the start of a drag — a link, a gizmo's arrow, a
+      // door, equipment carried — is the drag's, not a menu's.
+      if (linkDrag || interacting || libraryPanel.dragging || robotPanel.dragging || libraryPanel.gizmoAxis()) return;
       p.done = true;
       if (canvas.contains(p.target)) {
         down = null;
@@ -2276,7 +2314,8 @@ function report() {
     scene,
     escapeHtml,
     toast,
-    project: document.getElementById('status-text').textContent.replace(/^(파일|File) · /, ''),
+    // The project's name; the status only if there is none.
+    project: projectPanel.state?.name || document.getElementById('status-text').textContent.replace(/^(파일|File) · /, ''),
     bounds: () => {
       const all = new THREE.Box3();
       const one = new THREE.Box3();
@@ -2467,9 +2506,12 @@ window.addEventListener(
   true,
 );
 
+// A dialog open has the keys; text chosen on the page is copied as text.
+const modalOpen = () => !!document.querySelector('.modal:not([hidden])');
 window.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.target.matches('input, textarea, select')) return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.target.matches('input, textarea, select') || modalOpen()) return;
   const k = e.key.toLowerCase();
+  if (k === 'c' && String(getSelection() ?? '').trim()) return;
   if (k === 'z' && !e.shiftKey) history('undo');
   else if (k === 'y' || (k === 'z' && e.shiftKey)) history('redo');
   // Program steps, while the program was last clicked in; else the
@@ -2573,7 +2615,7 @@ async function stepSpeed(up) {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, textarea, select') || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.matches('input, textarea, select') || e.ctrlKey || e.metaKey || e.altKey || modalOpen()) return;
   const k = e.key.toLowerCase();
   // Space on a button pressed last: the key is the view's, not the button's.
   if (k === ' ' && e.target.closest('button')) e.target.blur();

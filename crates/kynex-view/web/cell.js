@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { tFor, tr } from './i18n.js';
+import { post, editing } from './ui.js';
 
 const t = tFor('cell');
 
@@ -204,15 +205,6 @@ export const FIELDS = {
 const SIGNED = new Set(['travel', 'angle']);
 FIELDS.outfeed = FIELDS.infeed;
 
-async function post(request) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
 
 // What carries along a link, by its number, and its arrow's colour.
 const CARRIER_NAMES = ['', 'AMR', t('작업자'), t('로봇')];
@@ -428,13 +420,20 @@ export class CellPanel {
     if (document.activeElement !== this.kind) this.kind.value = c?.kind ?? '';
     const fields = c ? FIELDS[c.kind] || [] : [];
     const propsKey = `${uid}|${c?.kind}|${JSON.stringify(c?.props)}`;
-    if (propsKey !== this.drawn.props) {
+    // Not while one of its fields is being typed in: drawn once it is left.
+    const props = document.getElementById('cell-props');
+    if (propsKey !== this.drawn.props && !(editing(props) && this.drawn.propsFor === uid)) {
+      this.drawn.propsFor = uid;
       this.drawn.props = propsKey;
       document.getElementById('cell-props').innerHTML = this.fieldsHtml(c, fields);
     }
     const m = c?.machine;
     const state = document.getElementById('cell-state');
-    state.innerHTML = m ? this.machineHtml(m, c.kind) : '';
+    const stateHtml = m ? this.machineHtml(m, c.kind) : '';
+    if (stateHtml !== this.drawn.state && !editing(state)) {
+      this.drawn.state = stateHtml;
+      state.innerHTML = stateHtml;
+    }
     let actions = '';
     if (c && (c.kind === 'infeed' || c.kind === 'outfeed')) {
       actions = `<button class="text-btn" data-cell="fill">${c.kind === 'infeed' ? t('소재 채우기') : t('완성품 채우기')}</button><button class="text-btn quiet" data-cell="empty">${t('비우기')}</button><span class="muted">${t('{n}칸', { n: c.slots.length })}</span>`;
@@ -589,9 +588,11 @@ export class CellPanel {
     } else if (c && c.kind === 'gripper' && !c.robot) {
       actions = `<span class="warn-text">${t('로봇의 링크가 아닙니다')}</span>`;
     }
-    if (actions !== this.drawn.actions) {
+    const actionsBox = document.getElementById('cell-actions');
+    if (actions !== this.drawn.actions && !(editing(actionsBox) && this.drawn.actionsFor === uid)) {
       this.drawn.actions = actions;
-      document.getElementById('cell-actions').innerHTML = actions;
+      this.drawn.actionsFor = uid;
+      actionsBox.innerHTML = actions;
     }
     // Its wiring, for the program's export.
     const io = c?.io_points;

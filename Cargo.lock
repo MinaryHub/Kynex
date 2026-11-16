@@ -1486,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "kynex"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -1519,7 +1519,7 @@ dependencies = [
 
 [[package]]
 name = "kynex-collide"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "kreate-math",
  "kreate-mesh",
@@ -1527,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "kynex-kin"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "kreate-io",
  "kreate-math",
@@ -1536,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "kynex-link"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "kreate-collab",
  "kreate-io",
@@ -1548,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "kynex-model"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "kreate-math",
  "kreate-mesh",
@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "kynex-view"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "kreate-math",
  "kreate-mesh",

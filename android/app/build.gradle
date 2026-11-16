@@ -3,10 +3,14 @@ plugins {
 }
 
 // KYNEX's version, as its build scripts have it (`tools/version.rs`): the
-// workspace's major.minor and the number of commits; `KYNEX_BUILD` instead.
-def build = System.getenv("KYNEX_BUILD") ?: providers.exec {
-    commandLine "git", "rev-list", "--count", "HEAD"
-}.standardOutput.asText.get().trim()
+// workspace's major.minor and the commits since it was last set;
+// `KYNEX_BUILD` instead. The app's version code is every commit, so that it
+// only ever goes up, as Android asks of an update.
+def git = { List args -> providers.exec { commandLine(["git"] + args) }.standardOutput.asText.get().trim() }
+def majorMinor = (file("../../Cargo.toml").text =~ /(?m)^version = "(\d+\.\d+)\./)[0][1]
+def since = git(["log", "-1", "--format=%H", "-G", "^version = ", "--", ":(top)Cargo.toml"])
+def build = System.getenv("KYNEX_BUILD") ?: git(["rev-list", "--count", since ? "${since}..HEAD" : "HEAD"])
+def code = git(["rev-list", "--count", "HEAD"])
 
 android {
     namespace "kr.smic.kynex"
@@ -17,8 +21,8 @@ android {
         // Android 8: where a program carried as a native library may be run.
         minSdk 26
         targetSdk 36
-        versionCode build as Integer
-        versionName "0.1.${build}"
+        versionCode code as Integer
+        versionName "${majorMinor}.${build}"
         ndk { abiFilters "arm64-v8a" }
     }
 

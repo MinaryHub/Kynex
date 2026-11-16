@@ -1,7 +1,9 @@
 // KYNEX's version, for the build scripts that include it (`include!`):
 // the workspace's major.minor, and a build number that goes up with every
-// commit — the commits on the way to this one, the same on every machine
-// and in CI. `KYNEX_BUILD` in the environment gives the number instead.
+// commit — the commits since the one that last set the workspace's version
+// (`version = "…"` in the root Cargo.toml), so that commit is x.y.0, the
+// same on every machine and in CI. `KYNEX_BUILD` in the environment gives
+// the number instead.
 // Built from a tree with changes not committed, `-dev` after it: not a
 // build anyone else has.
 //
@@ -29,9 +31,24 @@ fn kynex_version() -> (String, String) {
     let mut parts = base.split('.');
     let (major, minor) = (parts.next().unwrap_or("0"), parts.next().unwrap_or("1"));
     let given = std::env::var("KYNEX_BUILD").ok().filter(|b| !b.is_empty());
+    // The commit the version was last set in; all of them if it is not
+    // found (a shallow clone).
+    let since = git(&[
+        "log",
+        "-1",
+        "--format=%H",
+        "-G",
+        "^version = ",
+        "--",
+        ":(top)Cargo.toml",
+    ])
+    .filter(|c| !c.is_empty());
     let build = given
         .clone()
-        .or_else(|| git(&["rev-list", "--count", "HEAD"]))
+        .or_else(|| match &since {
+            Some(c) => git(&["rev-list", "--count", &format!("{c}..HEAD")]),
+            None => git(&["rev-list", "--count", "HEAD"]),
+        })
         .unwrap_or_else(|| "0".into());
     let dirty = given.is_none()
         && git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());

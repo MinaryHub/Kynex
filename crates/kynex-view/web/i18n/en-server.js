@@ -852,6 +852,7 @@ export default {
   'KYNEX를 다시 시작하지 못했습니다': 'Could not restart KYNEX',
   '설치 파일을 실행하지 못했습니다': 'Could not run the setup',
   '이 KYNEX는 스스로 업데이트하지 않습니다': 'This KYNEX does not update itself',
+  'AI 키는 KYNEX를 실행한 컴퓨터에서만 읽고 바꿀 수 있습니다': 'AI keys can only be read or changed on the computer running KYNEX',
 };
 
 // A number as KYNEX writes it.

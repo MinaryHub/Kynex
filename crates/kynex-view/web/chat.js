@@ -10,6 +10,7 @@
 // they are there whichever window or port the page is opened in.
 
 import { tFor } from './i18n.js';
+import { here } from './system.js';
 
 const t = tFor('panels');
 
@@ -173,11 +174,41 @@ const TOOLS = [
   },
 ];
 
+// A tablet's or phone's own settings, kept in its browser: the keys of
+// the computer running KYNEX are never handed to another device.
+const DEVICE = 'kynex.chat.settings';
+
+// `set` (`{provider}` or `{<provider>: {key, model}}`) merged into `kept`
+// as KYNEX merges it: a field set to "" is forgotten.
+function merge(kept, set) {
+  for (const [k, v] of Object.entries(set)) {
+    if (k === 'provider' && typeof v === 'string' && PROVIDERS[v]) kept.provider = v;
+    else if (PROVIDERS[k] && v && typeof v === 'object') {
+      kept[k] = { ...(kept[k] ?? {}) };
+      for (const f of ['key', 'model']) {
+        if (typeof v[f] !== 'string') continue;
+        if (v[f].trim()) kept[k][f] = v[f].trim();
+        else delete kept[k][f];
+      }
+    }
+  }
+  return kept;
+}
+
 // The settings as KYNEX keeps them: `{provider, claude: {key, model}, …}`.
-// Read once as the page opens; each change sent back.
+// Read once as the page opens; each change sent back. On another device,
+// the device's own instead (see DEVICE).
 const store = {
   kept: {},
   async load() {
+    if (!here) {
+      try {
+        this.kept = JSON.parse(localStorage.getItem(DEVICE) ?? '{}') ?? {};
+      } catch {
+        this.kept = {};
+      }
+      return;
+    }
     try {
       const a = await post({ op: 'ai_settings' });
       if (a.ok) this.kept = a.settings ?? {};
@@ -200,6 +231,13 @@ const store = {
   },
   // `set`: `{provider}` or `{<provider>: {key, model}}`. Returns whether kept.
   async set(set) {
+    if (!here) {
+      this.kept = merge(this.kept, set);
+      try {
+        localStorage.setItem(DEVICE, JSON.stringify(this.kept));
+      } catch {}
+      return { ok: true, settings: this.kept };
+    }
     try {
       const a = await post({ op: 'ai_settings', set });
       if (a.ok) this.kept = a.settings ?? this.kept;
@@ -234,6 +272,8 @@ export class ChatPanel {
   constructor(ctx) {
     this.ctx = ctx;
     this.el = document.getElementById('chat');
+    // Where the key is kept, as this page is told.
+    for (const note of this.el.querySelectorAll('.chat-key-note')) note.hidden = (note.dataset.where === 'here') !== here;
     this.log = this.el.querySelector('.chat-log');
     this.input = this.el.querySelector('.chat-input');
     this.sendBtn = this.el.querySelector('[data-chat="send"]');

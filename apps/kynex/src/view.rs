@@ -610,6 +610,11 @@ impl Stage {
                 let answer = self.run_op(doc, &op, &request.body);
                 touched = true;
                 answer
+            } else if op == "ai_settings" && !request.local {
+                // The user's API keys never leave this computer: a tablet
+                // the viewer is shared with keeps its own, in its browser.
+                serde_json::json!({ "ok": false, "error": "AI 키는 KYNEX를 실행한 컴퓨터에서만 읽고 바꿀 수 있습니다" })
+                    .to_string()
             } else if op == "ai_settings" {
                 // The AI chat's provider, models and keys: kept for the
                 // user (`paths::ai_settings`), told back as they now are.
@@ -2702,6 +2707,25 @@ mod tests {
         let wrong = json!({"provider": "nobody"});
         merge_settings(&mut kept, wrong.as_object().unwrap());
         assert_eq!(kept["provider"], "gemini");
+    }
+
+    /// Another device the viewer is shared with neither reads the user's
+    /// AI keys nor sets them.
+    #[test]
+    fn ai_keys_stay_on_this_computer() {
+        let dir = std::env::temp_dir().join(format!("kynex-ai-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = Document::new();
+        let mut stage = Stage::open(Some(dir.join("ai.json"))).unwrap();
+        for body in [
+            json!({"op": "ai_settings"}),
+            json!({"op": "ai_settings", "set": {"claude": {"key": "sk-x"}}}),
+        ] {
+            let answer = ask(&mut stage, &doc, body, false);
+            assert_eq!(answer["ok"], false, "{answer}");
+            assert!(answer.get("settings").is_none(), "{answer}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

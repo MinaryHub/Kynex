@@ -374,6 +374,8 @@ export default {
   '보내기': 'Send',
   '키를 보이거나 가립니다': 'Show or hide the key',
   '키는 이 컴퓨터의 KYNEX 설정에 저장되고(프로젝트 파일에는 들어가지 않습니다), 대화는 이 페이지에서 바로 그 회사로 보냅니다. 키를 지우려면 칸을 비우고 저장하세요.': "The key is kept in KYNEX's settings on this computer (never in a project file); the conversation goes from this page straight to the provider. To remove a key, clear the field and save.",
+  '태블릿·휴대폰에서는 키를 이 기기의 브라우저에만 저장합니다. KYNEX를 실행한 컴퓨터의 키는 다른 기기로 보내지 않습니다. 키를 지우려면 칸을 비우고 저장하세요.':
+    "On a tablet or phone the key is kept in this device's browser only. The keys of the computer running KYNEX are never sent to another device. To remove a key, clear the field and save.",
 
   // ---- system.js: KYNEX's updates, and the viewer on tablets
   'KYNEX 업데이트': 'KYNEX update',

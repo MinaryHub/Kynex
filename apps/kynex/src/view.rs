@@ -1467,7 +1467,13 @@ impl Stage {
         let scenarios = std::mem::take(&mut self.scenarios_changed);
         let plc = std::mem::take(&mut self.plc_changed);
         server.state("plc", &self.plc.to_json().to_string());
-        server.state("project", &self.project_json().to_string());
+        // Another device is told the project's name, not where this
+        // computer keeps it (its user's name is in the path).
+        let project = self.project_json();
+        let mut named = project.clone();
+        named["path"] = Value::Null;
+        named["dir"] = Value::Null;
+        server.state_for("project", &project.to_string(), Some(&named.to_string()));
         // The drawing only when it changed: it may be megabytes.
         if !self.floor_told {
             server.state("floor", &self.floor.to_json().to_string());
@@ -1617,12 +1623,35 @@ impl Stage {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
+        // The project open now, opened again (a demo's copy, the current
+        // one in the list): saved or put back first, then let go of — it is
+        // this KYNEX's own lock that would turn it away (on Windows).
+        let same = file == self.file
+            || (file.exists()
+                && std::fs::canonicalize(file).ok() == std::fs::canonicalize(&self.file).ok());
+        if same {
+            let left = if keep { self.save(doc) } else { self.discard() };
+            if let Err(e) = left {
+                println!("프로젝트를 저장하지 못했습니다: {e}");
+            }
+            self._lock = None;
+        }
         // Read first: a file that cannot be read leaves this project open.
-        let mut next = Stage::open(Some(file.to_path_buf()))?;
+        let mut next = match Stage::open(Some(file.to_path_buf())) {
+            Ok(next) => next,
+            Err(e) => {
+                if same {
+                    self._lock = crate::paths::hold(&self.file).ok().flatten();
+                }
+                return Err(e);
+            }
+        };
         next.projects = self.projects.clone();
-        let left = if keep { self.save(doc) } else { self.discard() };
-        if let Err(e) = left {
-            println!("프로젝트를 저장하지 못했습니다: {e}");
+        if !same {
+            let left = if keep { self.save(doc) } else { self.discard() };
+            if let Err(e) = left {
+                println!("프로젝트를 저장하지 못했습니다: {e}");
+            }
         }
         *self = next;
         self.replaced(doc);
@@ -2149,7 +2178,8 @@ struct System {
 
 impl System {
     fn tell_share(&self, server: &Server) {
-        server.state("share", &self.share.to_json().to_string());
+        // The address and its code: for this computer's page alone.
+        server.state_for("share", &self.share.to_json().to_string(), None);
     }
 
     /// Answers the requests that are KYNEX's own; the rest are the stage's.

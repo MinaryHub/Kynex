@@ -505,8 +505,11 @@ function setRobots(list) {
 
 // ---- the stream -------------------------------------------------------------
 
-// The build of KYNEX that served this page, as its stream first said.
+// The build of KYNEX that served this page, as its stream first said; and
+// which KYNEX it was (another started since, of the same build, numbers
+// its scenes from the start again).
 let servedBy = null;
+let servedInstance = null;
 
 // The version of the scene this page holds: the scene file's, then each
 // update's after it.
@@ -831,14 +834,37 @@ function connect() {
     }
     if (servedBy && servedBy !== build) location.reload();
     servedBy = build;
+    // Another KYNEX: what this page held of the last one's scenes is no
+    // measure of the new one's, which start again from the first.
+    const { instance } = JSON.parse(e.data);
+    if (servedInstance && instance && servedInstance !== instance) {
+      heldVersion = -1;
+      wantedVersion = -1;
+      fetching = false;
+      waiting.length = 0;
+    }
+    servedInstance = instance ?? servedInstance;
   });
+  source.onopen = () => (refusedTries = 0);
   source.onerror = () => {
     const el = document.getElementById('status');
     el.dataset.state = 'lost';
-    document.getElementById('status-text').textContent = t('KYNEX 서버와 연결이 끊겼습니다 · 다시 시도 중');
+    // Turned away for good (sharing off, a new access code): the browser
+    // gives up on the stream, so the page asks again now and then, and
+    // says why it waits.
+    const closed = source.readyState === EventSource.CLOSED;
+    document.getElementById('status-text').textContent =
+      closed && !here
+        ? t('이 기기는 지금 접속할 수 없습니다 · KYNEX 컴퓨터에서 QR 코드로 다시 여세요')
+        : t('KYNEX 서버와 연결이 끊겼습니다 · 다시 시도 중');
     setStale(true, t('KYNEX 서버와 연결이 끊겼습니다 · 마지막으로 받은 장면입니다'));
+    if (closed) {
+      refusedTries++;
+      setTimeout(connect, Math.min(30000, 2000 * refusedTries));
+    }
   };
 }
+let refusedTries = 0;
 
 // ---- panels -----------------------------------------------------------------
 

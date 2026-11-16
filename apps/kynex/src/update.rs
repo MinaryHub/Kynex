@@ -105,7 +105,8 @@ pub fn kind() -> Kind {
     let Some(dir) = exe.parent() else {
         return Kind::Manual;
     };
-    if asset_suffix().is_none() {
+    // Android: the app's own update, not KYNEX's.
+    if cfg!(target_os = "android") || asset_suffix().is_none() {
         return Kind::Manual;
     }
     if cfg!(windows) && dir.join("unins000.exe").is_file() {
@@ -227,15 +228,18 @@ fn fetch(url: &str, path: &Path, seconds: u32) -> Result<(), String> {
         )),
         // No curl (Windows 10 before 1803): PowerShell's.
         Err(_) if cfg!(windows) => {
+            // The address and the file through the environment: nothing of
+            // theirs is read as PowerShell.
             let script = format!(
                 "$ProgressPreference='SilentlyContinue';\
                  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;\
-                 Invoke-WebRequest -UseBasicParsing -TimeoutSec {seconds} -UserAgent 'KYNEX' -Uri '{}' -OutFile '{}'",
-                url.replace('\'', "''"),
-                path.display().to_string().replace('\'', "''")
+                 Invoke-WebRequest -UseBasicParsing -TimeoutSec {seconds} -UserAgent 'KYNEX' \
+                 -Uri $env:KYNEX_FETCH_URL -OutFile $env:KYNEX_FETCH_TO"
             );
             let mut ps = Command::new("powershell");
-            ps.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+            ps.args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .env("KYNEX_FETCH_URL", url)
+                .env("KYNEX_FETCH_TO", path);
             hidden(&mut ps);
             match ps.output() {
                 Ok(out) if out.status.success() => Ok(()),
@@ -264,7 +268,8 @@ fn hidden(cmd: &mut Command) {
 
 /// The latest release, as GitHub says now.
 pub fn latest(kind: Kind) -> Result<Release, String> {
-    let path = updates_dir().join("latest.json");
+    // Its own file: another KYNEX (`kynex update`) may be asking too.
+    let path = updates_dir().join(format!("latest-{}.json", std::process::id()));
     fetch(
         &format!("https://api.github.com/repos/{REPO}/releases/latest"),
         &path,
@@ -310,15 +315,17 @@ pub fn download(release: &Release, kind: Kind) -> Result<PathBuf, String> {
     let dir = updates_dir();
     let path = dir.join(&asset.name);
     if verify(&path, asset.size, asset.sha256.as_deref()).is_err() {
-        // Older downloads are of no more use.
+        // Older downloads are of no more use; one under way elsewhere is
+        // left to finish.
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for e in entries.flatten() {
-                if e.file_name().to_string_lossy().starts_with("KYNEX-") {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with("KYNEX-") && !name.ends_with(".part") {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
         }
-        let part = dir.join(format!("{}.part", asset.name));
+        let part = dir.join(format!("{}.{}.part", asset.name, std::process::id()));
         fetch(&asset.url, &part, 1800)?;
         if let Err(e) = verify(&part, asset.size, asset.sha256.as_deref()) {
             let _ = std::fs::remove_file(&part);
@@ -381,44 +388,33 @@ pub fn serving_on(port: u16) {
     PORT.store(port, Ordering::Relaxed);
 }
 
-/// Starts `exe` again a moment after this one has ended: through the
-/// system's shell, which outlives this KYNEX, so that even a KYNEX that
-/// does not wait for its port (one from before this) finds it free. A
-/// KYNEX that does waits for it as well (see [`relaunched`]).
+/// Starts `exe` again, with the same arguments, at once: it waits itself
+/// until this one has ended (see [`relaunched`]). Started directly, not
+/// through a shell, so no argument is read as anything but itself.
 fn start_again(exe: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    let mut cmd = {
-        use std::os::windows::process::CommandExt;
-        let mut line = String::from("ping -n 3 127.0.0.1 >nul & start \"\" ");
-        line.push_str(&command_line(exe));
-        let mut cmd = Command::new("cmd");
-        cmd.raw_arg("/S /C \"").raw_arg(&line).raw_arg("\"");
-        hidden(&mut cmd);
-        cmd
-    };
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(r#"sleep 2; exec "$0" "$@""#)
-            .arg(exe)
-            .args(own_args());
-        cmd
-    };
-    cmd.env(RELAUNCHED, PORT.load(Ordering::Relaxed).to_string())
+    Command::new(exe)
+        .args(own_args())
+        .env(RELAUNCHED, PORT.load(Ordering::Relaxed).to_string())
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("KYNEX를 다시 시작하지 못했습니다: {e}"))
 }
 
-/// `exe` and this KYNEX's arguments, each quoted, for `cmd`.
+/// `exe` and this KYNEX's arguments, each quoted, for `cmd` after the
+/// setup; none of the arguments if any is one `cmd` could read otherwise
+/// (`%`, `^`, `&`, a quote, a trailing `\`) — KYNEX's window is started
+/// with none anyway.
 #[cfg(windows)]
 fn command_line(exe: &Path) -> String {
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', ""));
-    let mut line = quote(&exe.display().to_string());
-    for a in own_args() {
-        line.push(' ');
-        line.push_str(&quote(&a));
+    let mut line = format!("\"{}\"", exe.display().to_string().replace('"', ""));
+    let args = own_args();
+    let plain = args
+        .iter()
+        .all(|a| !a.ends_with('\\') && !a.chars().any(|c| "%^&|<>\"!".contains(c)));
+    if plain {
+        for a in args {
+            line.push_str(&format!(" \"{a}\""));
+        }
     }
     line
 }
@@ -707,7 +703,8 @@ impl Updater {
             server: server.clone(),
         };
         updater.tell();
-        if enabled() && kind != Kind::Dev {
+        // Nothing to look for where KYNEX cannot fetch or install one.
+        if enabled() && kind != Kind::Dev && !cfg!(target_os = "android") {
             let me = updater.clone();
             let _ = std::thread::Builder::new()
                 .name("kynex-update".into())
@@ -725,7 +722,7 @@ impl Updater {
 
     fn tell(&self) {
         let json = self.to_json();
-        self.server.state("updater", &json.to_string());
+        self.server.state_for("updater", &json.to_string(), None);
     }
 
     fn set(&self, state: State) {
@@ -808,11 +805,20 @@ impl Updater {
                 if !kind.installs() {
                     return json!({ "ok": false, "error": "이 KYNEX는 스스로 설치하지 못합니다: 릴리스 페이지에서 내려받으세요" });
                 }
-                if busy {
-                    return json!({ "ok": false, "error": "업데이트를 확인하거나 내려받는 중입니다" });
+                // Taken now, before the thread: a second press finds it busy.
+                match self.inner.lock() {
+                    Ok(mut i) if !i.busy => i.busy = true,
+                    _ => {
+                        return json!({ "ok": false, "error": "업데이트를 확인하거나 내려받는 중입니다" })
+                    }
                 }
                 let me = self.clone();
-                std::thread::spawn(move || me.install_now());
+                std::thread::spawn(move || {
+                    me.install_now();
+                    if let Ok(mut i) = me.inner.lock() {
+                        i.busy = false;
+                    }
+                });
                 json!({ "ok": true })
             }
             _ => json!({ "ok": false, "error": "action: check, install, auto" }),

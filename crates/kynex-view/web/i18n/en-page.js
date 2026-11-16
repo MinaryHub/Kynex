@@ -426,4 +426,5 @@ export default {
     'With a new access code, devices that opened it so far must open the new QR code. Continue?',
   '새 접속 코드를 만들었습니다': 'New access code made',
   '주소를 복사했습니다': 'Address copied',
+  '이 기기는 지금 접속할 수 없습니다 · KYNEX 컴퓨터에서 QR 코드로 다시 여세요': 'This device cannot connect now · open the QR code on the KYNEX computer again',
 };

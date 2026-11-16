@@ -129,10 +129,22 @@ struct Hub {
     /// What KYNEX keeps beside the scene — the robots posed here, their
     /// programs — as the last event of each name said: a tab that opens
     /// later is told too.
-    states: BTreeMap<String, String>,
+    states: BTreeMap<String, Told>,
+    /// This KYNEX, as against another started since on the same port: a
+    /// page that reconnects to another starts its scene over.
+    instance: String,
     /// The scene as `/scene.bin` serves it, made when first asked for after
     /// a change and shared by every viewer that asks before the next.
     bin: Option<Arc<Vec<u8>>>,
+}
+
+/// A state as this computer's viewers are told it, and as another
+/// device's are, if at all: what is this computer's alone — its paths, the
+/// viewer's access code, its updates — is not told to the others.
+#[derive(Clone, PartialEq)]
+struct Told {
+    local: String,
+    remote: Option<String>,
 }
 
 impl Hub {
@@ -140,6 +152,17 @@ impl Hub {
         let message: Arc<str> = frame(event, data).into();
         self.viewers
             .retain(|(v, _)| v.send(message.clone()).is_ok());
+    }
+
+    /// `told` to each viewer, as it is for that viewer.
+    fn broadcast_told(&mut self, event: &str, told: &Told) {
+        let local: Arc<str> = frame(event, &told.local).into();
+        let remote: Option<Arc<str>> = told.remote.as_deref().map(|r| frame(event, r).into());
+        self.viewers.retain(|(v, here)| match (here, &remote) {
+            (true, _) => v.send(local.clone()).is_ok(),
+            (false, Some(r)) => v.send(r.clone()).is_ok(),
+            (false, None) => true,
+        });
     }
 }
 
@@ -170,6 +193,13 @@ impl Server {
             bench: None,
             robot: None,
             states: BTreeMap::new(),
+            instance: format!(
+                "{:x}{:x}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            ),
             bin: None,
         }));
         accept(listener, hub.clone())?;
@@ -192,13 +222,15 @@ impl Server {
 
     /// What another computer must show to be let in: the access code in
     /// the address it opened (`?key=…`), then kept by its browser. `None`
-    /// turns every other computer away, and lets go of those watching.
+    /// turns every other computer away. Another code, or none, lets go of
+    /// every other computer watching: they come back only with the new one.
     pub fn set_lan_key(&self, key: Option<String>) {
+        let key = key.filter(|k| !k.is_empty());
         let mut hub = self.hub.lock().expect("viewer hub");
-        if key.is_none() {
+        if hub.lan_key != key {
             hub.viewers.retain(|(_, local)| *local);
         }
-        hub.lan_key = key.filter(|k| !k.is_empty());
+        hub.lan_key = key;
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -260,10 +292,24 @@ impl Server {
     /// scene: the JSON goes out as the `event` event when it differs from
     /// the last of that name. `pose` and `programs` are what the page reads.
     pub fn state(&self, event: &str, json: &str) {
+        self.state_for(event, json, Some(json));
+    }
+
+    /// [`Server::state`], told to this computer's viewers as `local` and to
+    /// another device's as `remote` — or not at all.
+    pub fn state_for(&self, event: &str, local: &str, remote: Option<&str>) {
         let mut hub = self.hub.lock().expect("viewer hub");
-        if hub.states.get(event).map(String::as_str) != Some(json) {
-            hub.states.insert(event.to_string(), json.to_string());
-            hub.broadcast(event, json);
+        let same = hub
+            .states
+            .get(event)
+            .is_some_and(|t| t.local == local && t.remote.as_deref() == remote);
+        if !same {
+            let told = Told {
+                local: local.to_string(),
+                remote: remote.map(str::to_string),
+            };
+            hub.broadcast_told(event, &told);
+            hub.states.insert(event.to_string(), told);
         }
     }
 
@@ -447,9 +493,12 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     // shared. The code it came with is kept by its browser, for the
     // scripts, the stream and the requests that follow.
     let given = query_value(query, "key");
-    let set_cookie = {
+    // The code another computer was let in with: its stream is taken only
+    // while that is still the code.
+    let (set_cookie, admitted_with) = {
         let hub = hub.lock().expect("viewer hub");
-        match admit(local, hub.lan_key.as_deref(), &cookie, given.as_deref()) {
+        let admitted_with = hub.lan_key.clone();
+        let set_cookie = match admit(local, hub.lan_key.as_deref(), &cookie, given.as_deref()) {
             Admit::No => {
                 drop(hub);
                 return respond(
@@ -461,7 +510,8 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             }
             Admit::Yes => None,
             Admit::Remember(key) => Some(key),
-        }
+        };
+        (set_cookie, admitted_with)
     };
     if method == "POST" && path == "/bench" {
         let Some(bench) = hub.lock().expect("viewer hub").bench.clone() else {
@@ -605,7 +655,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         return respond(&mut out, "200 OK", "application/octet-stream", &bin);
     }
     if path == "/events" {
-        return stream_events(out, hub, local);
+        return stream_events(out, hub, local, admitted_with);
     }
     match assets::get(path) {
         Some((mime, body)) => match set_cookie {
@@ -727,13 +777,14 @@ fn respond_with(
     out.flush()
 }
 
-fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>, local: bool) -> io::Result<()> {
+fn stream_events(
+    mut out: TcpStream,
+    hub: &Mutex<Hub>,
+    local: bool,
+    admitted_with: Option<String>,
+) -> io::Result<()> {
     out.set_read_timeout(None)?;
     out.set_nodelay(true)?;
-    out.write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\
-          Connection: keep-alive\r\n\r\n",
-    )?;
     // What there is now, then everything from here on. Taking the one and
     // joining the other under the same lock means no edit falls between the
     // two; the writing happens after it is let go, so a viewer that reads
@@ -741,18 +792,32 @@ fn stream_events(mut out: TcpStream, hub: &Mutex<Hub>, local: bool) -> io::Resul
     let (tx, rx): (Sender<Arc<str>>, Receiver<Arc<str>>) = mpsc::channel();
     let opening = {
         let mut hub = hub.lock().expect("viewer hub");
-        let mut opening = frame(
+        // The code changed, or sharing stopped, since this was let in.
+        if !local && (hub.lan_key.is_none() || hub.lan_key != admitted_with) {
+            drop(hub);
+            return respond(&mut out, "403 Forbidden", "text/plain", b"not shared");
+        }
+        let mut opening = String::from(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\
+             Connection: keep-alive\r\n\r\n",
+        );
+        opening.push_str(&frame(
             "hello",
             &format!(
-                "{{\"build\":\"{}\",\"version\":\"{}\",\"commit\":\"{}\"}}",
+                "{{\"build\":\"{}\",\"version\":\"{}\",\"commit\":\"{}\",\"instance\":\"{}\"}}",
                 assets::build_id(),
                 assets::VERSION,
-                assets::COMMIT
+                assets::COMMIT,
+                hub.instance
             ),
-        );
+        ));
         opening.push_str(&frame("status", &hub.status));
-        for (event, json) in &hub.states {
-            opening.push_str(&frame(event, json));
+        for (event, told) in &hub.states {
+            match (local, &told.remote) {
+                (true, _) => opening.push_str(&frame(event, &told.local)),
+                (false, Some(remote)) => opening.push_str(&frame(event, remote)),
+                (false, None) => {}
+            }
         }
         if hub.has_scene {
             opening.push_str(&frame("scene", &scene_notice(&hub.view)));
@@ -1086,5 +1151,56 @@ mod tests {
         let shared = server.share("127.0.0.1:0").unwrap();
         assert_ne!(shared.port(), server.addr().port());
         assert!(get(shared, "/").starts_with("HTTP/1.1 200"));
+    }
+
+    /// Another device's stream: refused once the code it came with is no
+    /// longer the code; let go of when the code changes; never told what is
+    /// this computer's alone.
+    #[test]
+    fn another_device_is_let_go_with_its_code_and_told_only_its_share() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        server.set_lan_key(Some("old".into()));
+        server.state_for("share", "{\"key\":\"old\"}", None);
+        server.state_for(
+            "project",
+            "{\"path\":\"C:/Users/me\"}",
+            Some("{\"path\":null}"),
+        );
+        let remote = |admitted: Option<&str>| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect(addr).unwrap();
+            let (conn, _) = listener.accept().unwrap();
+            let hub = server.hub.clone();
+            let admitted = admitted.map(str::to_string);
+            thread::spawn(move || stream_events(conn, &hub, false, admitted));
+            client
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = client.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+            }
+            String::from_utf8_lossy(&got).into_owned()
+        };
+        let seen = remote(Some("old"));
+        assert!(seen.starts_with("HTTP/1.1 200"), "{seen}");
+        assert!(!seen.contains("event: share"), "{seen}");
+        assert!(
+            seen.contains("{\"path\":null}") && !seen.contains("C:/Users"),
+            "{seen}"
+        );
+        assert_eq!(server.hub.lock().unwrap().viewers.len(), 1);
+        // A new code: the device watching is let go, and comes back only
+        // with the new one.
+        server.set_lan_key(Some("new".into()));
+        assert_eq!(server.hub.lock().unwrap().viewers.len(), 0);
+        assert!(remote(Some("old")).starts_with("HTTP/1.1 403"));
+        server.set_lan_key(None);
+        assert!(remote(None).starts_with("HTTP/1.1 403"));
     }
 }

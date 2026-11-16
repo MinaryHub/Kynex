@@ -4,18 +4,10 @@
 // KYNEX, each opened as a copy of it in that folder.
 
 import { tFor, tr, getLang } from './i18n.js';
+import { post } from './ui.js';
 
 const t = tFor('page');
 
-async function post(request) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
 
 // A question over the page: its title, what it says, a name to type if it
 // asks for one, and its choices; the choice made (and the name), or null
@@ -55,7 +47,9 @@ function choose({ title, text, name = null, choices }) {
       } else if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        done(choices[0][0]);
+        // The choice the keyboard is on; from the name, the first.
+        const on = actions.contains(document.activeElement) ? [...actions.children].indexOf(document.activeElement) : -1;
+        done(choices[on >= 0 ? on : 0][0]);
       }
     };
     window.addEventListener('keydown', key, true);

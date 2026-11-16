@@ -958,9 +958,9 @@ mod tests {
         let server = Server::start("127.0.0.1:0").unwrap();
         let ask = |host: &str| {
             let mut s = TcpStream::connect(server.addr()).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             write!(s, "GET /events HTTP/1.1\r\n{host}\r\n").unwrap();
             let mut out = String::new();
-            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let _ = s.read_to_string(&mut out);
             out
         };
@@ -1043,8 +1043,9 @@ mod tests {
             .collect();
         thread::sleep(Duration::from_millis(300));
         let mut s = TcpStream::connect(server.addr()).unwrap();
-        let _ = write!(s, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        // Before the server can close it (see `a_header_with_no_end_is_cut_off`).
         s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let _ = write!(s, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
         let mut out = Vec::new();
         let _ = s.read_to_end(&mut out);
         assert!(out.is_empty(), "closed unanswered");
@@ -1070,13 +1071,16 @@ mod tests {
     fn a_header_with_no_end_is_cut_off() {
         let server = Server::start("127.0.0.1:0").unwrap();
         let mut s = TcpStream::connect(server.addr()).unwrap();
+        // Set before anything is sent: the server may cut the connection
+        // while it is being written, and macOS then refuses to set it
+        // (EINVAL) on the socket reset.
+        s.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
         // Far past the limit, never ending the line.
         let junk = vec![b'a'; 200 * 1024];
         let started = std::time::Instant::now();
         let _ = s.write_all(b"GET / HTTP/1.1\r\nX: ");
         let _ = s.write_all(&junk);
         let mut out = Vec::new();
-        s.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
         // The server answers and closes rather than reading for ever. Its
         // close may arrive as a reset, with the rest of ours unread: either
         // way the read ends well before the timeout.
@@ -1094,8 +1098,8 @@ mod tests {
         server.reset(&doc);
 
         let mut s = TcpStream::connect(server.addr()).unwrap();
-        write!(s, "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        write!(s, "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
         let mut reader = BufReader::new(s);
         let mut seen = String::new();
         let mut line = String::new();
@@ -1170,13 +1174,13 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let mut client = TcpStream::connect(addr).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
             let (conn, _) = listener.accept().unwrap();
             let hub = server.hub.clone();
             let admitted = admitted.map(str::to_string);
             thread::spawn(move || stream_events(conn, &hub, false, admitted));
-            client
-                .set_read_timeout(Some(Duration::from_millis(500)))
-                .unwrap();
             let mut got = Vec::new();
             let mut buf = [0u8; 4096];
             while let Ok(n) = client.read(&mut buf) {

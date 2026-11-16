@@ -50,8 +50,10 @@ pub struct Drawn {
     #[serde(serialize_with = "maybe_as_text")]
     pub mesh: Option<u64>,
     /// World matrix, column major: what three.js's `Matrix4.fromArray` reads.
-    /// Left out of the binary scene's header, which carries it as floats.
-    #[serde(skip_serializing_if = "skip_matrix")]
+    /// Left out of the binary scene's header, which carries it as floats;
+    /// in an update, written as floats too — what the page keeps, at half
+    /// the length of every digit a double has.
+    #[serde(skip_serializing_if = "skip_matrix", serialize_with = "as_floats")]
     pub matrix: [f64; 16],
     /// Its first material's base colour, linear; none for the default surface.
     pub color: Option<[f32; 3]>,
@@ -62,6 +64,15 @@ pub struct Drawn {
 
 fn as_text<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
     s.collect_str(v)
+}
+
+fn as_floats<S: Serializer>(m: &[f64; 16], s: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut seq = s.serialize_seq(Some(16))?;
+    for v in m {
+        seq.serialize_element(&(*v as f32))?;
+    }
+    seq.end()
 }
 
 fn maybe_as_text<S: Serializer>(v: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {

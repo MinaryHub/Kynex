@@ -303,8 +303,16 @@ impl Cell {
         Ok(legs)
     }
 
-    /// The stop a flow component is served at: the nearest, within reach.
-    fn stop_near(&self, doc: &Document, object: u64) -> Option<u64> {
+    /// The stop a flow component is served at: the nearest of `places`
+    /// (`stop_places`), within reach. The places are worked out once by the
+    /// caller, which asks for many: each is a walk up the scene, and asked
+    /// anew for each part they were most of a run's time.
+    fn stop_near_in(
+        &self,
+        doc: &Document,
+        places: &BTreeMap<u64, (DVec3, f64)>,
+        object: u64,
+    ) -> Option<u64> {
         let c = self.components.iter().find(|c| c.object == object)?;
         // The docks worked out for the scene as it is, if they were.
         let seen = self
@@ -313,20 +321,17 @@ impl Cell {
             .filter(|s| s.version == doc.version())
             .and_then(|s| s.docks.get(&object))
             .map(|d| d.0);
-        let at = seen.or_else(|| Self::dock(doc, c).map(|d| d.0))?.truncate();
-        self.stop_places(doc)
-            .into_iter()
-            .map(|(n, (p, _))| (n, p.truncate().distance(at)))
-            .filter(|(_, d)| *d <= NEAR)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(n, _)| n)
+        let at = seen.or_else(|| Self::dock(doc, c).map(|d| d.0))?;
+        Self::nearest_stop(places, at)
     }
 
-    /// The stop nearest point `at`, within reach of it, if there is one.
-    fn stop_near_point(&self, doc: &Document, at: DVec3) -> Option<u64> {
-        self.stop_places(doc)
-            .into_iter()
-            .map(|(n, (p, _))| (n, p.truncate().distance(at.truncate())))
+    /// The stop of `places` nearest point `at`, within reach of it, if there
+    /// is one.
+    fn nearest_stop(places: &BTreeMap<u64, (DVec3, f64)>, at: DVec3) -> Option<u64> {
+        let at = at.truncate();
+        places
+            .iter()
+            .map(|(n, (p, _))| (*n, p.truncate().distance(at)))
             .filter(|(_, d)| *d <= NEAR)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(n, _)| n)
@@ -412,6 +417,19 @@ impl Cell {
     /// part beside it to one across the floor. Returns whether any went.
     fn dispatch(&mut self, doc: &Document) -> bool {
         let places = self.stop_places(doc);
+        let mut waiting: Vec<(usize, u64)> = self
+            .jobs
+            .iter()
+            .enumerate()
+            .filter(|(_, j)| {
+                j.by == 1 && j.part != 0 && j.amr.is_none() && j.phase == Phase::Waiting
+            })
+            .filter_map(|(k, j)| Some((k, self.stop_near_in(doc, &places, j.from)?)))
+            .collect();
+        // Nothing waits: no AMR's ways need working out.
+        if waiting.is_empty() {
+            return false;
+        }
         let mut free: Vec<(u64, BTreeMap<u64, f64>)> = self
             .components
             .iter()
@@ -422,15 +440,6 @@ impl Cell {
                     self.lane_distances(&places, self.rover(doc, c)?.at),
                 ))
             })
-            .collect();
-        let mut waiting: Vec<(usize, u64)> = self
-            .jobs
-            .iter()
-            .enumerate()
-            .filter(|(_, j)| {
-                j.by == 1 && j.part != 0 && j.amr.is_none() && j.phase == Phase::Waiting
-            })
-            .filter_map(|(k, j)| Some((k, self.stop_near(doc, j.from)?)))
             .collect();
         // A link that names its AMR is that AMR's alone.
         let named: Vec<Option<u64>> = self.jobs.iter().map(|j| j.robot).collect();
@@ -502,11 +511,12 @@ impl Cell {
     /// charger and no flow component's stop. None if the lanes have none:
     /// then an idle AMR stays where it is.
     fn parking(&self, doc: &Document) -> Vec<u64> {
+        let places = self.stop_places(doc);
         let served: HashSet<u64> = self
             .components
             .iter()
             .filter(|c| c.kind.flow())
-            .filter_map(|c| self.stop_near(doc, c.object))
+            .filter_map(|c| self.stop_near_in(doc, &places, c.object))
             .collect();
         self.components
             .iter()
@@ -1141,6 +1151,9 @@ impl Cell {
         if self.any_free_amr() {
             happened |= self.dispatch(doc);
         }
+        // The stops' places, worked out at most once this pass: the stops
+        // stand where they are while it goes.
+        let places = std::cell::OnceCell::new();
         for k in 0..self.jobs.len() {
             let job = self.jobs[k].clone();
             let idle = |cell: &Cell, a: u64| cell.rovers.get(&a).is_none_or(|r| r.legs.is_empty());
@@ -1149,19 +1162,19 @@ impl Cell {
             // to an AMR calls the AMR first, to stand beside the robot.
             if job.by == 3 {
                 if let (Some(_), None) = (job.handoff, job.docked) {
+                    let places = places.get_or_init(|| self.stop_places(doc));
                     let stop = job.robot.and_then(|r| {
                         let at = doc.world_transform(id_of(doc, r)?).translation;
-                        self.stop_near_point(doc, at)
+                        Self::nearest_stop(places, at)
                     });
                     // Whichever AMR is free, the nearest the robot's stop:
                     // the AMR drawn is the fleet's place in the picture.
-                    let places = self.stop_places(doc);
                     let near = stop.and_then(|stop| {
                         self.components
                             .iter()
                             .filter(|c| self.free(c))
                             .filter_map(|c| {
-                                let d = self.lane_distances(&places, self.rover(doc, c)?.at);
+                                let d = self.lane_distances(places, self.rover(doc, c)?.at);
                                 Some((c.object, d.get(&stop).copied().unwrap_or(f64::INFINITY)))
                             })
                             .filter(|(_, d)| d.is_finite())
@@ -1228,7 +1241,8 @@ impl Cell {
                 // By AMR: given out together, before this pass (`dispatch`);
                 // here only said if there is no stop to fetch it from.
                 Phase::Waiting => {
-                    if self.stop_near(doc, job.from).is_none() {
+                    let places = places.get_or_init(|| self.stop_places(doc));
+                    if self.stop_near_in(doc, places, job.from).is_none() {
                         self.flow_problem =
                             Some("AMR로 보내는 공정 가까이(4 m)에 AMR 정지 위치가 없습니다".into());
                     }
@@ -1245,16 +1259,17 @@ impl Cell {
                         });
                     }
                     // Handing to a robot: to the stop nearest the robot.
+                    let places = places.get_or_init(|| self.stop_places(doc));
                     let toward = job.handoff.and_then(|r| {
                         let at = doc.world_transform(id_of(doc, r)?).translation;
-                        self.stop_near_point(doc, at)
+                        Self::nearest_stop(places, at)
                     });
                     let sent = if hand {
                         self.walk_to(doc, job.amr.unwrap(), job.to)
                     } else if let Some(stop) = toward {
                         self.send(doc, job.amr.unwrap(), stop)
                     } else {
-                        match self.stop_near(doc, job.to) {
+                        match self.stop_near_in(doc, places, job.to) {
                             Some(stop) => self.send(doc, job.amr.unwrap(), stop),
                             None => {
                                 Err("부품을 받을 공정 가까이(4 m)에 AMR 정지 위치가 없습니다"

@@ -3,18 +3,10 @@
 // places it and takes it away.
 import * as THREE from 'three';
 import { tFor, tr } from './i18n.js';
+import { post } from './ui.js';
 
 const t = tFor('page');
 
-async function post(request) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
 
 const FIELDS = ['width', 'x', 'y', 'yaw', 'opacity'];
 

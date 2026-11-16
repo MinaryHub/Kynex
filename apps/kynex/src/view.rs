@@ -28,6 +28,13 @@ const PORT: u16 = 8090;
 /// a factory in a couple of minutes, the cell still stepped finely.
 const MOST_SPEED: f64 = 300.0;
 
+/// The least time between two updates the viewers are sent while a run
+/// goes on by itself (`offline`): some 30 a second.
+const UPDATE_EVERY: Duration = Duration::from_millis(33);
+
+/// How many models may be read at once (`Stage::import`).
+const MOST_IMPORTS: usize = 2;
+
 /// Where programs were kept before the project file held more: read once,
 /// if the project file is not there yet.
 const OLD_PROGRAMS: &str = "kynex-programs.json";
@@ -532,12 +539,25 @@ impl Stage {
             let robot = serde_json::from_str::<Value>(&request.body)
                 .ok()
                 .and_then(|v| v["robot"].as_str().and_then(|s| s.parse::<u64>().ok()));
-            // Moving a robot by hand stops its program.
+            // Refused before anything is done for it: a request another
+            // device may not make stops nothing, keeps nothing to undo.
+            if let Some(why) = (!request.local)
+                .then(|| reaches_plc(&op, &request.body, self.plc.on()))
+                .flatten()
+            {
+                let _ = request
+                    .reply
+                    .send(serde_json::json!({ "ok": false, "error": why }).to_string());
+                continue;
+            }
+            // Moving a robot by hand stops its program — that robot's, and
+            // none if the request names none.
             if matches!(op.as_str(), "jog" | "ik" | "release" | "goto") {
-                let before = self.runners.len();
-                self.runners
-                    .retain(|r| robot.is_some_and(|robot| robot != r.root));
-                touched |= self.runners.len() != before;
+                if let Some(robot) = robot {
+                    let before = self.runners.len();
+                    self.runners.retain(|r| r.root != robot);
+                    touched |= self.runners.len() != before;
+                }
             }
             // A run begun — the flow started with nothing running —: the
             // robots' poses kept, to go back to.
@@ -550,12 +570,7 @@ impl Stage {
             }
             // An edit can be undone: the project as it was before it.
             let before = undoable(&op).then(|| self.snapshot(doc));
-            let reply = if let Some(why) = (!request.local)
-                .then(|| reaches_plc(&op, &request.body, self.plc.on()))
-                .flatten()
-            {
-                serde_json::json!({ "ok": false, "error": why }).to_string()
-            } else if op == "plc_link" {
+            let reply = if op == "plc_link" {
                 // Where the PLC is, and whether to be linked to it.
                 let req: Value = serde_json::from_str(&request.body).unwrap_or_default();
                 let mut settings = crate::plc::Settings::of(&req);
@@ -1707,6 +1722,15 @@ impl Stage {
     /// of its own; [`Self::imported`] places it when read and answers
     /// `reply`.
     fn import(&mut self, body: &str, bytes: Vec<u8>, reply: std::sync::mpsc::Sender<String>) {
+        // A few at a time: each holds its file and what is read of it, and
+        // a large one is read for minutes.
+        if self.importing.len() >= MOST_IMPORTS {
+            let _ = reply.send(
+                serde_json::json!({ "ok": false, "error": "다른 모델을 읽는 중입니다. 끝난 뒤 다시 가져오세요" })
+                    .to_string(),
+            );
+            return;
+        }
         let req: Value = serde_json::from_str(body).unwrap_or_default();
         let name = req["name"].as_str().unwrap_or("").to_string();
         let unit = req["unit"].as_f64();
@@ -1950,8 +1974,21 @@ fn offline(
         model.robots.len()
     );
     stage.tell(server, &doc, true);
+    // What the viewers are owed and not yet sent: while a run goes on by
+    // itself, sent together at most UPDATE_EVERY apart — what moved since,
+    // as it stands then — not on every tick, which over Wi-Fi a tablet
+    // cannot keep up with. What is asked is shown at once.
+    let mut owed_scene: Option<(Option<Document>, Changes)> = None;
+    let mut sent = Instant::now();
+    let mut told = Instant::now();
+    let mut tell_owed = false;
+    // The scene as last sent, for the collision check; checked at its own
+    // pace (see `Checks`), as with a Kreate session.
+    let mut last_shown: Option<Document> = None;
+    let mut checks = Checks::default();
     loop {
-        let first = if stage.running() {
+        let waits = stage.running() || owed_scene.is_some() || tell_owed || checks.owed;
+        let first = if waits {
             match requests.recv_timeout(Duration::from_millis(5)) {
                 Ok(r) => Some(r),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -1970,19 +2007,44 @@ fn offline(
         let touched = stage.answer(&doc, asked);
         // Another project opened: everything shown anew.
         let reset = stage.take_reset();
-        if touched || reset {
+        let mut flushed = false;
+        if reset {
+            owed_scene = None;
+            let (posed, _) = stage.shown(&doc);
+            server.reset(posed.as_ref().unwrap_or(&doc));
+            last_shown = posed;
+            sent = Instant::now();
+            flushed = true;
+            checks.owe();
+        } else if touched {
             let (posed, more) = stage.shown(&doc);
-            let shown = posed.as_ref().unwrap_or(&doc);
-            if reset {
-                server.reset(shown);
-            } else {
-                server.update(shown, Some(&more));
-            }
+            let owed = owed_scene.get_or_insert_with(|| (None, Changes::default()));
+            owed.0 = posed;
+            owed.1.changed.extend(more.changed);
+            owed.1.removed.extend(more.removed);
+            owed.1.settings |= more.settings;
+        }
+        if owed_scene.is_some() && (any_asked || !stage.running() || sent.elapsed() >= UPDATE_EVERY)
+        {
+            let (posed, changes) = owed_scene.take().unwrap_or_default();
+            server.update(posed.as_ref().unwrap_or(&doc), Some(&changes));
+            last_shown = posed;
+            sent = Instant::now();
+            flushed = true;
+            checks.owe();
+        }
+        if checks.due() {
+            let shown = last_shown.as_ref().unwrap_or(&doc);
+            let started = Instant::now();
             let contacts = stage.collider.contacts(shown, &stage.cell.not_obstacles());
             server.state("contacts", &collide::contacts_json(shown, &contacts));
+            checks.done(started.elapsed());
         }
-        if any_asked || touched || reset || stage.ticking() {
+        tell_owed |= any_asked || touched || reset || stage.ticking();
+        if tell_owed && (any_asked || flushed || told.elapsed() >= UPDATE_EVERY) {
             stage.tell(server, &doc, reset);
+            told = Instant::now();
+            tell_owed = false;
         }
     }
 }

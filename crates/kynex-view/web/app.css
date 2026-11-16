@@ -1282,4 +1282,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   .text-btn { min-height: 34px; padding-left: 12px; padding-right: 12px; }
   input[type="checkbox"] { width: 20px; height: 20px; }
   .update-btn { padding: 6px 10px; }
+  .icon-mini { min-width: 30px; min-height: 30px; }
+  .lib-del { padding: 6px 8px; font-size: 13px; }
+  .chip-btn { min-height: 32px; }
+  .jog-btn { min-width: 36px; min-height: 36px; }
+  .help-q { min-width: 22px; min-height: 22px; }
+}
+/* No hover to reveal them: a program step's buttons show on the step the
+   cursor is on, where a mouse shows them on any step under it. */
+@media (hover: none) {
+  .point.cursor .pacts { display: flex; }
 }

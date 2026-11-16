@@ -426,5 +426,15 @@ export default {
     'With a new access code, devices that opened it so far must open the new QR code. Continue?',
   '새 접속 코드를 만들었습니다': 'New access code made',
   '주소를 복사했습니다': 'Address copied',
+
+  // ---- ui.js, and choosing on a touch screen
+  '이 기기에서는 할 수 없습니다 (공유가 꺼졌거나 접속 코드가 바뀌었습니다)': 'Not possible from this device (sharing is off or the access code changed)',
+  '보내려는 것이 너무 큽니다': 'What you are sending is too large',
+  'KYNEX가 바빠 제때 답하지 못했습니다. 잠시 뒤 다시 하세요': 'KYNEX was too busy to answer in time. Try again in a moment',
+  'KYNEX의 답을 읽지 못했습니다': "Could not read KYNEX's answer",
+  '선택에 추가': 'Add to selection',
+  '선택에서 빼기': 'Remove from selection',
+  "다른 장비를 길게 눌러 '선택에 추가': 여러 개": "Long-press other equipment, 'Add to selection': several at once",
+  '시나리오 "{name}"를 지울까요? 되돌릴 수 없고, 비교 결과도 함께 지워집니다.': 'Delete scenario "{name}"? It cannot be undone, and its comparison results go with it.',
   '이 기기는 지금 접속할 수 없습니다 · KYNEX 컴퓨터에서 QR 코드로 다시 여세요': 'This device cannot connect now · open the QR code on the KYNEX computer again',
 };

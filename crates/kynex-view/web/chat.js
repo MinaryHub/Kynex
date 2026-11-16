@@ -11,6 +11,7 @@
 
 import { tFor } from './i18n.js';
 import { here } from './system.js';
+import { ask } from './ui.js';
 
 const t = tFor('panels');
 
@@ -248,10 +249,9 @@ const store = {
   },
 };
 
-async function post(body) {
-  const response = await fetch('/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return response.json();
-}
+// Asked of KYNEX; a refusal comes back as `{ok: false, error}` for the
+// model to read, as KYNEX's own errors do.
+const post = ask;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rad = (deg) => (deg * Math.PI) / 180;

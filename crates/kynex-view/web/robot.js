@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { TransformControls } from '/vendor/TransformControls.js';
 import { tFor, tr } from './i18n.js';
+import { post } from './ui.js';
 
 const t = tFor('robot');
 
@@ -102,15 +103,6 @@ function spanOf(j) {
   return { limited, lo, hi, a: lo - pad, b: hi + pad };
 }
 
-async function post(request) {
-  const response = await fetch('/robot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
-}
 
 export class RobotPanel {
   // ctx: { host, records, scene, camera, canvas, controls, selected(), toast, escapeHtml }

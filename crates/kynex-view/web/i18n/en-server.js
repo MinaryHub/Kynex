@@ -853,6 +853,7 @@ export default {
   '설치 파일을 실행하지 못했습니다': 'Could not run the setup',
   '이 KYNEX는 스스로 업데이트하지 않습니다': 'This KYNEX does not update itself',
   'AI 키는 KYNEX를 실행한 컴퓨터에서만 읽고 바꿀 수 있습니다': 'AI keys can only be read or changed on the computer running KYNEX',
+  '다른 모델을 읽는 중입니다. 끝난 뒤 다시 가져오세요': 'Another model is being read. Import again once it is done',
 };
 
 // A number as KYNEX writes it.

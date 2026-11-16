@@ -38,10 +38,13 @@ Equipment placed while the page is in English is named in English.
 
 ## Version and releases
 
-Each build is numbered: `major.minor.<build>`, the build being the commits
-on the way to it (`git rev-list --count HEAD`), so it goes up with every
-commit and is the same on every machine (`tools/version.rs`;
-`KYNEX_BUILD` in the environment gives the number instead). A build from
+Each build is numbered: `major.minor.<build>`. The major.minor is the
+workspace's (`version` in the root `Cargo.toml`). The build is the number of
+commits since the one that last set that version, so the commit that sets
+it is `x.y.0` and each commit after it goes up by one; it is the same on
+every machine (`tools/version.rs`; `KYNEX_BUILD` in the environment gives
+the number instead). To release a new version, set it in `Cargo.toml` in a
+commit of its own and squash-merge that to `main`. A build from
 a tree with changes not committed says `-dev` after it. `kynex --version`
 prints it, and the viewer shows it by its name.
 

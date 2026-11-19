@@ -84,6 +84,8 @@ impl Paint {
                 name: name.into(),
                 base_color: SceneRgb::new(rgb[0], rgb[1], rgb[2]),
                 metallic,
+                // Metal bright, paint satin.
+                roughness: if metallic >= 0.5 { 0.35 } else { 0.5 },
                 ..Material::default()
             })
         };

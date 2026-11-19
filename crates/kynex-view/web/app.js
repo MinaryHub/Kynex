@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
-import { Batch } from '/batch.js';
+import { Batch, finished } from '/batch.js';
 import { Outline } from '/outline.js';
 import { RobotPanel } from '/robot.js';
 import { CellPanel } from '/cell.js';
@@ -117,7 +117,39 @@ canvas.addEventListener(
   { capture: true, passive: false },
 );
 
-const hemi = new THREE.HemisphereLight(0xe8eef7, 0x30343b, 1.6);
+// What metal and gloss mirror, and a soft light from all round: a plain
+// hall, its floor dark, rows of bright panels under its roof, blurred once.
+function hallEnvironment() {
+  const hall = new THREE.Scene();
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  const shade = (color) => new THREE.MeshBasicMaterial({ color, side: THREE.BackSide });
+  const walls = new THREE.Mesh(box, shade(0x5d636b));
+  walls.scale.set(60, 60, 18);
+  walls.position.z = 7;
+  const floor = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ color: 0x24272c }));
+  floor.scale.set(59, 59, 0.2);
+  floor.position.z = -1.9;
+  hall.add(walls, floor);
+  const lamp = new THREE.MeshBasicMaterial({ color: new THREE.Color(9, 9, 8.6) });
+  for (const x of [-16, 0, 16]) {
+    for (const y of [-12, 0, 12]) {
+      const panel = new THREE.Mesh(box, lamp);
+      panel.scale.set(8, 1.4, 0.2);
+      panel.position.set(x, y, 15.8);
+      hall.add(panel);
+    }
+  }
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const map = pmrem.fromScene(hall, 0.035).texture;
+  pmrem.dispose();
+  box.dispose();
+  hall.traverse((o) => o.material?.dispose());
+  return map;
+}
+scene.environment = hallEnvironment();
+scene.environmentIntensity = 0.55;
+
+const hemi = new THREE.HemisphereLight(0xe8eef7, 0x30343b, 1.1);
 hemi.position.set(0, 0, 1);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 2.2);
@@ -222,14 +254,17 @@ const CONTACT = new THREE.Color(0xff3b3b);
 // Equipment a link being drawn would land on.
 const LANDING = new THREE.Color(0x3fcf8e);
 let contacted = new Set();
-// The parts' one material: each part's own colour is its instance colour.
-const surface = new THREE.MeshStandardMaterial({
-  color: 0xffffff,
-  roughness: 0.58,
-  metalness: 0.08,
-  side: THREE.DoubleSide,
-  flatShading: true,
-});
+// The parts' one material: each part's own colour is its instance colour,
+// and its own metallic and roughness its finish (see `finished`).
+const surface = finished(
+  new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.58,
+    metalness: 0.08,
+    side: THREE.DoubleSide,
+    flatShading: true,
+  }),
+);
 
 const batch = new Batch(surface);
 const outline = new Outline();
@@ -353,7 +388,7 @@ function place(rec) {
   // Collision shapes are hidden in Kreate too.
   const visible = rec.visible && rec.role !== 'collision';
   if (rec.kind === 'mesh' && rec.mesh != null && batch.hasGeometry(rec.mesh)) {
-    batch.set(rec.uid, rec.mesh, rec.matrix, colorOf(rec), visible);
+    batch.set(rec.uid, rec.mesh, rec.matrix, colorOf(rec), visible, rec.finish);
     const tint = tintOf(rec);
     if (tint) batch.tint(rec.uid, tint);
   } else {
@@ -366,7 +401,8 @@ function applyObject(rec) {
   const old = records.get(rec.uid);
   records.set(rec.uid, rec);
   const same = old && old.mesh === rec.mesh && old.kind === rec.kind && old.role === rec.role &&
-    old.visible === rec.visible && String(old.color) === String(rec.color);
+    old.visible === rec.visible && String(old.color) === String(rec.color) &&
+    String(old.finish) === String(rec.finish);
   if (same && (batch.has(rec.uid) || rec.kind !== 'mesh')) {
     // Moved, nothing else: the common case, sixteen numbers.
     moveShown(rec);

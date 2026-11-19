@@ -47,6 +47,8 @@ fn material(doc: &mut Document, name: &str, rgb: [f32; 3], metallic: f32) -> Mat
         name: name.into(),
         base_color: SceneRgb::new(rgb[0], rgb[1], rgb[2]),
         metallic,
+        // Metal bright, paint satin.
+        roughness: if metallic >= 0.5 { 0.35 } else { 0.5 },
         ..Material::default()
     })
 }
@@ -200,6 +202,60 @@ fn storage_tank(doc: &mut Document, p: &Paint, diameter: f64, height: f64, m: Op
         );
         doc.object_mut(id).unwrap().transform.rotation = DQuat::from_rotation_z(a);
     }
+    // The shell's welded courses, each a plate's height; handrail posts
+    // round the top; nozzles and a manway low down, away from the stair.
+    let courses = (h / 2.4).floor() as usize;
+    for k in 1..=courses {
+        post(
+            doc,
+            &format!("course {k}"),
+            r + 0.02,
+            0.05,
+            [0.0, 0.0, 0.6 + 2.4 * k as f64],
+            p.steel,
+            m,
+        );
+    }
+    for k in 0..24 {
+        let a = std::f64::consts::TAU * k as f64 / 24.0;
+        post(
+            doc,
+            &format!("handrail {k}"),
+            0.03,
+            1.0,
+            [(r - 0.1) * a.cos(), (r - 0.1) * a.sin(), 0.6 + h + 0.5],
+            p.yellow,
+            m,
+        );
+    }
+    for (k, a) in [-0.6_f64, -0.9].into_iter().enumerate() {
+        let a = std::f64::consts::PI + a;
+        let id = bar(
+            doc,
+            &format!("nozzle {k}"),
+            0.2,
+            0.8,
+            [(r + 0.3) * a.cos(), (r + 0.3) * a.sin(), 1.3],
+            true,
+            p.steel,
+            m,
+        );
+        doc.object_mut(id).unwrap().transform.rotation =
+            DQuat::from_rotation_z(a) * doc.object(id).unwrap().transform.rotation;
+    }
+    let a = -std::f64::consts::FRAC_PI_2;
+    let id = bar(
+        doc,
+        "manway",
+        0.35,
+        0.3,
+        [(r + 0.1) * a.cos(), (r + 0.1) * a.sin(), 1.4],
+        true,
+        p.dark,
+        m,
+    );
+    doc.object_mut(id).unwrap().transform.rotation =
+        DQuat::from_rotation_z(a) * doc.object(id).unwrap().transform.rotation;
 }
 
 /// A column: `diameter` × `height` m on a skirt — a distillation column with
@@ -539,6 +595,59 @@ fn control_room(doc: &mut Document, p: &Paint, size: [f64; 3], m: Option<ObjectI
         p.dark,
         m,
     );
+    // Windows down each side; its entrance at one end of the front, under
+    // a canopy, up two steps; air handlers on the roof.
+    for (name, x) in [("side windows west", -1.0), ("side windows east", 1.0)] {
+        block(
+            doc,
+            name,
+            [0.05, w * 0.6, h * 0.25],
+            [x * (l / 2.0 + 0.03), 0.0, h * 0.6],
+            p.glass,
+            m,
+        );
+    }
+    let dx = l / 2.0 - 1.0;
+    block(
+        doc,
+        "entrance",
+        [1.2, 0.06, 2.2],
+        [dx, -w / 2.0 - 0.03, 1.1 + 0.3],
+        p.steel,
+        m,
+    );
+    block(
+        doc,
+        "canopy",
+        [2.0, 1.2, 0.12],
+        [dx, -w / 2.0 - 0.6, 2.8],
+        p.dark,
+        m,
+    );
+    for k in 0..2 {
+        block(
+            doc,
+            &format!("step {k}"),
+            [1.6, 0.6 - 0.3 * k as f64, 0.15],
+            [
+                dx,
+                -w / 2.0 - 0.3 + 0.15 * k as f64,
+                0.075 + 0.15 * k as f64,
+            ],
+            p.concrete,
+            m,
+        );
+    }
+    for (k, x) in [-l * 0.25, l * 0.15].into_iter().enumerate() {
+        block(
+            doc,
+            &format!("air handler {k}"),
+            [1.6, 1.2, 0.9],
+            [x, w * 0.1, h + 0.3 + 0.45],
+            p.steel,
+            m,
+        );
+    }
 }
 
 /// A lot of oil at `stage` — crude, a distilled cut, petrol, jet fuel,

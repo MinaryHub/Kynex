@@ -1636,6 +1636,29 @@ thread_local! {
     static BY_UID: RefCell<HashMap<u64, ObjectId>> = RefCell::new(HashMap::new());
     static NAMED: RefCell<HashMap<(ObjectId, &'static str), ObjectId>> =
         RefCell::new(HashMap::new());
+    /// The parts below each door — a window, a handle — that ride with it,
+    /// as last found; looked for again when one is gone.
+    static RIDERS: RefCell<HashMap<ObjectId, Vec<ObjectId>>> = RefCell::new(HashMap::new());
+}
+
+/// The parts below `door` that move with it, by identity.
+fn riders(doc: &Document, door: ObjectId) -> Vec<u64> {
+    let kept = RIDERS.with(|m| m.borrow().get(&door).cloned());
+    let ids = match kept.filter(|ids| ids.iter().all(|id| is_below(doc, *id, door))) {
+        Some(ids) => ids,
+        None => {
+            let ids: Vec<ObjectId> = doc
+                .objects()
+                .map(|(id, _)| id)
+                .filter(|id| is_below(doc, *id, door))
+                .collect();
+            RIDERS.with(|m| m.borrow_mut().insert(door, ids.clone()));
+            ids
+        }
+    };
+    ids.into_iter()
+        .filter_map(|id| doc.object_uid(id).map(|u| u.raw()))
+        .collect()
 }
 
 pub(crate) fn id_of(doc: &Document, uid: u64) -> Option<ObjectId> {
@@ -5340,6 +5363,19 @@ impl Cell {
         doc.object_uid(door).map(|u| u.raw())
     }
 
+    /// What moves out of the way as machine `machine` opens: its door and
+    /// what rides on it, a window and a handle.
+    pub fn opened_by(&self, doc: &Document, machine: u64) -> Vec<u64> {
+        let Some(door) = self.door_of(doc, machine) else {
+            return Vec::new();
+        };
+        let mut out = vec![door];
+        if let Some(id) = id_of(doc, door) {
+            out.extend(riders(doc, id));
+        }
+        out
+    }
+
     /// The parts of machine `machine` that move as its door does: those
     /// with the door role, with how they move; or else the part named for
     /// it, which slides aside.
@@ -5436,6 +5472,7 @@ impl Cell {
             let Some(door) = id_of(doc, uid) else {
                 continue;
             };
+            uids.extend(riders(doc, door));
             if open <= 0.0 {
                 continue;
             }
@@ -6627,6 +6664,46 @@ mod tests {
         let io = again.export(&doc);
         assert_eq!(io.io.len(), 1);
         assert_eq!(io.io.get(&(m, "start".into())), Some(&4));
+    }
+
+    /// A lathe's door slides aside with its window and its handle on it,
+    /// and the viewers are told they moved too.
+    #[test]
+    fn a_door_carries_its_window_and_handle() {
+        let (doc, mut cell, machine) = equipment("cnc_lathe", json!({"door": 1.0}));
+        let at = id_of(&doc, machine).unwrap();
+        let door = part_named(&doc, at, "door").unwrap();
+        let riders: Vec<u64> = ["window", "handle"]
+            .map(|name| {
+                let id = doc
+                    .objects()
+                    .find(|(id, o)| o.name == name && is_below(&doc, *id, door))
+                    .unwrap_or_else(|| panic!("no {name} on the door"))
+                    .0;
+                doc.object_uid(id).unwrap().raw()
+            })
+            .to_vec();
+        ask(
+            &mut cell,
+            &doc,
+            json!({"op": "machine", "object": machine.to_string(), "action": "open"}),
+        );
+        run_for(&mut cell, &doc, 0.0, 2.0);
+        let mut shown = doc.clone();
+        let changes = cell.apply(&mut shown);
+        let moved = |d: &Document, uid| d.world_transform(id_of(d, uid).unwrap()).translation;
+        let door_uid = doc.object_uid(door).unwrap().raw();
+        let by = moved(&shown, door_uid) - moved(&doc, door_uid);
+        assert!(by.x > 0.5, "the door slid aside: {by}");
+        for uid in riders {
+            assert!((moved(&shown, uid) - moved(&doc, uid) - by).length() < 1e-9);
+            assert!(
+                changes
+                    .changed
+                    .contains(&(DatablockKind::Object, Uid::from_raw(uid))),
+                "sent"
+            );
+        }
     }
 
     /// A lathe's door told how it moves: swung 90° about its own Z through

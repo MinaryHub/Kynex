@@ -375,7 +375,7 @@ impl Posing {
     /// What the `programs` event says: every robot's program, timed in
     /// `doc` and checked for collisions with the rest of it — the doors of
     /// machines the program has opened by each move out of the way (their
-    /// doors as `cell` finds them).
+    /// doors as `cell` finds them, and what rides on them).
     pub fn programs_json(&self, doc: &Document, collider: &mut Collider, cell: &Cell) -> String {
         let names = program::names(doc);
         let mut out = serde_json::Map::new();
@@ -393,7 +393,7 @@ impl Posing {
                 .map(|machines| {
                     machines
                         .into_iter()
-                        .filter_map(|m| cell.door_of(doc, m))
+                        .flat_map(|m| cell.opened_by(doc, m))
                         .collect()
                 })
                 .collect();

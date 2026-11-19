@@ -15,6 +15,10 @@
 // Geometry is kept indexed and without normals: the material shades flat
 // from screen-space derivatives, which is how a CAD part reads and a third
 // of the vertex memory a faceted copy would take.
+//
+// Each part's finish — how metallic, how rough — rides in the alpha of its
+// colour, which three.js leaves alone: one number, `finishCode`, read back
+// by the material `finished` makes. Still one material, one draw.
 
 import * as THREE from 'three';
 
@@ -26,6 +30,53 @@ const GROW = 1.5;
 // left an empty screen.
 const LEVEL_PX = [120, 25];
 const HIDE_PX = 0.75;
+
+// A finish, [metallic, roughness] each 0 to 1, as one number: each in
+// sixteen steps, the pair from 2 up. Below 2 (the texture's 1, as it starts)
+// is the material's own.
+function finishCode(finish) {
+  if (!finish) return 1;
+  const step = (v) => Math.round(Math.min(Math.max(v, 0), 1) * 15);
+  return 2 + step(finish[0]) * 16 + step(finish[1]);
+}
+
+// `material` reading each part's finish from its colour's alpha, for a
+// BatchedMesh whose colours are set: metallic and roughness its own, or the
+// material's where it has none.
+export function finished(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vFinish;')
+      .replace(
+        '#include <color_vertex>',
+        `#include <color_vertex>
+#ifdef USE_BATCHING_COLOR
+	{
+		int k = int( getIndirectIndex( gl_DrawID ) );
+		int size = textureSize( batchingColorTexture, 0 ).x;
+		vFinish = texelFetch( batchingColorTexture, ivec2( k % size, k / size ), 0 ).a;
+	}
+#else
+	vFinish = 1.0;
+#endif`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vFinish;')
+      .replace(
+        '#include <metalnessmap_fragment>',
+        `#include <metalnessmap_fragment>
+	if ( vFinish >= 1.5 ) {
+		float code = floor( vFinish - 2.0 + 0.5 );
+		metalnessFactor = floor( ( code + 0.5 ) / 16.0 ) / 15.0;
+		// Never mirror-smooth: flat facets would sparkle.
+		roughnessFactor = max( mod( code, 16.0 ) / 15.0, 0.12 );
+	}`,
+      );
+  };
+  // Not the plain material's program: this one reads the finish.
+  material.customProgramCacheKey = () => 'kynex-finished';
+  return material;
+}
 
 export class Batch {
   constructor(material) {
@@ -134,8 +185,9 @@ export class Batch {
   }
 
   // Places part `uid` showing mesh `meshUid`: added if new, moved to the
-  // other geometry if its mesh changed.
-  set(uid, meshUid, matrix, color, visible) {
+  // other geometry if its mesh changed. `finish` is its [metallic,
+  // roughness], or none for the material's own.
+  set(uid, meshUid, matrix, color, visible, finish) {
     const g = this.geoms.get(meshUid);
     if (!g) {
       this.remove(uid);
@@ -158,6 +210,9 @@ export class Batch {
     this._measure(it, g);
     this.base.set(uid, color.clone());
     this.mesh.setColorAt(it.id, color);
+    // Its finish in the alpha the colour leaves: an id let go and taken
+    // again is written over, finish or none.
+    this.mesh._colorsTexture.image.data[it.id * 4 + 3] = finishCode(finish);
     it.shown = visible;
     this.mesh.setVisibleAt(it.id, visible && !it.small && !this.hidden.has(uid));
   }

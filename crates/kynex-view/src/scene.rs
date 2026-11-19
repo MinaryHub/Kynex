@@ -57,6 +57,10 @@ pub struct Drawn {
     pub matrix: [f64; 16],
     /// Its first material's base colour, linear; none for the default surface.
     pub color: Option<[f32; 3]>,
+    /// Its first material's metallic and roughness, each 0 to 1; none for
+    /// the default surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish: Option<[f32; 2]>,
     pub visible: bool,
     /// link, joint, collision or rig.
     pub role: Option<&'static str>,
@@ -478,10 +482,12 @@ fn drawn(doc: &Document, id: ObjectId, uid: u64) -> Drawn {
         ObjectData::Light(_) => ("light", None),
         ObjectData::Armature(_) => ("armature", None),
     };
-    let color = doc.material_at(id, 0).map(|m| {
+    let material = doc.material_at(id, 0);
+    let color = material.map(|m| {
         let c = m.base_color;
         [c.r, c.g, c.b]
     });
+    let finish = material.map(|m| [m.metallic.clamp(0.0, 1.0), m.roughness.clamp(0.0, 1.0)]);
     let role = object.robot.as_ref().map(|part| match part {
         RobotPart::Link { .. } => "link",
         RobotPart::Joint(_) => "joint",
@@ -499,6 +505,7 @@ fn drawn(doc: &Document, id: ObjectId, uid: u64) -> Drawn {
         mesh,
         matrix: DMat4::from(doc.world_transform(id)).to_cols_array(),
         color,
+        finish,
         visible: object.visible,
         role,
     }

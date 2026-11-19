@@ -2578,11 +2578,38 @@ fn build(item: &Item) -> Result<Built, String> {
                 item.param("plate_w"),
                 item.param("plate_d"),
             );
+            // A steel table: its top, four legs, a shelf low down.
+            let (tw, td) = (w + 0.05, d + 0.05);
             block(
                 &mut doc,
                 "table",
-                [w + 0.05, d + 0.05, h - 0.02],
-                [0.0, 0.0, (h - 0.02) / 2.0],
+                [tw, td, 0.05],
+                [0.0, 0.0, h - 0.045],
+                c.table,
+                None,
+            );
+            for (k, (sx, sy)) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
+                .into_iter()
+                .enumerate()
+            {
+                block(
+                    &mut doc,
+                    &format!("leg{k}"),
+                    [0.05, 0.05, h - 0.07],
+                    [
+                        sx * (tw / 2.0 - 0.04),
+                        sy * (td / 2.0 - 0.04),
+                        (h - 0.07) / 2.0,
+                    ],
+                    c.steel,
+                    None,
+                );
+            }
+            block(
+                &mut doc,
+                "shelf",
+                [tw - 0.04, td - 0.04, 0.02],
+                [0.0, 0.0, 0.2],
                 c.table,
                 None,
             );
@@ -2755,7 +2782,8 @@ fn build(item: &Item) -> Result<Built, String> {
                 "flow_buffer" => ("buffer", [1.2, 0.5, 0.6], c.pallet, Kind::Buffer),
                 _ => ("sink", [0.6, 0.6, 0.7], c.dark, Kind::Sink),
             };
-            match item.param("base").round() as usize {
+            let base = item.param("base").round() as usize;
+            match base {
                 1 => size = [5.0, 2.4, 0.02],
                 2 => size = [0.5, 0.5, 0.9],
                 3 => {
@@ -2764,14 +2792,30 @@ fn build(item: &Item) -> Result<Built, String> {
                 }
                 _ => {}
             }
-            let table = block(
-                &mut doc,
-                name,
-                size,
-                [0.0, 0.0, size[2] / 2.0],
-                colour,
-                None,
-            );
+            let table = if base == 0 {
+                // A table: its top, of its colour, where parts stand; what
+                // holds it up beside it, not below it, so the top is still
+                // where they stand (see `Cell::dock`).
+                let top = block(
+                    &mut doc,
+                    name,
+                    [size[0], size[1], 0.05],
+                    [0.0, 0.0, size[2] - 0.025],
+                    colour,
+                    None,
+                );
+                flow_table(&mut doc, &c, kind, size);
+                top
+            } else {
+                block(
+                    &mut doc,
+                    name,
+                    size,
+                    [0.0, 0.0, size[2] / 2.0],
+                    colour,
+                    None,
+                )
+            };
             roles.push((table, kind));
             let settings = match kind {
                 Kind::Source => json!({ "feed": item.param("feed"), "look": item.param("look") }),
@@ -2942,14 +2986,47 @@ fn build(item: &Item) -> Result<Built, String> {
         "pedestal" => {
             let c = Colours::new(&mut doc);
             let (h, s) = (item.param("height"), item.param("size"));
+            // A column on a base plate bolted down, a plate on top for the
+            // robot.
             block(
                 &mut doc,
                 "pedestal",
-                [s, s, h],
+                [s * 0.75, s * 0.75, h - 0.05],
                 [0.0, 0.0, h / 2.0],
-                c.dark,
+                c.trim,
                 None,
             );
+            block(
+                &mut doc,
+                "plate_top",
+                [s, s, 0.025],
+                [0.0, 0.0, h - 0.0125],
+                c.steel,
+                None,
+            );
+            block(
+                &mut doc,
+                "plate_base",
+                [s + 0.12, s + 0.12, 0.025],
+                [0.0, 0.0, 0.0125],
+                c.steel,
+                None,
+            );
+            for (k, (sx, sy)) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
+                .into_iter()
+                .enumerate()
+            {
+                let at = (s + 0.12) / 2.0 - 0.04;
+                post(
+                    &mut doc,
+                    &format!("bolt{k}"),
+                    0.012,
+                    0.04,
+                    [sx * at, sy * at, 0.045],
+                    c.dark,
+                    None,
+                );
+            }
         }
         "fence" => {
             let c = Colours::new(&mut doc);
@@ -2990,31 +3067,155 @@ struct Colours {
     belt: MaterialId,
     body: MaterialId,
     accent: MaterialId,
+    /// A machine's darker trim: its plinth, its upper band.
+    trim: MaterialId,
+    /// Window glass, dark and glossy.
+    glass: MaterialId,
+    /// A signal tower's lamps, and an emergency stop.
+    red: MaterialId,
+    amber: MaterialId,
+    green: MaterialId,
 }
 
 impl Colours {
     fn new(doc: &mut Document) -> Self {
-        let mut colour = |name: &str, rgb: [f32; 3], metallic: f32| {
+        // Each its colour, how metallic and how rough: paint a satin sheen,
+        // machined steel bright, rubber and cast iron dull.
+        let mut colour = |name: &str, rgb: [f32; 3], metallic: f32, roughness: f32| {
             doc.add_material(Material {
                 name: name.into(),
                 base_color: SceneRgb::new(rgb[0], rgb[1], rgb[2]),
                 metallic,
+                roughness,
                 ..Material::default()
             })
         };
         Self {
-            machine: colour("machine", [0.86, 0.87, 0.88], 0.0),
-            door: colour("door", [0.32, 0.40, 0.50], 0.2),
-            steel: colour("steel", [0.72, 0.74, 0.78], 0.8),
-            table: colour("table", [0.28, 0.30, 0.33], 0.0),
-            pallet: colour("pallet", [0.20, 0.45, 0.75], 0.0),
-            dark: colour("dark", [0.12, 0.13, 0.15], 0.0),
-            fence: colour("fence", [0.95, 0.75, 0.10], 0.0),
-            belt: colour("belt", [0.06, 0.06, 0.07], 0.0),
-            body: colour("body", [0.93, 0.93, 0.91], 0.0),
-            accent: colour("accent", [0.95, 0.45, 0.12], 0.0),
+            machine: colour("machine", [0.86, 0.87, 0.88], 0.0, 0.42),
+            door: colour("door", [0.32, 0.40, 0.50], 0.2, 0.35),
+            steel: colour("steel", [0.72, 0.74, 0.78], 0.9, 0.3),
+            table: colour("table", [0.28, 0.30, 0.33], 0.5, 0.55),
+            pallet: colour("pallet", [0.20, 0.45, 0.75], 0.0, 0.5),
+            dark: colour("dark", [0.12, 0.13, 0.15], 0.0, 0.6),
+            fence: colour("fence", [0.95, 0.75, 0.10], 0.0, 0.45),
+            belt: colour("belt", [0.06, 0.06, 0.07], 0.0, 0.9),
+            body: colour("body", [0.93, 0.93, 0.91], 0.0, 0.45),
+            accent: colour("accent", [0.95, 0.45, 0.12], 0.0, 0.45),
+            trim: colour("trim", [0.30, 0.33, 0.37], 0.1, 0.5),
+            glass: colour("glass", [0.12, 0.16, 0.20], 0.5, 0.1),
+            red: colour("red", [0.80, 0.08, 0.06], 0.0, 0.35),
+            amber: colour("amber", [0.95, 0.55, 0.05], 0.0, 0.35),
+            green: colour("green", [0.10, 0.65, 0.20], 0.0, 0.35),
         }
     }
+}
+
+/// What holds a process flow table's top up, the top `size` across and
+/// `size[2]` high: four legs and a shelf low down; on castors, a cart, for
+/// a source or a sink; rollers across a buffer's top; a signal light at a
+/// station's back corner.
+fn flow_table(doc: &mut Document, c: &Colours, kind: Kind, size: [f64; 3]) {
+    let [w, d, h] = size;
+    let cart = matches!(kind, Kind::Source | Kind::Sink);
+    let lift = if cart { 0.12 } else { 0.0 };
+    for (k, (sx, sy)) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let (x, y) = (sx * (w / 2.0 - 0.04), sy * (d / 2.0 - 0.04));
+        block(
+            doc,
+            &format!("leg{k}"),
+            [0.04, 0.04, h - 0.05 - lift],
+            [x, y, lift + (h - 0.05 - lift) / 2.0],
+            c.steel,
+            None,
+        );
+        if cart {
+            block(
+                doc,
+                &format!("castor_mount{k}"),
+                [0.06, 0.06, 0.02],
+                [x, y, lift - 0.01],
+                c.steel,
+                None,
+            );
+            bar(
+                doc,
+                &format!("castor{k}"),
+                0.045,
+                0.03,
+                [x, y, 0.045],
+                true,
+                c.belt,
+                None,
+            );
+        }
+    }
+    block(
+        doc,
+        "shelf",
+        [w - 0.04, d - 0.04, 0.02],
+        [0.0, 0.0, lift + 0.15],
+        c.table,
+        None,
+    );
+    match kind {
+        Kind::Buffer => {
+            // Rollers across the top, a hand apart, flush with it.
+            let n = ((w / 0.1).floor() as usize).max(2);
+            for i in 0..n {
+                let x = -w / 2.0 + w * (i as f64 + 0.5) / n as f64;
+                block(
+                    doc,
+                    &format!("roller{i}"),
+                    [0.03, d - 0.04, 0.002],
+                    [x, 0.0, h + 0.001],
+                    c.steel,
+                    None,
+                );
+            }
+        }
+        Kind::Station => {
+            let (x, y) = (w / 2.0 - 0.06, d / 2.0 - 0.06);
+            post(doc, "tower", 0.012, 0.3, [x, y, h + 0.15], c.steel, None);
+            for (k, (name, colour)) in [
+                ("lamp_green", c.green),
+                ("lamp_amber", c.amber),
+                ("lamp_red", c.red),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                post(
+                    doc,
+                    name,
+                    0.03,
+                    0.05,
+                    [x, y, h + 0.325 + 0.052 * k as f64],
+                    colour,
+                    None,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A box `size` across on `on`, its centre `offset` from `on`'s: it moves
+/// with `on` — a window and a handle on a door that slides. Parented as
+/// Kreate parents, the parent's place and scale then undone, so it keeps
+/// its own size whatever `on` is scaled by.
+fn block_on(
+    doc: &mut Document,
+    name: &str,
+    size: [f64; 3],
+    offset: [f64; 3],
+    colour: MaterialId,
+    on: ObjectId,
+) -> ObjectId {
+    let at = doc.world_transform(on).translation + DVec3::from_array(offset);
+    block(doc, name, size, at.to_array(), colour, Some(on))
 }
 
 /// A box `size` across, its centre at `centre`, under `parent` if given.
@@ -3145,21 +3346,107 @@ fn cnc(doc: &mut Document, c: &Colours, item: &Item, vise: bool) -> ObjectId {
         c.machine,
         m,
     );
+    // Its front two-toned: a dark plinth at the floor, a band across the
+    // top, as machine tools are painted.
     block(
         doc,
-        "panel",
-        [0.35, 0.06, 0.5],
-        [
-            opening / 2.0 + side / 2.0,
-            -0.03,
-            (roof + floor) / 2.0 + 0.1,
-        ],
+        "plinth",
+        [w + 0.01, d + 0.01, 0.12],
+        [0.0, d / 2.0, 0.06],
+        c.trim,
+        m,
+    );
+    block(
+        doc,
+        "band",
+        [w + 0.01, 0.012, (h - roof) * 0.7],
+        [0.0, -0.006, h - (h - roof) * 0.35],
+        c.trim,
+        m,
+    );
+    // The operator's panel on the right, hung on its arm from the top band,
+    // in front of the door's way as it slides aside: a screen, its keys,
+    // and a red stop.
+    let (px, pz) = (opening / 2.0 + side / 2.0, (roof + floor) / 2.0 + 0.1);
+    block(doc, "panel", [0.38, 0.08, 0.55], [px, -0.09, pz], c.trim, m);
+    let (arm_lo, arm_hi) = (pz + 0.275, h - 0.05);
+    post(
+        doc,
+        "arm",
+        0.025,
+        arm_hi - arm_lo,
+        [px, -0.09, (arm_lo + arm_hi) / 2.0],
+        c.steel,
+        m,
+    );
+    block(
+        doc,
+        "arm_foot",
+        [0.05, 0.09, 0.05],
+        [px, -0.045, arm_hi],
+        c.steel,
+        m,
+    );
+    block(
+        doc,
+        "screen",
+        [0.30, 0.01, 0.22],
+        [px, -0.135, pz + 0.12],
+        c.glass,
+        m,
+    );
+    block(
+        doc,
+        "keys",
+        [0.30, 0.01, 0.16],
+        [px, -0.135, pz - 0.1],
         c.dark,
+        m,
+    );
+    bar(
+        doc,
+        "estop",
+        0.025,
+        0.03,
+        [px + 0.11, -0.15, pz - 0.22],
+        false,
+        c.red,
+        m,
+    );
+    // A signal tower on the roof, at the back: green, amber, red.
+    let (tx, ty) = (w / 2.0 - 0.15, d - 0.2);
+    post(doc, "tower", 0.012, 0.12, [tx, ty, h + 0.06], c.steel, m);
+    for (k, (name, colour)) in [
+        ("lamp_green", c.green),
+        ("lamp_amber", c.amber),
+        ("lamp_red", c.red),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        post(
+            doc,
+            name,
+            0.035,
+            0.06,
+            [tx, ty, h + 0.15 + 0.062 * k as f64],
+            colour,
+            m,
+        );
+    }
+    // The chip conveyor, out of its back, rising to a bin's height.
+    block(
+        doc,
+        "chips",
+        [0.35, 0.7, 0.9],
+        [-w / 2.0 + 0.3, d + 0.35, 0.45],
+        c.trim,
         m,
     );
     if vise {
         // A machining centre: its table, and the vise on it the part is
-        // clamped in (where a lathe has its chuck).
+        // clamped in (where a lathe has its chuck); its spindle head over
+        // them, up out of the way.
         let table = (opening - 0.1).min(0.9);
         block(
             doc,
@@ -3177,6 +3464,23 @@ fn cnc(doc: &mut Document, c: &Colours, item: &Item, vise: bool) -> ObjectId {
             c.dark,
             m,
         );
+        block(
+            doc,
+            "head",
+            [0.3, 0.35, 0.25],
+            [0.0, 0.55, roof - 0.125],
+            c.trim,
+            m,
+        );
+        post(
+            doc,
+            "spindle",
+            0.06,
+            0.12,
+            [0.0, 0.5, roof - 0.31],
+            c.steel,
+            m,
+        );
     } else {
         post(
             doc,
@@ -3187,14 +3491,42 @@ fn cnc(doc: &mut Document, c: &Colours, item: &Item, vise: bool) -> ObjectId {
             c.steel,
             m,
         );
+        // The turret, at the back, up out of the way.
+        bar(
+            doc,
+            "turret",
+            0.14,
+            0.12,
+            [0.0, space - 0.1, roof - 0.2],
+            false,
+            c.steel,
+            m,
+        );
     }
-    block(
+    // The sliding door: its window and its handle ride with it.
+    let door = block(
         doc,
         "door",
         [opening + 0.04, 0.03, tall + 0.04],
         [0.0, -0.02, mid],
         c.door,
         m,
+    );
+    block_on(
+        doc,
+        "window",
+        [(opening + 0.04) * 0.7, 0.01, tall * 0.55],
+        [0.0, -0.016, tall * 0.1],
+        c.glass,
+        door,
+    );
+    block_on(
+        doc,
+        "handle",
+        [0.03, 0.04, tall * 0.35],
+        [-(opening + 0.04) / 2.0 + 0.06, -0.035, 0.0],
+        c.steel,
+        door,
     );
     machine
 }
@@ -3247,6 +3579,60 @@ fn conveyor(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId
             None,
         );
     }
+    // Each pair of legs braced across low down, each leg on a foot.
+    let legs = ((l / 1.5).ceil() as usize).max(1);
+    for i in 0..=legs {
+        let x = -l / 2.0 + 0.05 + (l - 0.1) * i as f64 / legs as f64;
+        block(
+            doc,
+            &format!("brace{i}"),
+            [0.03, w + 0.04, 0.03],
+            [x, 0.0, 0.18],
+            c.steel,
+            None,
+        );
+        for (side, y) in [("left", -1.0), ("right", 1.0)] {
+            block(
+                doc,
+                &format!("foot_{side}{i}"),
+                [0.09, 0.09, 0.015],
+                [x, y * (w / 2.0 + 0.02), 0.0075],
+                c.dark,
+                None,
+            );
+        }
+    }
+    // Low guides along the belt's edges, to keep what rides on it on.
+    for (side, y) in [("left", -1.0), ("right", 1.0)] {
+        block(
+            doc,
+            &format!("guide_{side}"),
+            [l, 0.012, 0.03],
+            [0.0, y * (w / 2.0 + 0.006), h + 0.015],
+            c.steel,
+            None,
+        );
+    }
+    // Its drive at the out end, outside the right frame: a gearbox and its
+    // motor hanging below.
+    let y = w / 2.0 + 0.04;
+    block(
+        doc,
+        "gearbox",
+        [0.12, 0.1, 0.14],
+        [l / 2.0 - 0.06, y + 0.05, h - 0.08],
+        c.trim,
+        None,
+    );
+    post(
+        doc,
+        "motor",
+        0.055,
+        0.22,
+        [l / 2.0 - 0.06, y + 0.05, h - 0.26],
+        c.trim,
+        None,
+    );
     belt
 }
 
@@ -3369,7 +3755,61 @@ fn corner_conveyor(doc: &mut Document, c: &Colours, corner: Corner, w: f64, h: f
                 c.steel,
                 None,
             );
+            block(
+                doc,
+                &format!("foot_{side}{i}"),
+                [0.09, 0.09, 0.015],
+                [at.x, at.y, 0.0075],
+                c.dark,
+                None,
+            );
         }
+    }
+    // Braced across low down, as a straight one is.
+    let braces = ((r * corner.angle / 1.5).ceil() as usize).max(1);
+    for i in 0..=braces {
+        let t = 0.05 + 0.9 * i as f64 / braces as f64;
+        let at = corner.point(t);
+        let way = corner.heading(t);
+        let id = block(
+            doc,
+            &format!("brace{i}"),
+            [0.03, w + 0.04, 0.03],
+            [at.x, at.y, 0.18],
+            c.steel,
+            None,
+        );
+        doc.object_mut(id).unwrap().transform.rotation = DQuat::from_rotation_z(way.y.atan2(way.x));
+    }
+    // Low guides along the belt's edges.
+    for (side, r0) in [("inner", r - w / 2.0 - 0.012), ("outer", r + w / 2.0)] {
+        let guide = doc.add_mesh_object(format!("guide_{side}"), sector(r0, r0 + 0.012, 0.0, 0.03));
+        paint(doc, guide, c.steel);
+        doc.object_mut(guide).unwrap().transform.translation = DVec3::new(pivot.x, pivot.y, h);
+    }
+    // Its drive at the out end, outside the outer frame.
+    {
+        let out = (corner.point(1.0) - pivot).normalize();
+        let way = corner.heading(1.0);
+        let at = pivot + out * (r + w / 2.0 + 0.09) - way * 0.06;
+        let id = block(
+            doc,
+            "gearbox",
+            [0.12, 0.1, 0.14],
+            [at.x, at.y, h - 0.08],
+            c.trim,
+            None,
+        );
+        doc.object_mut(id).unwrap().transform.rotation = DQuat::from_rotation_z(way.y.atan2(way.x));
+        post(
+            doc,
+            "motor",
+            0.055,
+            0.22,
+            [at.x, at.y, h - 0.26],
+            c.trim,
+            None,
+        );
     }
     for (end, t) in [("in", 0.0), ("out", 1.0)] {
         let at = corner.point(t);
@@ -3445,8 +3885,8 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
         );
     }
     // The guard over the clamp, on the operator's side: the door the robot
-    // reaches in by.
-    block(
+    // reaches in by, its window and handle riding with it.
+    let door = block(
         doc,
         "door",
         [clamp, 0.03, tall + 0.2],
@@ -3454,6 +3894,60 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
         c.accent,
         m,
     );
+    block_on(
+        doc,
+        "window",
+        [clamp * 0.7, 0.01, tall * 0.6],
+        [0.0, -0.016, 0.05],
+        c.glass,
+        door,
+    );
+    block_on(
+        doc,
+        "handle",
+        [0.03, 0.04, tall * 0.4],
+        [-clamp / 2.0 + 0.06, -0.035, 0.0],
+        c.steel,
+        door,
+    );
+    // A dark plinth along the bed's foot; a signal tower on the injection
+    // unit's end.
+    block(
+        doc,
+        "plinth",
+        [l + 0.01, w + 0.01, 0.12],
+        [0.0, y0, 0.06],
+        c.trim,
+        m,
+    );
+    let tx = l / 2.0 - 0.15;
+    post(
+        doc,
+        "tower",
+        0.012,
+        0.12,
+        [tx, w - 0.15, bed + 0.06],
+        c.steel,
+        m,
+    );
+    for (k, (name, colour)) in [
+        ("lamp_green", c.green),
+        ("lamp_amber", c.amber),
+        ("lamp_red", c.red),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        post(
+            doc,
+            name,
+            0.035,
+            0.06,
+            [tx, w - 0.15, bed + 0.15 + 0.062 * k as f64],
+            colour,
+            m,
+        );
+    }
     // The injection unit: the barrel into the fixed platen, the hopper on it.
     let unit = l - clamp - 0.2;
     bar(
@@ -3484,11 +3978,30 @@ fn molder(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
         c.body,
         m,
     );
+    // The control panel, out in front of the guard's way as it slides
+    // aside: a screen and its keys.
+    let px = x0 + clamp + 0.4;
     block(
         doc,
         "panel",
         [0.5, 0.06, 0.6],
-        [x0 + clamp + 0.4, -0.03, bed + 0.5],
+        [px, -0.09, bed + 0.5],
+        c.trim,
+        m,
+    );
+    block(
+        doc,
+        "screen",
+        [0.4, 0.01, 0.25],
+        [px, -0.125, bed + 0.62],
+        c.glass,
+        m,
+    );
+    block(
+        doc,
+        "keys",
+        [0.4, 0.01, 0.18],
+        [px, -0.125, bed + 0.36],
         c.dark,
         m,
     );
@@ -3553,6 +4066,53 @@ fn amr(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) -> ObjectId {
         0.06,
         [l / 2.0 - 0.06, 0.0, h + 0.03],
         c.dark,
+        m,
+    );
+    // Safety scanners at two corners, front left and back right, low in
+    // the body; status lights along each end; a stop on each side of the
+    // top; a display at the back.
+    for (name, sx, sy) in [("lidar_front", 1.0, -1.0), ("lidar_back", -1.0, 1.0)] {
+        post(
+            doc,
+            name,
+            0.045,
+            0.07,
+            [
+                sx * (l / 2.0 - 0.02),
+                sy * (w / 2.0 - 0.02),
+                clearance + 0.13,
+            ],
+            c.dark,
+            m,
+        );
+    }
+    for (name, x) in [("light_front", 1.0), ("light_back", -1.0)] {
+        block(
+            doc,
+            name,
+            [0.006, w * 0.6, 0.02],
+            [x * (l / 2.0 + 0.003), 0.0, h * 0.7],
+            c.green,
+            m,
+        );
+    }
+    for (name, y) in [("estop_left", -1.0), ("estop_right", 1.0)] {
+        post(
+            doc,
+            name,
+            0.02,
+            0.02,
+            [-l / 2.0 + 0.06, y * (w / 2.0 - 0.06), h + 0.01],
+            c.red,
+            m,
+        );
+    }
+    block(
+        doc,
+        "display",
+        [0.006, 0.16, 0.08],
+        [-l / 2.0 - 0.003, w * 0.25, h * 0.45],
+        c.glass,
         m,
     );
     amr
@@ -3659,6 +4219,24 @@ fn turntable(doc: &mut Document, c: &Colours, d: f64, h: f64) -> ObjectId {
         m,
     );
     post(doc, "top", d / 2.0, 0.03, [0.0, 0.0, h - 0.015], c.table, m);
+    post(doc, "foot", d * 0.42, 0.04, [0.0, 0.0, 0.02], c.trim, m);
+    // T-slots across the table, either side of the screen.
+    for k in 0..4 {
+        let y = d * (k as f64 - 1.5) * 0.2;
+        block(
+            doc,
+            &format!("slot{k}"),
+            [
+                d * 0.9 * (1.0 - (y / (d / 2.0)).powi(2)).sqrt(),
+                0.02,
+                0.002,
+            ],
+            [0.0, y, h],
+            c.dark,
+            m,
+        );
+    }
+    // The screen between the two stations, in a steel frame.
     block(
         doc,
         "screen",
@@ -3667,6 +4245,24 @@ fn turntable(doc: &mut Document, c: &Colours, d: f64, h: f64) -> ObjectId {
         c.accent,
         m,
     );
+    block(
+        doc,
+        "screen_top",
+        [0.04, d * 0.9 + 0.04, 0.03],
+        [0.0, 0.0, h + 0.515],
+        c.steel,
+        m,
+    );
+    for (name, y) in [("screen_post_a", -1.0), ("screen_post_b", 1.0)] {
+        block(
+            doc,
+            name,
+            [0.04, 0.03, 0.53],
+            [0.0, y * (d * 0.45 + 0.015), h + 0.265],
+            c.steel,
+            m,
+        );
+    }
     table
 }
 
@@ -3696,47 +4292,27 @@ fn fence(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
     let (hx, hy) = (l / 2.0, w / 2.0);
     let along = |n: f64| ((n / 1.3).ceil() as usize).max(1);
     let (nx, ny) = (along(l), along(w));
+    // A square post on a foot plate.
+    let post_at = |doc: &mut Document, name: String, x: f64, y: f64| {
+        block(doc, &name, [0.05, 0.05, h], [x, y, h / 2.0], c.fence, None);
+        block(
+            doc,
+            &format!("{name}_foot"),
+            [0.12, 0.12, 0.01],
+            [x, y, 0.005],
+            c.fence,
+            None,
+        );
+    };
     for i in 0..=nx {
         let x = -hx + l * i as f64 / nx as f64;
-        post(
-            doc,
-            &format!("post_s{i}"),
-            0.03,
-            h,
-            [x, -hy, h / 2.0],
-            c.fence,
-            None,
-        );
-        post(
-            doc,
-            &format!("post_n{i}"),
-            0.03,
-            h,
-            [x, hy, h / 2.0],
-            c.fence,
-            None,
-        );
+        post_at(doc, format!("post_s{i}"), x, -hy);
+        post_at(doc, format!("post_n{i}"), x, hy);
     }
     for j in 1..ny {
         let y = -hy + w * j as f64 / ny as f64;
-        post(
-            doc,
-            &format!("post_w{j}"),
-            0.03,
-            h,
-            [-hx, y, h / 2.0],
-            c.fence,
-            None,
-        );
-        post(
-            doc,
-            &format!("post_e{j}"),
-            0.03,
-            h,
-            [hx, y, h / 2.0],
-            c.fence,
-            None,
-        );
+        post_at(doc, format!("post_w{j}"), -hx, y);
+        post_at(doc, format!("post_e{j}"), hx, y);
     }
     for (k, z) in [0.15, h / 2.0, h - 0.05].into_iter().enumerate() {
         block(
@@ -3771,6 +4347,31 @@ fn fence(doc: &mut Document, c: &Colours, l: f64, w: f64, h: f64) {
             c.fence,
             None,
         );
+    }
+    // The mesh between the rails: dark wires a hand apart, seen through.
+    const WIRE: f64 = 0.2;
+    let (lo, hi) = (0.17, h - 0.07);
+    let wire = |doc: &mut Document, name: String, x: f64, y: f64| {
+        block(
+            doc,
+            &name,
+            [0.006, 0.006, hi - lo],
+            [x, y, (lo + hi) / 2.0],
+            c.dark,
+            None,
+        );
+    };
+    let n = (l / WIRE).round().max(1.0) as usize;
+    for i in 1..n {
+        let x = -hx + l * i as f64 / n as f64;
+        wire(doc, format!("wire_s{i}"), x, -hy);
+        wire(doc, format!("wire_n{i}"), x, hy);
+    }
+    let n = (w / WIRE).round().max(1.0) as usize;
+    for j in 1..n {
+        let y = -hy + w * j as f64 / n as f64;
+        wire(doc, format!("wire_w{j}"), -hx, y);
+        wire(doc, format!("wire_e{j}"), hx, y);
     }
 }
 

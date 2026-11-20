@@ -215,6 +215,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 .toolbar button.play-btn.on { color: #ff6b6b; background: rgba(255, 95, 95, 0.14); }
 .toolbar .play-speed { font: 11px var(--mono); }
 .toolbar .play-speed:empty { display: none; }
+/* A run on: what would edit the scene shown as not for now. */
+.run-locked .toolbar button:is([data-action="undo"], [data-action="redo"], [data-action="link"], [data-action="floor"]),
+.run-locked #library-list [data-template],
+.run-locked #import-model {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.run-locked #tree .node { cursor: default; }
 /* The run's state and the clock's speed, over the view: plain to see. */
 .run-badge {
   position: absolute;

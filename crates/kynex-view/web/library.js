@@ -321,6 +321,8 @@ export class LibraryPanel {
   // A CAD or mesh file sent to KYNEX: kept as equipment of the user's own
   // and placed at the origin, then selected.
   async importModel(file) {
+    // Nothing brought in while a run is on.
+    if (this.ctx.refuseWhileRunning()) return;
     const ext = file.name.split('.').pop().toLowerCase();
     if (!['step', 'stp', 'stl', 'obj', 'glb', 'gltf', '3mf', 'ply', 'fbx', 'zip', 'urdf'].includes(ext)) {
       return this.ctx.toast(t('읽을 수 있는 파일: STEP, STL, OBJ, FBX, glTF·GLB, 3MF, PLY · 로봇은 URDF 폴더를 묶은 ZIP이나 URDF'));
@@ -513,6 +515,8 @@ export class LibraryPanel {
   }
 
   arm(key) {
+    // Nothing picked to place while a run is on.
+    if (key && this.ctx.refuseWhileRunning()) key = null;
     this.armed = key;
     for (const el of this.list.querySelectorAll('[data-template]')) el.classList.toggle('armed', el.dataset.template === key);
     this.ctx.canvas.classList.toggle('placing', !!key);
@@ -520,6 +524,8 @@ export class LibraryPanel {
   }
 
   placeAt(key, x, y) {
+    // Nor placed, dropped from the list.
+    if (this.ctx.refuseWhileRunning()) return;
     const hit = this.ctx.pick(x, y);
     if (!hit) return;
     // Placed unturned, whatever it is: turned afterwards in the inspector.

@@ -306,6 +306,7 @@ export default {
   '실행할 공정 흐름도, 프로그램이 있는 로봇도 없습니다': 'Nothing to run: no process flow and no robot with a program',
   '처음으로 되돌리지 못했습니다': 'Could not reset',
   '처음으로 되돌렸습니다: 실행 정지, 로봇은 실행 전 자세, 제품은 모두 지움': 'Reset: run stopped, robots back to pre-run pose, all products cleared',
+  '실행 중에는 선택·편집할 수 없습니다 · 처음으로(Home)를 누르면 다시 됩니다': 'Nothing can be selected or edited while running · Reset (Home) to edit again',
   '배속 {speed}배 ({limit})': 'Speed {speed}× ({limit})',
   '가장 빠름': 'fastest',
   '가장 느림': 'slowest',

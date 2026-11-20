@@ -436,6 +436,36 @@ const running = () => !!timelinePanel.flowState?.on || robotPanel.going().length
 // Held where it is by the user: going on from there with Space.
 const paused = () => !!robotPanel.clock?.paused && running();
 
+// While a run is on, going or paused, the scene is watched, not changed:
+// nothing chosen, moved, placed, linked or taken away. 처음으로 (Home)
+// ends the run and gives it back. Whether a request was refused for it,
+// said once in a while, not at every click.
+let lockToldAt = 0;
+function refuseWhileRunning() {
+  if (!running()) return false;
+  const now = performance.now();
+  if (now - lockToldAt > 2500) {
+    lockToldAt = now;
+    toast(t('실행 중에는 선택·편집할 수 없습니다 · 처음으로(Home)를 누르면 다시 됩니다'));
+  }
+  return true;
+}
+// A run begun: what was chosen let go, and every way of editing put away.
+// Looked at each frame, acted on only when it changes.
+let lockShown = false;
+function showLock() {
+  const on = running();
+  if (on === lockShown) return;
+  lockShown = on;
+  document.body.classList.toggle('run-locked', on);
+  if (!on) return;
+  libraryPanel.arm(null);
+  if (cellPanel.picking()) cellPanel.stopPicking();
+  if (cellPanel.linking()) cellPanel.stopLinking();
+  if (view.interact) setToggle('interact', false);
+  if (selected != null || group.size) select(null);
+}
+
 // An update has come, made at `t` by KYNEX's clock (or now, if it does not
 // say): when it is due on the page's clock.
 function told(t) {
@@ -1308,6 +1338,7 @@ const libraryPanel = new LibraryPanel({
   pick,
   toast,
   escapeHtml,
+  refuseWhileRunning: () => refuseWhileRunning(),
 });
 
 // Each side panel's pages: on the left the scene's tree and the library,
@@ -1395,6 +1426,8 @@ function setContacts(list) {
 }
 
 function select(uid, { frame: andFrame = false, keep = [] } = {}) {
+  // Nothing chosen while a run is on: only let go.
+  if (uid != null && refuseWhileRunning()) return;
   const was = selected;
   selected = uid != null && records.has(uid) ? uid : null;
   // Anything chosen anew: the group goes, unless it is kept.
@@ -1684,6 +1717,9 @@ canvas.addEventListener(
   'pointerdown',
   (e) => {
     if (e.button !== 0) return;
+    // A run on: no link drawn or moved, no split's way chosen; the view
+    // turns as ever.
+    if (running()) return;
     // A dot over a piece that sends parts on: always a link's start.
     const marker = markerAt(e.clientX, e.clientY);
     // A split's or a merge's sign: its menu.
@@ -1959,6 +1995,13 @@ window.addEventListener('pointerup', (e) => {
   sceneMenu(e.clientX, e.clientY);
 });
 function sceneMenu(x, y) {
+  // A run on: only what changes the view, not the scene.
+  if (running()) {
+    return showMenu(x, y, [
+      { label: view.labels ? t('이름표 숨기기') : t('이름표 보이기'), hint: 'L', run: () => setToggle('labels', !view.labels) },
+      { label: t('화면 맞춤'), hint: 'F', run: () => frame() },
+    ]);
+  }
   const marker = markerAt(x, y);
   // A robot's sign, or the robot itself: its menu, before the arrows that
   // run over it.
@@ -2069,6 +2112,7 @@ document.getElementById('tree').addEventListener('contextmenu', (e) => {
   const li = e.target.closest('.node[data-uid]');
   if (!li) return;
   e.preventDefault();
+  if (refuseWhileRunning()) return;
   const uids = chainOf(li.dataset.uid);
   const entries = cellPanel.equipmentMenu(uids, libraryPanel.itemOf(uids[0])?.root ?? null);
   if (entries) showMenu(e.clientX, e.clientY, entries);
@@ -2091,6 +2135,11 @@ canvas.addEventListener('pointerup', (e) => {
   const marker = hits.find((h) => !isShape(h) && uidOf(h) != null);
   const shape = shapeHit(hits);
   const hit = marker && (!shape || marker.distance < shape.distance) ? marker : shape;
+  // A run on: measuring still, nothing else; a click on something says why.
+  if (running() && !view.measure) {
+    if (hit || markerAt(e.clientX, e.clientY)) refuseWhileRunning();
+    return;
+  }
   // An arrow of the flow: chosen, to undo with Delete.
   if (!view.measure && !cellPanel.picking()) {
     const marker = markerAt(e.clientX, e.clientY);
@@ -2303,6 +2352,8 @@ function measureAngle(point) {
 }
 
 function setToggle(name, on) {
+  // Parts dragged by hand: not while a run moves them.
+  if (name === 'interact' && on && refuseWhileRunning()) return;
   view[name] = on;
   document.querySelector(`[data-toggle="${name}"]`)?.classList.toggle('on', on);
   toolsButton()?.classList.toggle('on', !!(view.measure || view.interact));
@@ -2460,6 +2511,8 @@ function toolsMenu(b) {
 document.querySelector('.toolbar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
+  // A run on: the scene's edits wait for 처음으로.
+  if (['undo', 'redo', 'link', 'floor'].includes(b.dataset.action) && refuseWhileRunning()) return;
   if (b.dataset.action === 'view-menu') viewMenu(b);
   if (b.dataset.action === 'tools-menu') toolsMenu(b);
   if (b.dataset.action === 'project') {
@@ -2548,6 +2601,12 @@ window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.target.matches('input, textarea, select') || modalOpen()) return;
   const k = e.key.toLowerCase();
   if (k === 'c' && String(getSelection() ?? '').trim()) return;
+  // A run on: no undoing, copying or pasting the scene.
+  if (['z', 'y', 'd', 'c', 'v'].includes(k) && running()) {
+    e.preventDefault();
+    refuseWhileRunning();
+    return;
+  }
   if (k === 'z' && !e.shiftKey) history('undo');
   else if (k === 'y' || (k === 'z' && e.shiftKey)) history('redo');
   // Program steps, while the program was last clicked in; else the
@@ -2656,6 +2715,8 @@ window.addEventListener('keydown', (e) => {
   // Space on a button pressed last: the key is the view's, not the button's.
   if (k === ' ' && e.target.closest('button')) e.target.blur();
   if (k === ' ') playPause();
+  // A run on: no link mode, nothing taken away, no parts moved by hand.
+  else if (((k === 'c' && e.shiftKey) || k === 'delete' || k === 'backspace' || k === 'i') && running()) refuseWhileRunning();
   // Shift+C: link mode on or off.
   else if (k === 'c' && e.shiftKey) {
     if (cellPanel.linking()) {
@@ -3008,6 +3069,7 @@ document.getElementById('run-badge')?.addEventListener('click', (e) => {
 
 renderer.setAnimationLoop(() => {
   showPlay();
+  showLock();
   glide(performance.now());
   quietMarkers();
   grid.material.uniforms.uCamera.value.copy(camera.position);

@@ -84,6 +84,8 @@ export function openReport(ctx) {
   const KIND = {
     cnc: t('CNC 장비'), infeed: t('투입 팔레트'), outfeed: t('배출 팔레트'), gripper: t('그리퍼'), fence: t('안전 펜스'),
     molder: t('사출 성형기'), conveyor: t('컨베이어'), amr: 'AMR', amr_stop: t('AMR 정지 위치'), positioner: t('포지셔너'),
+    source: t('소재 공급'), station: t('공정 스테이션'), buffer: t('버퍼'), sink: t('배출'), operator: t('작업자'),
+    sensor: t('포토센서'), actuator: t('동작축'), door: t('문'), connector: t('연결점'),
   };
   const roles = ctx.cell.components
     .map((c) => {
@@ -97,6 +99,12 @@ export function openReport(ctx) {
         conveyor: `${mm(p.speed)} mm/s`,
         amr: `${mm(p.speed)} mm/s`,
         positioner: `${deg(p.speed)} °/s`,
+        source: `${p.feed ?? 0} s`,
+        station: `${p.cycle ?? 0} s`,
+        buffer: `${p.capacity ?? 0}`,
+        operator: `${mm(p.speed)} mm/s`,
+        sensor: `${mm(p.range)} mm`,
+        actuator: `${p.actuate ?? 0} s`,
       }[c.kind] ?? '';
       const io = Object.entries(c.io ?? {}).map(([k, n]) => `${esc(k)}→${n}`).join(', ');
       return `<tr><td>${esc(tr(c.name))}</td><td>${KIND[c.kind] ?? esc(c.kind)}</td><td>${what}</td><td>${io || '—'}</td></tr>`;

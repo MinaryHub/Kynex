@@ -398,3 +398,59 @@ fn signals_start_and_stop_robots_and_say_how_they_are() {
     assert!(x.start.is_empty(), "held on: not started again");
     assert_eq!(x.stop, [8]);
 }
+
+#[test]
+fn fail_counts_drops_only_when_previously_connected() {
+    let shared = Mutex::new(Shared::default());
+    fail(&shared, "offline".into());
+    assert_eq!(shared.lock().unwrap().drops, 0);
+    shared.lock().unwrap().connected = true;
+    fail(&shared, "lost".into());
+    let s = shared.lock().unwrap();
+    assert!(!s.connected);
+    assert_eq!(s.drops, 1);
+    assert_eq!(s.dropped.as_deref(), Some("lost"));
+}
+
+#[test]
+fn modbus_sparse_span_falls_back_without_dropping_valid_addresses() {
+    let a0 = "0".to_string();
+    let a10 = "10".to_string();
+    let a20 = "20".to_string();
+    let addrs = [(0u16, &a0), (10u16, &a10), (20u16, &a20)];
+    let mut got = BTreeMap::new();
+    let mut problems = Vec::new();
+    // Address 10 is unmapped (Modbus exception 2); 0 and 20 are valid.
+    spans(
+        &addrs,
+        125,
+        |start, count| {
+            if start <= 10 && start + count > 10 {
+                Err(exception(2))
+            } else {
+                Ok((start..start + count).map(|n| i64::from(n) * 3).collect())
+            }
+        },
+        &mut got,
+        &mut problems,
+    )
+    .unwrap();
+    assert_eq!(got.get("0"), Some(&0));
+    assert_eq!(got.get("20"), Some(&60));
+    assert!(!got.contains_key("10"));
+    assert_eq!(problems.len(), 1);
+    assert!(problems[0].contains("10"));
+}
+
+#[test]
+fn modbus_multi_write_pdus_pack_coils_and_registers() {
+    // FC 15: start=10, 3 coils [true, false, true] -> bitmask 0b0000_0101 = 0x05
+    let coils = write_coils_pdu(10, &[true, false, true]);
+    assert_eq!(coils, vec![0x0F, 0x00, 0x0A, 0x00, 0x03, 0x01, 0x05]);
+    // FC 16: start=20, 2 registers [300, -1]
+    let regs = write_registers_pdu(20, &[300, -1]);
+    assert_eq!(
+        regs,
+        vec![0x10, 0x00, 0x14, 0x00, 0x02, 0x04, 0x01, 0x2C, 0xFF, 0xFF]
+    );
+}

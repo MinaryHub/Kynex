@@ -237,4 +237,7 @@ export default {
     'No unlinked {dir} signal. Make one under PLC in the toolbar',
   '이 동작에 쓸 그리퍼, 장비, 팔레트, AMR이나 정지 위치가 셀에 없습니다. 먼저 셀 역할을 정하세요':
     'The cell has no gripper, machine, pallet, AMR or stop for this action. Set cell roles first',
+  '수동 조작 · 관절 / TCP 조그': 'Manual control · Joints / TCP jog',
+  '실제 로봇 연결 (RTDE)': 'Real robot link (RTDE)',
+  '⚠ 한계 초과': '⚠ Limit',
 };

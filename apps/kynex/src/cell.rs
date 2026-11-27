@@ -161,7 +161,7 @@ fn look_key(p: &Part) -> usize {
         BLOCK => return BLOCK_LOOK + product_index(p.product),
         BLOCKS => {
             let pair = product_index(p.pair.unwrap_or(p.product));
-            return BLOCK_LOOK + PRODUCTS + product_index(p.product) * PRODUCTS + pair;
+            return BLOCK_LOOK + BLOCK_COLOURS + product_index(p.product) * BLOCK_COLOURS + pair;
         }
         _ => {}
     }
@@ -194,10 +194,11 @@ fn look_meshes() -> &'static Vec<crate::library::LookMeshes> {
             ))
             .chain((0..6).map(crate::library::beverage_look))
             .chain((0..6).map(crate::library::lot_look))
-            .chain((0..PRODUCTS).map(|a| crate::library::block_look(a, None)))
+            .chain((0..BLOCK_COLOURS).map(|a| crate::library::block_look(a, None)))
             .chain(
-                (0..PRODUCTS * PRODUCTS)
-                    .map(|k| crate::library::block_look(k / PRODUCTS, Some(k % PRODUCTS))),
+                (0..BLOCK_COLOURS * BLOCK_COLOURS).map(|k| {
+                    crate::library::block_look(k / BLOCK_COLOURS, Some(k % BLOCK_COLOURS))
+                }),
             )
             .collect()
     })
@@ -216,12 +217,12 @@ const CRANE_LOOK: usize = 3 * CAR_COLOURS + 4;
 /// six lots.
 const BLOCK_LOOK: usize = HOIST_LOOK + 13;
 
-/// How many products a flow carries ([`flow::PRODUCTS`]).
-const PRODUCTS: usize = flow::PRODUCTS.len();
+/// Number of distinct pre-built block colour looks (wraps for >6 SKUs).
+const BLOCK_COLOURS: usize = 6;
 
 /// Product `p` as an index into the blocks' looks.
 fn product_index(p: u8) -> usize {
-    (p as usize).min(PRODUCTS - 1)
+    (p as usize) % BLOCK_COLOURS
 }
 
 /// The look of a FOUP on an overhead hoist: the FOUP's pieces, then the
@@ -735,7 +736,9 @@ impl Props {
     /// Takes the settings `v` names, held to sensible ranges.
     fn update(&mut self, v: &Value) {
         let time = |key: &str, now: f64| v[key].as_f64().map_or(now, |x| x.clamp(0.0, 3600.0));
-        self.cycle = time("cycle", self.cycle);
+        let process_time =
+            |key: &str, now: f64| v[key].as_f64().map_or(now, |x| x.clamp(0.0, 86400.0));
+        self.cycle = process_time("cycle", self.cycle);
         self.door = time("door", self.door);
         self.chuck = time("chuck", self.chuck);
         self.actuate = time("actuate", self.actuate);
@@ -748,7 +751,7 @@ impl Props {
         self.speed = v["speed"]
             .as_f64()
             .map_or(self.speed, |x| x.clamp(0.01, 3.0));
-        self.feed = time("feed", self.feed);
+        self.feed = process_time("feed", self.feed);
         self.reverse = v["reverse"]
             .as_f64()
             .map_or(self.reverse, |x| if x > 0.5 { 1 } else { 0 });
@@ -1109,6 +1112,9 @@ pub struct Part {
     /// Put together with another part at an assembly: that part's product,
     /// shown beside its own (a block's look, [`BLOCKS`]).
     pub pair: Option<u8>,
+    /// Marked defective at a station with a rework/reject route configured:
+    /// routed exclusively to that station's rework target instead of normal next.
+    pub defective: bool,
 }
 
 impl Part {
@@ -1118,6 +1124,19 @@ impl Part {
         } else {
             RAW
         }
+    }
+}
+
+/// Minimum centre-to-centre spacing between parts on a belt of `belt_length`,
+/// using the part's physical look length (`LOOK_PITCH`) when set, clamped so
+/// short connecting belts can still hold at least two parts.
+pub(super) fn belt_gap(look: u32, belt_length: f64) -> f64 {
+    let base = 2.0 * RAW.0 + 0.005;
+    let pitch = LOOK_PITCH.get(look as usize).map_or(0.0, |p| p.0);
+    if pitch > base {
+        pitch.min((belt_length * 0.45).max(base))
+    } else {
+        base
     }
 }
 
@@ -1378,6 +1397,8 @@ pub struct Cell {
     orders: BTreeMap<u64, Vec<flow::Order>>,
     cycles: BTreeMap<u64, Vec<f64>>,
     routes: BTreeMap<(u64, u64), Vec<u8>>,
+    /// Each station's rework/reject target for scrapped parts (none: destroy).
+    rework: BTreeMap<u64, u64>,
     /// Each link's share of its sender's parts, where the sender splits
     /// them by share (`Props::rule` 3): none set is 1.
     shares: BTreeMap<(u64, u64), f64>,
@@ -1896,6 +1917,12 @@ impl Cell {
                     .collect();
                 self.flow_next.insert(object, next);
             }
+            if let (Some(object), Some(rework)) = (
+                found,
+                saved["rework"].as_str().and_then(|s| s.parse::<u64>().ok()),
+            ) {
+                self.rework.insert(object, rework);
+            }
             if let (Some(object), Some(steps)) = (found, saved["recipe"].as_array()) {
                 let steps: Vec<u64> = steps
                     .iter()
@@ -2280,6 +2307,8 @@ impl Cell {
             for next in self.flow_next.values_mut() {
                 next.retain(|n| *n != object);
             }
+            self.rework.remove(&object);
+            self.rework.retain(|_, v| *v != object);
             self.carriers
                 .retain(|(a, b), _| *a != object && *b != object);
             // The robot in the picture where the station was.
@@ -2357,6 +2386,14 @@ impl Cell {
                     }
                 }
                 next.dedup();
+            }
+            if let Some(target) = self.rework.remove(&outer) {
+                self.rework.entry(inner).or_insert(target);
+            }
+            for target in self.rework.values_mut() {
+                if *target == outer {
+                    *target = inner;
+                }
             }
             let moved: Vec<((u64, u64), Carrier)> = self
                 .carriers
@@ -2438,6 +2475,7 @@ impl Cell {
                             .map(u64::to_string)
                             .collect::<Vec<_>>()
                     }),
+                    "rework": self.rework.get(&c.object).map(u64::to_string),
                     "recipe": self.recipes.get(&c.object).map(|n| {
                         n.iter().map(u64::to_string).collect::<Vec<_>>()
                     }),
@@ -2835,6 +2873,33 @@ impl Cell {
             .collect()
     }
 
+    /// Parts currently gripped by a robot, paired with that robot's root UID:
+    /// `(robot_root_uid, part_uid)`. Passed to [`crate::collide::Collider::contacts_with_held`]
+    /// so held workpieces are still checked against fixtures, doors, fences,
+    /// and other robots while ignoring the holding robot's own gripper links.
+    pub fn held_parts(&self, doc: &Document) -> Vec<(u64, u64)> {
+        let mut out = Vec::new();
+        for p in &self.parts {
+            let Some((gripper, _)) = p.held else {
+                continue;
+            };
+            let Some(root) = id_of(doc, gripper)
+                .and_then(|id| doc.robot_root(id))
+                .and_then(|r| doc.object_uid(r))
+                .map(|u| u.raw())
+            else {
+                continue;
+            };
+            out.push((root, p.uid));
+            if p.look > 0 {
+                for k in 0..LOOK_PIECES {
+                    out.push((root, look_piece(p.uid, k)));
+                }
+            }
+        }
+        out
+    }
+
     /// The places of a pallet, where a raw part's centre stands, row by row.
     pub fn slots(&self, doc: &Document, c: &Component) -> Vec<DVec3> {
         if !c.kind.pallet() {
@@ -2956,6 +3021,7 @@ impl Cell {
             look: 0,
             rail: None,
             pair: None,
+            defective: false,
         });
         self.changed = true;
     }
@@ -3062,6 +3128,8 @@ impl Cell {
                         next.retain(|n| *n != object);
                     }
                     self.flow_next.remove(&object);
+                    self.rework.remove(&object);
+                    self.rework.retain(|_, v| *v != object);
                     self.carriers
                         .retain(|(a, b), _| *a != object && *b != object);
                 }
@@ -3534,6 +3602,24 @@ impl Cell {
                     .filter_map(|n| n.as_str().and_then(|s| s.parse::<u64>().ok()))
                     .collect();
                 self.set_flow_next(uid("object")?, next)?;
+            }
+            "flow_rework" => {
+                let object = uid("object")?;
+                let target = req["target"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.parse::<u64>().map_err(|_| "bad target".to_string()))
+                    .transpose()?;
+                if let Some(t) = target {
+                    if t == object {
+                        return Err("자기 자신으로 리워크 연결할 수 없습니다".into());
+                    }
+                    self.rework.insert(object, t);
+                } else {
+                    self.rework.remove(&object);
+                }
+                self.roles_changed = true;
+                self.changed = true;
             }
             "grip" => self.grip(doc, uid("gripper")?)?,
             "release" => self.release(doc, uid("gripper")?)?,
@@ -4556,9 +4642,17 @@ impl Cell {
                             continue;
                         }
                         self.blocked.remove(&c.object);
-                        // Driving uses its battery.
+                        // Driving uses its battery; an empty battery stops it.
                         if c.props.battery > 0.0 {
                             let e = self.energy.entry(c.object).or_insert(1.0);
+                            if *e <= 0.0 && !self.charging.contains(&c.object) {
+                                self.flow_problem = Some(format!(
+                                    "AMR 배터리 방전: {}가 충전소에 닿지 못해 멈췄습니다",
+                                    c.name
+                                ));
+                                left = 0.0;
+                                continue;
+                            }
                             *e = (*e - left / (c.props.battery * 60.0)).max(0.0);
                         }
                         self.holds.insert(stop, c.object);
@@ -4884,10 +4978,11 @@ impl Cell {
                             Some(flow::Place::Waiting { .. } | flow::Place::Riding { .. })
                         )
                 })
-                .filter_map(|p| belt.along_of(p))
-                .fold(end, |l, x| l.min(x - gap));
+                .filter_map(|p| belt.along_of(p).map(|x| (x, belt_gap(p.look, belt.length))))
+                .fold(end, |l, (x, g)| l.min(x - g));
             let mut gone = Vec::new();
             for (i, x) in on {
+                let p_gap = belt_gap(self.parts[i].look, belt.length);
                 // Held behind a stop ahead of it.
                 let held = stops
                     .iter()
@@ -4915,7 +5010,7 @@ impl Cell {
                     gone.push(i);
                     continue;
                 }
-                limit = to - gap;
+                limit = to - p_gap;
             }
             if !gone.is_empty() {
                 gone.sort_unstable_by(|a, b| b.cmp(a));
@@ -4943,12 +5038,13 @@ impl Cell {
                     .filter_map(|n| belts.iter().find(|b| b.object == *n))
                     .find(|b| {
                         let start = -b.length / 2.0 + RAW.0;
+                        let need = belt_gap(self.parts[i].look, b.length);
                         !self
                             .parts
                             .iter()
                             .filter(|p| p.held.is_none())
                             .filter_map(|p| b.along_of(p))
-                            .any(|x| x < start + gap)
+                            .any(|x| x < start + need)
                     });
                 if let Some(to) = to {
                     let heading = |b: &Belt, x: f64| {
@@ -5894,6 +5990,7 @@ pub fn is_op(op: &str) -> bool {
             | "mirror"
             | "flow"
             | "flow_next"
+            | "flow_rework"
             | "flow_recipe"
             | "amr_lanes"
             | "amr_lane"

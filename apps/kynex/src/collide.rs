@@ -226,15 +226,57 @@ impl Collider {
     /// Every contact of a robot's part in `doc` as it stands, but with what
     /// `ignore` names: parts a gripper holds, which move as its own.
     pub fn contacts(&mut self, doc: &Document, ignore: &HashSet<u64>) -> Vec<Contact> {
+        self.contacts_with_held(doc, ignore, &[])
+    }
+
+    /// Like [`Collider::contacts`], and additionally checks each held workpiece
+    /// `(robot_root, part_uid)` in `held` as a robot-attached body against
+    /// scene obstacles, other robots, and other robots' held workpieces (while
+    /// ignoring the holding robot's own links so gripper jaws do not false-hit).
+    pub fn contacts_with_held(
+        &mut self,
+        doc: &Document,
+        ignore: &HashSet<u64>,
+        held: &[(u64, u64)],
+    ) -> Vec<Contact> {
         let robots = self.robots(doc);
         if robots.is_empty() {
             return Vec::new();
         }
         let posed: Vec<Posed> = robots.iter().map(|r| r.bodies(&r.kin.current)).collect();
-        let region = posed
+        let mut held_bodies: HashMap<u64, Vec<Body>> = HashMap::new();
+        if !held.is_empty() {
+            let ids: HashMap<u64, ObjectId> = doc
+                .objects()
+                .filter_map(|(id, _)| Some((doc.object_uid(id)?.raw(), id)))
+                .collect();
+            for &(robot_root, part_uid) in held {
+                let Some(&id) = ids.get(&part_uid) else {
+                    continue;
+                };
+                let Some(object) = doc.object(id) else {
+                    continue;
+                };
+                if !object.visible {
+                    continue;
+                }
+                let Some(shape) = self.shape(doc, object) else {
+                    continue;
+                };
+                held_bodies.entry(robot_root).or_default().push(Body {
+                    uid: part_uid,
+                    shape,
+                    world: doc.world_transform(id),
+                });
+            }
+        }
+        let mut region = posed
             .iter()
             .flatten()
             .fold(Aabb::EMPTY, |b, (part, _)| b.union(part.bounds()));
+        for body in held_bodies.values().flatten() {
+            region = region.union(body.bounds());
+        }
         let obstacles = self.obstacles(doc, &robots, region, ignore);
         let mut out = Vec::new();
         for (robot, parts) in robots.iter().zip(&posed) {
@@ -249,7 +291,42 @@ impl Collider {
                     });
                 }
             }
+            if let Some(carried) = held_bodies.get(&robot.root) {
+                for body in carried {
+                    for (other, at) in obstacles.contacts(body, |u| own.contains(&u)) {
+                        out.push(Contact {
+                            robot: robot.root,
+                            part: body.uid,
+                            other,
+                            at,
+                        });
+                    }
+                }
+            }
             out.extend(robot.own_contacts(parts, usize::MAX));
+        }
+        // Held workpiece vs another robot's held workpiece.
+        if held_bodies.len() > 1 {
+            let mut roots: Vec<u64> = held_bodies.keys().copied().collect();
+            roots.sort_unstable();
+            for (i, &r1) in roots.iter().enumerate() {
+                for &r2 in &roots[i + 1..] {
+                    for a in &held_bodies[&r1] {
+                        for b in &held_bodies[&r2] {
+                            if a.bounds().intersects(&b.bounds()) {
+                                if let Some(at) = contact(a, b) {
+                                    out.push(Contact {
+                                        robot: r1,
+                                        part: a.uid,
+                                        other: b.uid,
+                                        at,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         out
     }
@@ -634,5 +711,31 @@ mod tests {
         assert!(collider.nearest_along(&doc, root, &plan, &[], &[], 0.01)[0].is_none());
         let work = vec![vec![DVec3::new(0.0, 1.0, 0.56)]];
         assert!(collider.nearest_along(&doc, root, &plan, &[], &work, CLEARANCE)[0].is_none());
+    }
+
+    #[test]
+    fn a_held_workpiece_colliding_with_an_obstacle_is_caught_without_false_gripper_hits() {
+        let (mut doc, root, _, _) = scene();
+        let mut collider = Collider::default();
+        // A workpiece overlapping the arm's tip (as if held in jaws), clear of
+        // the obstacle block at (0, 1, 0.5).
+        let wp = doc.add_mesh_object("workpiece", kreate_mesh::primitives::cube(0.2));
+        doc.object_mut(wp).unwrap().transform.translation = DVec3::new(0.95, 0.0, 0.5);
+        let wp_uid = doc.object_uid(wp).unwrap().raw();
+        let ignore: HashSet<u64> = [wp_uid].into();
+        let held = [(root, wp_uid)];
+        // Ignored as a static obstacle so it never false-hits its own robot's arm.
+        assert!(
+            collider.contacts_with_held(&doc, &ignore, &held).is_empty(),
+            "clear of obstacles"
+        );
+        // Now move the held workpiece into the external block while the arm
+        // itself remains at angle 0 (clear of the block).
+        doc.object_mut(wp).unwrap().transform.translation = DVec3::new(0.0, 0.95, 0.5);
+        let hits = collider.contacts_with_held(&doc, &ignore, &held);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].robot, root);
+        assert_eq!(label(&doc, hits[0].part), "workpiece");
+        assert_eq!(label(&doc, hits[0].other), "block");
     }
 }

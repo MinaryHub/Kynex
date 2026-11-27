@@ -158,6 +158,10 @@ export class ProjectPanel {
     document.getElementById('project-path').textContent = state.path ?? '';
     document.getElementById('project-path').title = state.path ?? '';
     document.getElementById('project-dir').textContent = state.dir ? t('폴더: {dir}', { dir: state.dir }) : '';
+    if (state.save_error && state.save_error !== this.lastSaveError) {
+      this.ctx.toast(t('저장하지 못했습니다: {error}', { error: state.save_error }));
+    }
+    this.lastSaveError = state.save_error ?? null;
     if (!this.panel.hidden) this.refresh();
   }
 

@@ -73,14 +73,19 @@ pub struct Station {
     pub pm_in: Option<f64>,
     pub pm_until: Option<f64>,
     pub maint: f64,
-    /// Since the flow started: seconds at work, broken down, and the parts
-    /// made good and scrapped — its OEE.
+    /// Since the flow started: seconds at work, broken down, ideal cycle
+    /// time accumulated across products, and the parts made good and
+    /// scrapped — its OEE.
     pub busy: f64,
     pub down: f64,
+    pub ideal_work: f64,
+    pub current_ideal: f64,
     pub good: u64,
     pub bad: u64,
-    /// The product it last worked on, for its change-over; seconds rested.
+    /// The product it last worked on, for its change-over; end of active
+    /// change-over setup (if any); seconds rested.
     pub last: Option<u8>,
+    pub setup_until: Option<f64>,
     pub rested: f64,
 }
 
@@ -90,7 +95,7 @@ pub struct Stats {
     pub from: Option<f64>,
     pub scrapped: u64,
     /// Each product's parts out and their lead times' sum.
-    pub by_product: [(u64, f64); 6],
+    pub by_product: [(u64, f64); PRODUCTS.len()],
     /// Seconds from the start, parts in the flow and parts out so far,
     /// sampled as it runs.
     pub series: Vec<[f64; 3]>,
@@ -112,17 +117,27 @@ pub const BLOCK_PITCH: f64 = 0.18;
 /// The seed a flow's random numbers start from unless one is given.
 pub const SEED: u64 = 1;
 
-/// The products a flow can carry, by number.
-pub const PRODUCTS: [&str; 6] = ["A", "B", "C", "D", "E", "F"];
+/// The products a flow can carry, by number (26 SKUs: A–Z).
+pub const PRODUCTS: [&str; 26] = [
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
+    "T", "U", "V", "W", "X", "Y", "Z",
+];
 
-/// Each product's colour after A's (A keeps the parts' own).
-pub const PRODUCT_COLOURS: [[f32; 3]; 6] = [
+/// Each product's colour after A's (A keeps the parts' own), cycling cleanly
+/// for SKU counts beyond the palette length.
+pub const PRODUCT_COLOURS: [[f32; 3]; 12] = [
     [0.62, 0.64, 0.68],
     [0.25, 0.55, 0.95],
     [0.25, 0.78, 0.45],
     [0.62, 0.40, 0.90],
     [0.90, 0.35, 0.35],
     [0.20, 0.75, 0.75],
+    [0.95, 0.58, 0.18],
+    [0.88, 0.32, 0.68],
+    [0.58, 0.82, 0.22],
+    [0.92, 0.80, 0.22],
+    [0.34, 0.42, 0.88],
+    [0.92, 0.48, 0.42],
 ];
 
 /// An order: so many parts of a product, released at a time into the
@@ -156,7 +171,7 @@ impl Order {
     }
 
     /// Orders written as CSV: a line each, `release (minutes), product
-    /// (A–F or 1–6), quantity, due (minutes, may be empty)`; a heading
+    /// (A–Z or 1–26), quantity, due (minutes, may be empty)`; a heading
     /// line, if there is one, passed over.
     pub fn parse(text: &str) -> Result<Vec<Order>, String> {
         let mut out = Vec::new();
@@ -938,6 +953,7 @@ impl Cell {
                     s.down = 0.0;
                     s.maint = 0.0;
                     s.rested = 0.0;
+                    s.ideal_work = 0.0;
                     s.good = 0;
                     s.bad = 0;
                 }
@@ -951,6 +967,9 @@ impl Cell {
                 s.rested += dt;
                 if let Some((end, _)) = s.working.as_mut() {
                     *end += dt;
+                }
+                if let Some(until) = s.setup_until.as_mut() {
+                    *until += dt;
                 }
                 if let Some(until) = s.down_until.as_mut() {
                     *until += dt;
@@ -1151,6 +1170,9 @@ impl Cell {
                     if let Some((end, _)) = s.working.as_mut() {
                         *end += dt;
                     }
+                    if let Some(setup_end) = s.setup_until.as_mut() {
+                        *setup_end += dt;
+                    }
                 }
                 Some(_) => {
                     s.down_until = None;
@@ -1178,14 +1200,26 @@ impl Cell {
             if let Some((end, parts)) = s.working.clone().filter(|_| s.down_until.is_none()) {
                 if now >= end {
                     s.working = None;
+                    s.setup_until = None;
                     s.made += 1;
+                    s.ideal_work += s.current_ideal;
                     // Its operator free again, where they stand.
                     s.crew = None;
                     happened = true;
                     // The first goes on as the product; the rest are in it.
-                    // Scrap, as often as the station makes it, goes.
+                    // Scrap goes to the station's rework/reject route if set;
+                    // otherwise it is discarded (and order parts are re-released).
                     let scrapped = c.props.scrap > 0.0 && self.uniform() < c.props.scrap;
+                    let has_rework = self
+                        .rework
+                        .get(&c.object)
+                        .is_some_and(|t| by_object.contains_key(t));
                     let mut made = Vec::new();
+                    // Remember the primary part's identity before removal/disassembly.
+                    let primary = parts.first().and_then(|u| self.part_index(*u)).map(|i| {
+                        let p = &self.parts[i];
+                        (p.product, p.origin, p.order, p.step, p.born, p.look)
+                    });
                     // What the first is put together with, to show beside it.
                     let pair = parts
                         .get(1)
@@ -1195,11 +1229,12 @@ impl Cell {
                         let Some(i) = self.part_index(*uid) else {
                             continue;
                         };
-                        if k == 0 && !scrapped {
+                        if k == 0 && (!scrapped || has_rework) {
                             if pair.is_some() {
                                 self.parts[i].pair = pair;
                             }
                             self.parts[i].finished = true;
+                            self.parts[i].defective = scrapped;
                             // As this station makes it look, if it says.
                             if c.props.look > 0 {
                                 self.parts[i].look = c.props.look;
@@ -1213,22 +1248,44 @@ impl Cell {
                     if scrapped {
                         s.bad += 1;
                         self.flow_stats.scrapped += 1;
+                        // A discarded order part (no rework route) is re-released
+                        // so the order can finish.
+                        if !has_rework {
+                            if let Some((_, origin, order, _, _, _)) = primary {
+                                if order > 0 {
+                                    if let Some(o) = self
+                                        .orders
+                                        .get_mut(&origin)
+                                        .and_then(|o| o.get_mut(order as usize - 1))
+                                    {
+                                        o.released = o.released.saturating_sub(1);
+                                    }
+                                }
+                            }
+                        }
                         self.stations.insert(c.object, s.clone());
                     } else {
                         s.good += 1;
                     }
-                    // More than one out: the rest made here, as old as it.
-                    let born = made
-                        .first()
-                        .and_then(|u| self.part_index(*u))
-                        .map_or(now, |i| self.parts[i].born);
+                    // More than one out: the rest made here inherit the parent's
+                    // product, origin, recipe step, and birth time.
+                    let (product, origin, step, born, parent_look) = primary
+                        .map(|(pr, orig, _, st, b, lk)| (pr, orig, st, b, lk))
+                        .unwrap_or((0, 0, 0, now, 0));
                     for _ in (1..c.props.makes).filter(|_| !scrapped) {
                         let at = docks.get(&c.object).map_or(DVec3::ZERO, |d| d.0);
                         self.add_part(at + DVec3::Z * FINISHED.1 / 2.0, true);
                         let p = self.parts.last_mut().unwrap();
                         p.born = born;
+                        p.product = product;
+                        p.origin = origin;
+                        p.step = step;
                         p.flow = Some(Place::At(c.object));
-                        p.look = c.props.look;
+                        p.look = if c.props.look > 0 {
+                            c.props.look
+                        } else {
+                            parent_look
+                        };
                         made.push(p.uid);
                     }
                     s.out.extend(made);
@@ -1306,10 +1363,15 @@ impl Cell {
                     .map_or(0, |i| self.parts[i].product);
                 let mean = self.cycle_of(c, product);
                 let mut cycle = self.draw(mean, c.props.dist, c.props.spread);
-                if s.last.is_some_and(|l| l != product) {
+                let changing = s.last.is_some_and(|l| l != product) && c.props.setup > 0.0;
+                if changing {
                     cycle += c.props.setup;
+                    s.setup_until = Some(now + c.props.setup);
+                } else {
+                    s.setup_until = None;
                 }
                 s.last = Some(product);
+                s.current_ideal = mean;
                 s.working = Some((now + cycle, parts));
                 s.length = cycle;
                 happened = true;
@@ -1324,17 +1386,20 @@ impl Cell {
             if !flow.iter().any(|c| c.object == b.object) {
                 continue;
             }
-            let gap = 2.0 * RAW.0 + 0.005;
             // Clear where a part is put on: at its start, or a little in
             // from it, by a robot (`fleet::belt_drop`).
             let start = (-b.length / 2.0 + RAW.0).max(super::fleet::belt_drop(&b));
-            let on: Vec<f64> = self
+            let on: Vec<(f64, f64)> = self
                 .parts
                 .iter()
                 .filter(|p| p.held.is_none() && matches!(p.flow, None | Some(Place::Belt(_))))
-                .filter_map(|p| b.along_of(p))
+                .filter_map(|p| b.along_of(p).map(|x| (x, belt_gap(p.look, b.length))))
                 .collect();
-            let clear = !on.iter().any(|x| *x < start + gap);
+            let clear = !on.iter().any(|(x, g)| *x < start + *g);
+            let gap = on
+                .iter()
+                .map(|(_, g)| *g)
+                .fold(2.0 * RAW.0 + 0.005, f64::max);
             let most = ((b.length - 2.0 * RAW.0) / gap).floor().max(1.0) as usize;
             self.belt_room
                 .insert(b.object, u32::from(clear && on.len() < most));
@@ -1360,7 +1425,11 @@ impl Cell {
                 .filter_map(|n| by_object.get(n).copied())
                 .collect();
             let stocker = c.kind == Kind::Buffer && c.props.dispatch == 1;
-            if next.is_empty() && !stocker {
+            let has_rework = self
+                .rework
+                .get(&c.object)
+                .is_some_and(|t| by_object.contains_key(t));
+            if next.is_empty() && !stocker && !has_rework {
                 continue;
             }
             loop {
@@ -1380,12 +1449,27 @@ impl Cell {
                 let mut chosen = None;
                 for pick_at in order {
                     let uid = out[pick_at];
-                    // By its recipe, from a stocker: the one tool of its next
-                    // step. Else where the links go.
-                    let by_recipe = self.recipe_step(c, uid);
-                    let next: Vec<&Component> = match by_recipe {
-                        Some(t) => by_object.get(&t).copied().into_iter().collect(),
-                        None => next.clone(),
+                    let defective = self
+                        .part_index(uid)
+                        .is_some_and(|i| self.parts[i].defective);
+                    let rework_to = defective
+                        .then(|| {
+                            self.rework
+                                .get(&c.object)
+                                .and_then(|t| by_object.get(t).copied())
+                        })
+                        .flatten();
+                    // Defective part with rework route goes there; else by
+                    // stocker recipe; else along normal links.
+                    let by_recipe = if rework_to.is_some() {
+                        None
+                    } else {
+                        self.recipe_step(c, uid)
+                    };
+                    let next: Vec<&Component> = match (rework_to, by_recipe) {
+                        (Some(t), _) => vec![t],
+                        (None, Some(t)) => by_object.get(&t).copied().into_iter().collect(),
+                        (None, None) => next.clone(),
                     };
                     if next.is_empty() {
                         continue;
@@ -1393,7 +1477,8 @@ impl Cell {
                     let product = self.part_index(uid).map_or(0, |i| self.parts[i].product);
                     // A link that takes certain products takes no others.
                     let takes = |t: &Component| {
-                        by_recipe.is_some()
+                        rework_to.is_some()
+                            || by_recipe.is_some()
                             || self
                                 .routes
                                 .get(&(c.object, t.object))
@@ -1826,6 +1911,7 @@ impl Cell {
 
     /// What each station is doing, for the timeline.
     pub(super) fn flow_activities(&self) -> Vec<(u64, String, &'static str)> {
+        let now = self.last_tick.unwrap_or(0.0);
         self.components
             .iter()
             .filter(|c| c.kind == Kind::Station)
@@ -1836,6 +1922,12 @@ impl Cell {
                     _ if resting => "rest",
                     Some(s) if s.down_until.is_some() => "down",
                     Some(s) if s.pm_until.is_some() => "maint",
+                    Some(s)
+                        if s.working.is_some()
+                            && s.setup_until.is_some_and(|until| now < until) =>
+                    {
+                        "setup"
+                    }
                     Some(s) if s.working.is_some() => "cut",
                     Some(s) if !s.out.is_empty() => "blocked",
                     _ => "idle",
@@ -1852,6 +1944,7 @@ impl Cell {
         json!({
             // The links drawn; and those a robot in the picture carries.
             "next": self.flow_next.get(&c.object).map(|n| n.iter().filter(|t| !self.is_derived(c.object, **t)).map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default(),
+            "rework": self.rework.get(&c.object).map(u64::to_string),
             "derived": self.flow_next.get(&c.object).map(|n| n.iter().filter(|t| self.is_derived(c.object, **t)).map(u64::to_string).collect::<Vec<_>>()).unwrap_or_default(),
             "at": self
                 .docks_seen
@@ -2000,8 +2093,13 @@ impl Cell {
         let run = (planned - s.down).max(0.0);
         let made = s.good + s.bad;
         let a = if planned > 0.0 { run / planned } else { 0.0 };
+        let ideal = if s.ideal_work > 0.0 {
+            s.ideal_work
+        } else {
+            made as f64 * c.props.cycle
+        };
         let p = if run > 0.0 {
-            (made as f64 * c.props.cycle / run).min(1.0)
+            (ideal / run).min(1.0)
         } else {
             0.0
         };

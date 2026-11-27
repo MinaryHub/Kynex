@@ -265,7 +265,11 @@ pub fn run_with(
             let shown = owed.take();
             let shown = shown.as_ref().unwrap_or(link.document());
             let started = Instant::now();
-            let contacts = stage.collider.contacts(shown, &stage.cell.not_obstacles());
+            let held = stage.cell.held_parts(shown);
+            let contacts =
+                stage
+                    .collider
+                    .contacts_with_held(shown, &stage.cell.not_obstacles(), &held);
             server.state("contacts", &collide::contacts_json(shown, &contacts));
             checks.done(started.elapsed());
         }
@@ -367,6 +371,9 @@ struct Stage {
     _lock: Option<std::fs::File>,
     /// Models being read, each with where its answer goes.
     importing: Vec<Importing>,
+    /// Last project auto-save error, surfaced to the UI so console-less
+    /// builds never silently lose work.
+    save_error: Option<String>,
 }
 
 /// The project as it was before each edit, to go back to, and as it was
@@ -475,6 +482,7 @@ impl Stage {
             projects: crate::paths::projects_dir(),
             history: History::default(),
             importing: Vec::new(),
+            save_error: None,
             _lock: lock,
         })
     }
@@ -748,24 +756,57 @@ impl Stage {
         // Models read meanwhile, placed.
         touched |= self.imported(doc);
         // The clock: the program running moves on, the machines run.
+        // Substep runners, cell, and robot-carrier dispatch together (<= 0.2 s)
+        // so high-speedup live runs stay consistent with headless scenarios.
         let now = Instant::now();
+        let prev_time = self.clock.time;
         let time = self.clock.advance(now, kept);
-        let scene = self.base.as_ref().unwrap_or(doc);
-        for runner in &mut self.runners {
-            if runner.tick(time, now, &mut self.posing, &mut self.cell, scene) {
-                touched = true;
-                // The robot the program moves, drawn where it now is.
-                crate::pose::mark(scene, runner.root, &mut self.placed);
-            }
-        }
         self.cell.set_investment(self.library.investment());
-        touched |= self.cell.tick(scene, time, now);
-        // A process flow's warm-up over: its record begins again from here.
-        if self.cell.take_warmed() {
-            self.timeline = Some(Timeline::new(time));
-            self.timeline_told = None;
-            touched = true;
+        let substeps = (((time - prev_time).max(0.0)) / 0.2).ceil().max(1.0) as usize;
+        {
+            let base = self.base.take();
+            let scene = base.as_ref().unwrap_or(doc);
+            let followers = &self.followers;
+            // The flow is simulated for its efficiency: a robot's way is not
+            // checked for collisions — the first way it reaches is taken.
+            let mut check = |_: &Document,
+                             _: u64,
+                             _: &crate::program::Program,
+                             _: &std::collections::HashSet<u64>,
+                             _: &[kreate_math::DVec3]| 0;
+            for k in 1..=substeps {
+                let t = if k == substeps {
+                    time
+                } else {
+                    prev_time + (time - prev_time) * k as f64 / substeps as f64
+                };
+                for runner in &mut self.runners {
+                    if runner.tick(t, now, &mut self.posing, &mut self.cell, scene) {
+                        touched = true;
+                        // The robot the program moves, drawn where it now is.
+                        crate::pose::mark(scene, runner.root, &mut self.placed);
+                    }
+                }
+                touched |= self.cell.tick(scene, t, now);
+                // A process flow's warm-up over: its record begins again from here.
+                if self.cell.take_warmed() {
+                    self.timeline = Some(Timeline::new(t));
+                    self.timeline_told = None;
+                    touched = true;
+                }
+                touched |= self.carrying.step(
+                    scene,
+                    t,
+                    &mut self.cell,
+                    &self.posing,
+                    &mut self.runners,
+                    &|root| followers.contains_key(&root),
+                    &mut check,
+                );
+            }
+            self.base = base;
         }
+        let scene = self.base.as_ref().unwrap_or(doc);
         // Machines following real ones: their agents asked, their states
         // taken.
         let (feeds, sources): (Vec<_>, Vec<_>) = self
@@ -817,27 +858,9 @@ impl Stage {
         // Real robots followed: posed as they stand, their grippers as their
         // outputs say.
         touched |= {
-            // The scene lent while the posing and the cell change.
             let base = self.base.take();
             let scene = base.as_ref().unwrap_or(doc);
-            let followers = &self.followers;
-            // The flow is simulated for its efficiency: a robot's way is not
-            // checked for collisions — the first way it reaches is taken.
-            let mut check = |_: &Document,
-                             _: u64,
-                             _: &crate::program::Program,
-                             _: &std::collections::HashSet<u64>,
-                             _: &[kreate_math::DVec3]| 0;
-            let carried = self.carrying.step(
-                scene,
-                time,
-                &mut self.cell,
-                &self.posing,
-                &mut self.runners,
-                &|root| followers.contains_key(&root),
-                &mut check,
-            );
-            let moved = self.follow_on(scene) | carried;
+            let moved = self.follow_on(scene);
             self.base = base;
             moved
         };
@@ -1293,7 +1316,7 @@ impl Stage {
                     &name,
                     self.posing.saved_programs(scene),
                     self.cell.to_saved(),
-                    self.library.to_saved(),
+                    self.library.items_saved(),
                 );
                 // The same name again: saved over.
                 match self
@@ -1312,7 +1335,7 @@ impl Stage {
                 let list = |key: &str| s[key].as_array().cloned().unwrap_or_default();
                 self.runners.clear();
                 self.timeline = None;
-                self.library.restore(&list("library"));
+                self.library.restore_items(&list("library"));
                 self.cell.restore(list("cell"));
                 self.posing.restore(list("programs"));
                 self.replaced(doc);
@@ -1383,11 +1406,19 @@ impl Stage {
                 // Each as often as asked, its own random numbers each time.
                 let reps = req["reps"].as_u64().unwrap_or(1).clamp(1, 50) as usize;
                 let (send, results) = std::sync::mpsc::channel();
-                let (session, scenarios) = (doc.clone(), self.scenarios.clone());
+                let (session, scenarios, assets) = (
+                    doc.clone(),
+                    self.scenarios.clone(),
+                    self.library.assets_saved(),
+                );
                 std::thread::spawn(move || {
+                    use rayon::prelude::*;
                     let compared = scenarios
-                        .iter()
-                        .map(|s| scenario::replicate(&session, s, seconds, reps))
+                        .par_iter()
+                        .map(|s| {
+                            let full = scenario::with_assets(s, &assets);
+                            scenario::replicate(&session, &full, seconds, reps)
+                        })
                         .collect();
                     let _ = send.send(compared);
                 });
@@ -1482,13 +1513,6 @@ impl Stage {
         let scenarios = std::mem::take(&mut self.scenarios_changed);
         let plc = std::mem::take(&mut self.plc_changed);
         server.state("plc", &self.plc.to_json().to_string());
-        // Another device is told the project's name, not where this
-        // computer keeps it (its user's name is in the path).
-        let project = self.project_json();
-        let mut named = project.clone();
-        named["path"] = Value::Null;
-        named["dir"] = Value::Null;
-        server.state_for("project", &project.to_string(), Some(&named.to_string()));
         // The drawing only when it changed: it may be megabytes.
         if !self.floor_told {
             server.state("floor", &self.floor.to_json().to_string());
@@ -1497,10 +1521,22 @@ impl Stage {
         let floor = std::mem::take(&mut self.floor_changed);
         server.state("history", &self.history_json().to_string());
         if programs || roles || items || scenarios || plc || floor || replaced {
-            if let Err(e) = self.save(doc) {
-                println!("프로젝트를 저장하지 못했습니다: {e}");
+            match self.save(doc) {
+                Ok(()) => self.save_error = None,
+                Err(e) => {
+                    println!("프로젝트를 저장하지 못했습니다: {e}");
+                    self.save_error = Some(e);
+                }
             }
         }
+        // Another device is told the project's name, not where this
+        // computer keeps it (its user's name is in the path).
+        let project = self.project_json();
+        let mut named = project.clone();
+        named["path"] = Value::Null;
+        named["dir"] = Value::Null;
+        named["save_error"] = Value::Null;
+        server.state_for("project", &project.to_string(), Some(&named.to_string()));
     }
 
     /// Writes the project file as things stand.
@@ -1527,6 +1563,7 @@ impl Stage {
             "name": self.file.file_stem().map(|s| s.to_string_lossy().to_string()),
             "path": self.file.display().to_string(),
             "dir": self.projects.display().to_string(),
+            "save_error": self.save_error,
         })
     }
 
@@ -1807,7 +1844,7 @@ impl Stage {
         serde_json::json!({
             "programs": self.posing.saved_programs(scene),
             "cell": self.cell.to_saved(),
-            "library": self.library.to_saved(),
+            "library": self.library.items_saved(),
             "signals": self.cell.signals_saved(),
             // As Visual Components' interact: what is dragged by hand undoes
             // too — robots posed, doors left open.
@@ -1885,7 +1922,7 @@ impl Stage {
             self.runners.clear();
             self.timeline = None;
             if differs("library") {
-                self.library.restore(&list("library"));
+                self.library.restore_items(&list("library"));
             }
             if differs("cell") || differs("library") {
                 self.cell.restore(list("cell"));
@@ -2036,7 +2073,11 @@ fn offline(
         if checks.due() {
             let shown = last_shown.as_ref().unwrap_or(&doc);
             let started = Instant::now();
-            let contacts = stage.collider.contacts(shown, &stage.cell.not_obstacles());
+            let held = stage.cell.held_parts(shown);
+            let contacts =
+                stage
+                    .collider
+                    .contacts_with_held(shown, &stage.cell.not_obstacles(), &held);
             server.state("contacts", &collide::contacts_json(shown, &contacts));
             checks.done(started.elapsed());
         }
@@ -2064,7 +2105,17 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
     }
     if matches!(
         op,
-        "plc_link" | "plc" | "signals" | "scenario" | "mirror" | "follow" | "undo" | "redo"
+        "plc_link"
+            | "plc"
+            | "signals"
+            | "scenario"
+            | "mirror"
+            | "follow"
+            | "undo"
+            | "redo"
+            | "ai_settings"
+            | "share"
+            | "update"
     ) {
         return Some(
             "PLC·MTConnect 설정, 시나리오 불러오기, 되돌리기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다",
@@ -2075,10 +2126,15 @@ fn reaches_plc(op: &str, body: &str, linked: bool) -> Option<&'static str> {
     if op == "project" {
         return Some("프로젝트 만들기·열기·저장은 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다");
     }
+    // Pasting steps from the host clipboard could duplicate PLC signal steps.
+    if op == "steps_paste" {
+        return Some("프로그램 단계 붙여넣기는 KYNEX를 실행한 컴퓨터에서만 할 수 있습니다");
+    }
     if matches!(op, "add" | "edit") {
         let req: Value = serde_json::from_str(body).unwrap_or_default();
         let kind = req["step"]["type"].as_str().unwrap_or("");
-        if kind.starts_with("signal") {
+        let cond_kind = req["step"]["cond"]["kind"].as_str().unwrap_or("");
+        if kind.starts_with("signal") || cond_kind == "plc" {
             return Some("PLC 신호 동작은 KYNEX를 실행한 컴퓨터에서만 넣을 수 있습니다");
         }
     }
@@ -2308,7 +2364,7 @@ fn merge_settings(kept: &mut Value, set: &serde_json::Map<String, Value>) {
                     let Some(text) = x.as_str().filter(|t| t.len() <= 400) else {
                         continue;
                     };
-                    if !["key", "model"].contains(&f.as_str()) {
+                    if !["key", "model", "url"].contains(&f.as_str()) {
                         continue;
                     }
                     if text.trim().is_empty() {
@@ -2345,6 +2401,12 @@ mod tests {
         assert!(reaches_plc("add", set, false).is_some());
         let edit = r#"{"op":"edit","index":2,"step":{"type":"signal_wait","name":"go","value":1}}"#;
         assert!(reaches_plc("edit", edit, false).is_some());
+        let plc_if = r#"{"op":"add","step":{"type":"if","cond":{"kind":"plc","name":"go","op":"==","value":1}}}"#;
+        assert!(reaches_plc("add", plc_if, false).is_some());
+        assert!(reaches_plc("steps_paste", "{}", false).is_some());
+        assert!(reaches_plc("ai_settings", "{}", false).is_some());
+        assert!(reaches_plc("share", "{}", false).is_some());
+        assert!(reaches_plc("update", "{}", false).is_some());
         let delay = r#"{"op":"add","step":{"type":"delay","seconds":1}}"#;
         assert!(reaches_plc("add", delay, false).is_none());
         assert!(reaches_plc("play", "{}", false).is_none());
@@ -2778,11 +2840,12 @@ mod tests {
     /// empty key forgets it; anything else asked is left out.
     #[test]
     fn ai_settings_keep_only_keys_and_models() {
-        let mut kept = json!({"openai": {"key": "old", "model": "gpt-5"}});
+        let mut kept =
+            json!({"openai": {"key": "old", "model": "gpt-5", "url": "http://localhost:11434/v1"}});
         let set = json!({
             "provider": "gemini",
-            "claude": {"key": "  sk-1  ", "model": "claude-opus-5-5", "other": "x"},
-            "openai": {"key": ""},
+            "claude": {"key": "  sk-1  ", "model": "claude-opus-5-5", "url": " https://llm.corp.local ", "other": "x"},
+            "openai": {"key": "", "url": ""},
             "elsewhere": {"key": "y"},
             "gemini": {"key": 5},
         });
@@ -2791,7 +2854,7 @@ mod tests {
             kept,
             json!({
                 "provider": "gemini",
-                "claude": {"key": "sk-1", "model": "claude-opus-5-5"},
+                "claude": {"key": "sk-1", "model": "claude-opus-5-5", "url": "https://llm.corp.local"},
                 "openai": {"model": "gpt-5"},
                 "gemini": {},
             })

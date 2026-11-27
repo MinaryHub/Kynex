@@ -10,6 +10,9 @@ export default {
   'KYNEX에 연결하는 중…': 'Connecting to KYNEX…',
   '마지막 갱신': 'Last update',
   '로봇': 'Robots',
+  '로봇·AI 패널': 'Robots & AI panel',
+  '로봇·AI 패널 열기/닫기': 'Toggle Robots & AI panel',
+  '패널 닫기': 'Close panel',
 
   // ---- left panel: scene and library
   '장면': 'Scene',

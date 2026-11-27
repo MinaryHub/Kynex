@@ -245,6 +245,8 @@ export class CellPanel {
       }
       // The equipment this piece of the flow stands for.
       if (e.target.dataset.flowHost !== undefined) this.send({ op: 'flow_host', object: this.ctx.selected(), host: e.target.value });
+      // Where scrapped parts from a station go (empty = destroy).
+      if (e.target.dataset.flowRework !== undefined) this.send({ op: 'flow_rework', object: this.ctx.selected(), target: e.target.value || null });
     });
     this.box.addEventListener('click', (e) => {
       const act = e.target.closest('[data-cell]')?.dataset.cell;
@@ -514,17 +516,19 @@ export class CellPanel {
             : c.kind === 'conveyor'
               ? t('끝에서 기다림 {n}', { n: f.out })
               : `${c.kind === 'source' ? `${t('공급 {n}개', { n: f.made })} · ` : ''}${t('보관 {n}', { n: f.out + f.queue + (f.waiting ?? 0) })}${f.waiting ? ` ${t('(운반 대기 {n})', { n: f.waiting })}` : ''}`;
-      // Products: as many as any source mixes.
+      // Products: as many as any source mixes (up to 26 SKUs: A–Z).
       const last = (m) => (m ?? []).reduce((k, w, i) => (w > 0 ? i + 1 : k), 0);
       const used = Math.max(1, ...this.cell.components.map((s) => last(s.flow?.mix)));
-      const names = ['A', 'B', 'C', 'D', 'E', 'F'];
+      const names = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+      const shown = Math.min(names.length, Math.max(6, used >= 6 ? used + 1 : 6));
       let products = '';
       if (c.kind === 'source') {
         const mix = f.mix ?? [];
         products = `<div class="flow-products"><span class="muted">${t('제품 비율')}</span>${names
+          .slice(0, shown)
           .map((n, i) => `<label>${n}<input type="number" class="num" data-mix="${i}" value="${mix[i] ?? (i === 0 && !mix.length ? 1 : 0)}" min="0" step="1"></label>`)
           .join('')}</div>`;
-        products += `<div class="flow-products"><span class="muted">${t('주문표')}${f.orders ? ` ${t('{n}건 (공급 간격 대신 주문대로)', { n: f.orders })}` : ''}</span><button class="text-btn" data-orders-load title="${t('CSV: 시각(분), 제품(A–F), 수량, 납기(분) — 한 줄에 주문 하나')}">${t('CSV 불러오기')}</button>${f.orders ? `<button class="text-btn quiet" data-orders-clear>${t('지우기')}</button>` : ''}</div>`;
+        products += `<div class="flow-products"><span class="muted">${t('주문표')}${f.orders ? ` ${t('{n}건 (공급 간격 대신 주문대로)', { n: f.orders })}` : ''}</span><button class="text-btn" data-orders-load title="${t('CSV: 시각(분), 제품(A–Z), 수량, 납기(분) — 한 줄에 주문 하나')}">${t('CSV 불러오기')}</button>${f.orders ? `<button class="text-btn quiet" data-orders-clear>${t('지우기')}</button>` : ''}</div>`;
       } else if (c.kind === 'station' && used > 1) {
         const cycles = f.cycles ?? [];
         products = `<div class="flow-products"><span class="muted">${t('품종별 처리 시간 (비우면 기본)')}</span>${names
@@ -554,8 +558,15 @@ export class CellPanel {
           })
           .join('');
       }
+      let rework = '';
+      if (c.kind === 'station') {
+        const targets = (this.cell?.components ?? []).filter((t) => t.object !== c.object && t.flow && t.kind !== 'source');
+        rework = `<div class="flow-products"><span class="muted" title="${t('불량 판정 시 폐기 대신 보낼 재작업 공정·버퍼·출고')}">${t('불량 경로')}</span><select data-flow-rework><option value="">${t('폐기 (없음)')}</option>${targets
+          .map((q) => `<option value="${escapeHtml(q.object)}"${q.object === f.rework ? ' selected' : ''}>${escapeHtml(tr(q.name))}</option>`)
+          .join('')}</select></div>`;
+      }
       actions =
-        `${nexts}<span class="muted">${state}</span>${host}${products}${routes}` +
+        `${nexts}<span class="muted">${state}</span>${host}${products}${rework}${routes}` +
         `<span class="muted insp-hint">${t('잇기·끊기: 연결 모드(Shift+C)에서 설비를 끌어 다른 설비에 놓기 · 화살촉을 끌어 옮기기(빈 곳: 끊기) · ⑂분기/⑃합류 표시를 눌러 방식 정하기')}</span>`;
     } else if (c && c.kind === 'actuator') {
       const a = c.actuator ?? {};

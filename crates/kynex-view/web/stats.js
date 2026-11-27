@@ -7,13 +7,13 @@ import { tFor, tr, getLang } from './i18n.js';
 
 const t = tFor('panels');
 
-// What counts as at work: moving, gripping, machining, driving, turning,
-// walking, working. Waiting, blocked and idle do not.
-const BUSY = ['move', 'grip', 'cut', 'drive', 'turn', 'walk', 'work'];
+// What counts as at work: moving, gripping, machining, changeover setup,
+// driving, turning, walking, working. Waiting, blocked and idle do not.
+const BUSY = ['move', 'grip', 'cut', 'setup', 'drive', 'turn', 'walk', 'work'];
 
 // What a timeline says, worked out: each lane's seconds and share per
 // activity and at work, the moments parts were made (a machine's cut that
-// ended), and the bottleneck: what was at work the most.
+// ended), and the bottleneck: what was most constrained (at work + down).
 export function figures(d, activities) {
   const elapsed = Math.max(d?.elapsed || 0, 0);
   const lanes = (d?.lanes || []).map((l) => {
@@ -22,9 +22,13 @@ export function figures(d, activities) {
     for (const a of Object.keys(totals)) if (!order.includes(a)) order.push(a);
     const shares = l.shares || {};
     const busy = BUSY.reduce((s, a) => s + (shares[a] || 0), 0);
-    return { key: l.key, name: l.name, group: l.group, totals, shares, order, busy };
+    const down = shares.down || 0;
+    return { key: l.key, name: l.name, group: l.group, totals, shares, order, busy, down };
   });
-  const bottleneck = lanes.reduce((best, l) => (l.busy > (best?.busy ?? 0) ? l : best), null);
+  const bottleneck = lanes.reduce(
+    (best, l) => (l.busy + l.down > ((best?.busy ?? 0) + (best?.down ?? 0)) ? l : best),
+    null,
+  );
   // A cut followed by something else is a part made, when it ended.
   const made = [];
   for (const l of d?.lanes || []) {
@@ -139,7 +143,12 @@ export function summary(f, flow) {
       [t('간격 최소 / 최대'), f.gaps ? `${secs(f.gaps.min)} / ${secs(f.gaps.max)}` : '—'],
     );
   }
-  out.push([t('병목'), f.bottleneck ? `${tr(f.bottleneck.name)} (${pct(f.bottleneck.busy)})` : '—']);
+  const bnText = f.bottleneck
+    ? f.bottleneck.down > 0.005
+      ? `${tr(f.bottleneck.name)} (${pct(f.bottleneck.busy)} + ${t('고장')} ${pct(f.bottleneck.down)})`
+      : `${tr(f.bottleneck.name)} (${pct(f.bottleneck.busy)})`
+    : '—';
+  out.push([t('병목'), bnText]);
   return out;
 }
 

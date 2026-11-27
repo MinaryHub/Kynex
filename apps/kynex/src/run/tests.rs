@@ -1889,6 +1889,18 @@ fn a_program_sets_and_waits_for_plc_signals() {
         t += 0.05;
     }
     assert!(runner.finished(), "{}", runner.to_json(t));
+    // Unmapped PLC signal steps must not silently turn into comments on robot
+    // controller export.
+    let exported = ask_posing(
+        &mut c.posing,
+        &c.doc,
+        json!({"op": "export", "vendor": "ur", "robot": c.robot.to_string()}),
+    );
+    assert_eq!(exported["ok"], false, "{exported}");
+    assert!(
+        exported["error"].as_str().unwrap_or("").contains("PLC"),
+        "{exported}"
+    );
 
     // A signal the table has not got.
     c.cell.set_signals(&json!([])).unwrap();

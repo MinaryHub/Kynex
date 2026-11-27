@@ -160,15 +160,22 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
     };
     let lanes = record["lanes"].as_array().cloned().unwrap_or_default();
     let in_group = |g: &'static str| lanes.iter().filter(move |l| l["group"] == g);
-    // At work: machining, driving, turning, walking, working, moving,
-    // gripping. The bottleneck is what was the most.
-    const BUSY: [&str; 7] = ["cut", "drive", "turn", "walk", "work", "move", "grip"];
+    // At work: machining, changeover setup, driving, turning, walking,
+    // working, moving, gripping. The bottleneck is what is most constrained
+    // (busy + breakdown downtime).
+    const BUSY: [&str; 8] = [
+        "cut", "setup", "drive", "turn", "walk", "work", "move", "grip",
+    ];
     let bottleneck = lanes
         .iter()
-        .map(|l| (l, share(l, &BUSY)))
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .filter(|(_, busy)| *busy > 0.0)
-        .map(|(l, busy)| json!({ "name": l["name"], "busy": busy }));
+        .map(|l| {
+            let busy = share(l, &BUSY);
+            let down = share(l, &["down"]);
+            (l, busy, down)
+        })
+        .max_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)))
+        .filter(|(_, busy, down)| *busy + *down > 0.0)
+        .map(|(l, busy, down)| json!({ "name": l["name"], "busy": busy, "down": down }));
     // A part's cost at the rate this run made them.
     let rate = if elapsed > 0.0 {
         delivered as f64 / elapsed * 3600.0
@@ -185,6 +192,7 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
         "parts": delivered,
         "per_hour": if elapsed > 0.0 { delivered as f64 / elapsed * 3600.0 } else { 0.0 },
         "alarm": alarm,
+        "problem": flow.then(|| summary["problem"].clone()).filter(|v| !v.is_null()),
         "lead_mean": flow.then(|| summary["lead_mean"].clone()),
         "investment": library.investment(),
         "per_part": per_part,
@@ -204,9 +212,13 @@ pub fn simulate_seeded(session: &Document, saved: &Value, seconds: f64, seed: u6
 }
 
 /// Student's t for a 95 % interval with `n` runs (n − 1 degrees of
-/// freedom).
+/// freedom, df = 1..=29; normal approximation 1.96 beyond).
 fn t95(n: usize) -> f64 {
-    const T: [f64; 10] = [12.71, 4.30, 3.18, 2.78, 2.57, 2.45, 2.36, 2.31, 2.26, 2.23];
+    const T: [f64; 29] = [
+        12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160,
+        2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056,
+        2.052, 2.048, 2.045,
+    ];
     T.get(n.saturating_sub(2)).copied().unwrap_or(1.96)
 }
 
@@ -224,13 +236,47 @@ fn mean_ci(xs: &[f64]) -> (f64, f64) {
     (mean, t95(n) * (var / n as f64).sqrt())
 }
 
+/// Merges shared project assets (`custom` meshes, `robot_model` zips) into
+/// scenario `saved` if its `library` list omits them, so scenarios do not need
+/// to duplicate heavy CAD/URDF payloads.
+pub fn with_assets(saved: &Value, assets: &[Value]) -> Value {
+    if assets.is_empty() {
+        return saved.clone();
+    }
+    let mut out = saved.clone();
+    let existing = out["library"].as_array().cloned().unwrap_or_default();
+    let has_custom = |key: &str| existing.iter().any(|v| v["custom"]["key"] == key);
+    let has_model = |key: &str| existing.iter().any(|v| v["robot_model"]["key"] == key);
+    let mut merged: Vec<Value> = assets
+        .iter()
+        .filter(|a| {
+            if let Some(k) = a["custom"]["key"].as_str() {
+                !has_custom(k)
+            } else if let Some(k) = a["robot_model"]["key"].as_str() {
+                !has_model(k)
+            } else {
+                false
+            }
+        })
+        .cloned()
+        .collect();
+    if merged.is_empty() {
+        return out;
+    }
+    merged.extend(existing);
+    out["library"] = Value::Array(merged);
+    out
+}
+
 /// Scenario `saved` run `reps` times, each with its own seed (1, 2, …):
 /// its figures their means, parts an hour and lead time each with the
 /// half-width of a 95 % confidence interval, the bottleneck the one most
 /// often found. One run failing, the scenario does.
 pub fn replicate(session: &Document, saved: &Value, seconds: f64, reps: usize) -> Value {
+    use rayon::prelude::*;
     let reps = reps.clamp(1, 50);
     let runs: Vec<Value> = (1..=reps as u64)
+        .into_par_iter()
         .map(|seed| simulate_seeded(session, saved, seconds, seed))
         .collect();
     if let Some(failed) = runs.iter().find(|r| r["ok"] == false) {
@@ -241,6 +287,13 @@ pub fn replicate(session: &Document, saved: &Value, seconds: f64, reps: usize) -
     let (parts, _) = mean_ci(&of("parts"));
     let leads = of("lead_mean");
     let lead = (!leads.is_empty()).then(|| mean_ci(&leads));
+    let per_parts = of("per_part");
+    let per_part = (!per_parts.is_empty()).then(|| mean_ci(&per_parts).0);
+    let wips = of("wip");
+    let wip = (!wips.is_empty()).then(|| mean_ci(&wips).0.round() as u64);
+    let problem = runs
+        .iter()
+        .find_map(|r| r["problem"].as_str().map(str::to_string));
     // Each lane's shares, averaged over the runs, by its place.
     let lanes = |group: &str, keys: &[&str]| -> Vec<Value> {
         let first = runs[0][group].as_array().cloned().unwrap_or_default();
@@ -284,6 +337,9 @@ pub fn replicate(session: &Document, saved: &Value, seconds: f64, reps: usize) -
     out["per_hour_ci"] = json!(per_hour_ci);
     out["lead_mean"] = lead.map_or(Value::Null, |l| json!(l.0));
     out["lead_ci"] = lead.map_or(Value::Null, |l| json!(l.1));
+    out["per_part"] = per_part.map_or(Value::Null, |v| json!(v));
+    out["wip"] = wip.map_or(Value::Null, |v| json!(v));
+    out["problem"] = problem.map_or(Value::Null, |p| json!(p));
     out["bottleneck"] = bottleneck.unwrap_or(Value::Null);
     out["machine_lanes"] = json!(lanes("machine_lanes", &["utilization", "blocked"]));
     out["robot_lanes"] = json!(lanes("robot_lanes", &["work", "wait"]));
@@ -306,6 +362,7 @@ pub fn sweep(
     seconds: f64,
     reps: usize,
 ) -> Result<Vec<Value>, String> {
+    use rayon::prelude::*;
     if values.is_empty() || values.len() > MOST_VALUES {
         return Err(format!("값은 1–{MOST_VALUES}개입니다"));
     }
@@ -319,7 +376,7 @@ pub fn sweep(
     }
     let name = role["name"].as_str().unwrap_or_default().to_string();
     Ok(values
-        .iter()
+        .par_iter()
         .map(|v| {
             let mut s = base.clone();
             for r in s["cell"].as_array_mut().into_iter().flatten() {
@@ -339,6 +396,7 @@ pub fn sweep(
 /// each did, side by side. The scene is the `.kreate` file `--file`, or
 /// none: a cell laid out from the library alone.
 pub fn run(args: Vec<String>) -> Result<(), String> {
+    use rayon::prelude::*;
     let mut project = crate::paths::default_project();
     let mut file = None;
     let mut hours = 1.0;
@@ -378,6 +436,13 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             project.display()
         ));
     }
+    let assets: Vec<Value> = all["library"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|v| v.get("custom").is_some() || v.get("robot_model").is_some())
+        .cloned()
+        .collect();
     let session = match &file {
         Some(path) => {
             let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
@@ -388,8 +453,11 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         None => Document::new(),
     };
     let results: Vec<Value> = scenarios
-        .iter()
-        .map(|s| replicate(&session, s, hours * 3600.0, reps))
+        .par_iter()
+        .map(|s| {
+            let full = with_assets(s, &assets);
+            replicate(&session, &full, hours * 3600.0, reps)
+        })
         .collect();
     if as_json {
         for r in &results {
@@ -474,7 +542,7 @@ fn table(results: &[Value], hours: f64) -> String {
             .map(|(i, cell)| {
                 let pad = " ".repeat(widths[i] - width(cell));
                 // The name and the alarm read left to right; numbers line up right.
-                if i == 0 || i == 6 {
+                if i == 0 || i == columns - 1 {
                     format!("{cell}{pad}")
                 } else {
                     format!("{pad}{cell}")
@@ -638,5 +706,28 @@ mod tests {
         // Fixed times vary not at all.
         let fixed = replicate(&Document::new(), &line("고정", 9.0), 1800.0, 3);
         assert!(fixed["per_hour_ci"].as_f64().unwrap() < 1e-9, "{fixed}");
+    }
+
+    #[test]
+    fn shared_project_assets_merge_into_lightweight_scenarios() {
+        let scenario = json!({
+            "name": "s1",
+            "library": [{"id": 1, "template": "custom_1"}],
+            "cell": [],
+            "programs": []
+        });
+        let assets = vec![
+            json!({"custom": {"key": "custom_1", "name": "Part"}}),
+            json!({"robot_model": {"key": "robot_1", "name": "Bot"}}),
+        ];
+        let merged = with_assets(&scenario, &assets);
+        let list = merged["library"].as_array().unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0]["custom"]["key"], "custom_1");
+        assert_eq!(list[1]["robot_model"]["key"], "robot_1");
+        assert_eq!(list[2]["id"], 1);
+        // Calling again does not duplicate assets.
+        let again = with_assets(&merged, &assets);
+        assert_eq!(again["library"].as_array().unwrap().len(), 3);
     }
 }

@@ -519,7 +519,8 @@ fn orders_from_a_table_are_made_and_judged_by_their_due_times() {
         (60.0, 1, 3, 120.0)
     );
     assert_eq!((orders[2].product, orders[2].due), (1, 0.0));
-    assert!(Order::parse("0,Z,1,1").is_err());
+    assert!(Order::parse("0,ZZ,1,1").is_err());
+    assert!(Order::parse("0,27,1,1").is_err());
 
     let (doc, mut cell, u) = line(&[
         ("flow_source", 0.0, json!({"feed": 999.0, "capacity": 2})),
@@ -1375,4 +1376,209 @@ fn a_belt_reversed_runs_the_other_way() {
     // Linked first on to second: +X by the link, −X reversed.
     link(&mut cell, &doc, u[0], &[u[1]]);
     assert!(along(&cell, u[0]) < -0.99 && along(&cell, u[1]) > 0.99);
+}
+
+#[test]
+fn disassembly_keeps_product_and_multi_sku_oee_uses_per_product_cycles() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 1.0, "capacity": 2})),
+        (
+            "flow_station",
+            2.0,
+            json!({"cycle": 5.0, "makes": 2, "capacity": 2}),
+        ),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    // Source emits 100% Product B (index 1); station takes 20 s for Product B
+    // (default cycle is 5 s).
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": u[0].to_string(), "mix": [0.0, 1.0]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": u[1].to_string(), "cycles": [5.0, 20.0]}),
+    );
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 220.0);
+    let summary = cell.flow_summary();
+    // All disassembled outputs stay Product B (not reset to Product A).
+    let by_product = summary["products"].as_array().unwrap();
+    let count_a = by_product
+        .iter()
+        .find(|p| p["product"] == "A")
+        .map_or(0, |p| p["sunk"].as_u64().unwrap_or(0));
+    let count_b = by_product
+        .iter()
+        .find(|p| p["product"] == "B")
+        .map_or(0, |p| p["sunk"].as_u64().unwrap_or(0));
+    assert_eq!(count_a, 0, "{summary}");
+    assert!(count_b >= 16, "{summary}");
+    // OEE Performance reflects Product B's 20 s ideal cycle (~0.9+), not the
+    // 5 s default (~0.25).
+    let station = cell.components.iter().find(|c| c.object == u[1]).unwrap();
+    let perf = cell.oee(station)["performance"].as_f64().unwrap();
+    assert!(
+        perf > 0.8,
+        "multi-SKU performance should use 20 s cycle: {perf}"
+    );
+}
+
+#[test]
+fn scrapped_order_part_is_replaced_so_order_finishes() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"capacity": 2})),
+        (
+            "flow_station",
+            2.0,
+            json!({"cycle": 2.0, "scrap": 0.5, "capacity": 2}),
+        ),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_orders", "object": u[0].to_string(), "csv": "0,A,4,10"}),
+    );
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 200.0);
+    let summary = cell.flow_summary();
+    assert_eq!(summary["sunk"], 4, "{summary}");
+    assert_eq!(summary["orders"]["done"], 1, "{summary}");
+    assert!(summary["scrapped"].as_u64().unwrap() >= 1, "{summary}");
+}
+
+#[test]
+fn changeover_reports_setup_activity_separately_and_supports_24h_cycles() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 1.0, "capacity": 4})),
+        (
+            "flow_station",
+            2.0,
+            json!({"cycle": 5.0, "setup": 10.0, "capacity": 4}),
+        ),
+        ("flow_sink", 4.0, json!({})),
+    ]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": u[0].to_string(), "mix": [1.0, 1.0]}),
+    );
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2]]);
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    let start = Instant::now();
+    let (mut t, mut saw_setup, mut saw_cut) = (0.0, false, false);
+    while t < 80.0 {
+        t += 0.2;
+        cell.tick(&doc, t, start + Duration::from_secs_f64(t));
+        for (uid, _, act) in cell.flow_activities() {
+            if uid == u[1] {
+                saw_setup |= act == "setup";
+                saw_cut |= act == "cut";
+            }
+        }
+    }
+    assert!(saw_setup, "changeover should report setup state");
+    assert!(saw_cut, "processing after setup should report cut state");
+    // 24-hour batch cycle time (86,400 s) is accepted without clamping at 1 hour.
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "role", "object": u[1].to_string(), "kind": "station", "props": {"cycle": 72000.0}}),
+    );
+    let st = cell.components.iter().find(|c| c.object == u[1]).unwrap();
+    assert_eq!(st.props.cycle, 72000.0);
+}
+
+#[test]
+fn rework_routes_defective_parts_and_belt_gap_scales_with_part_look() {
+    // Source -> Inspector (50% defect, rework -> Rework) -> Good Sink
+    // Rework -> Good Sink (fixes the defect and delivers to Good Sink)
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 2.0, "capacity": 4})),
+        (
+            "flow_station",
+            2.0,
+            json!({"cycle": 2.0, "scrap": 0.5, "capacity": 4}),
+        ),
+        ("flow_station", 4.0, json!({"cycle": 3.0, "capacity": 4})),
+        ("flow_sink", 6.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[3]]);
+    link(&mut cell, &doc, u[2], &[u[3]]);
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_rework", "object": u[1].to_string(), "target": u[2].to_string()}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 120.0);
+    // Rework station received defective parts and fixed them into the sink.
+    let reworked = cell.stations[&u[2]].made;
+    assert!(
+        reworked >= 5,
+        "rework station should process defects: {reworked}"
+    );
+    let summary = cell.flow_summary();
+    assert!(summary["sunk"].as_u64().unwrap() >= 40, "{summary}");
+    // Part-size-aware belt gap: car body (look 1, 5.2 m) spaces far wider
+    // than default 65 mm parts while staying clamped on short belts.
+    assert!((crate::cell::belt_gap(0, 10.0) - 0.065).abs() < 1e-6);
+    assert!((crate::cell::belt_gap(1, 20.0) - 5.2).abs() < 1e-6);
+    assert!((crate::cell::belt_gap(1, 4.0) - 1.8).abs() < 1e-6);
+}
+
+#[test]
+fn supports_up_to_26_skus_across_orders_routing_and_summary() {
+    let (doc, mut cell, u) = line(&[
+        ("flow_source", 0.0, json!({"feed": 2.0, "capacity": 8})),
+        ("flow_station", 2.0, json!({"cycle": 2.0, "capacity": 8})),
+        ("flow_sink", 4.0, json!({})),
+        ("flow_sink", 6.0, json!({})),
+    ]);
+    link(&mut cell, &doc, u[0], &[u[1]]);
+    link(&mut cell, &doc, u[1], &[u[2], u[3]]);
+    // Route SKU Z (index 25) exclusively to sink 2 (u[3]), and SKU H (index 7) to sink 1 (u[2]).
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": u[1].to_string(), "to": u[2].to_string(), "products": [7]}),
+    );
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_products", "object": u[1].to_string(), "to": u[3].to_string(), "products": [25]}),
+    );
+    // Load CSV orders using SKUs beyond F: H (letter) and 26 (= Z, numeric).
+    ask(
+        &mut cell,
+        &doc,
+        json!({"op": "flow_orders", "object": u[0].to_string(), "csv": "t,sku,qty,due\n0,H,3,10\n0,26,2,10\n"}),
+    );
+    ask(&mut cell, &doc, json!({"op": "flow", "action": "start"}));
+    run(&mut cell, &doc, 0.0, 60.0);
+    assert_eq!(cell.stations[&u[2]].made, 3, "sink 1 receives 3x SKU H");
+    assert_eq!(cell.stations[&u[3]].made, 2, "sink 2 receives 2x SKU Z");
+    let summary = cell.flow_summary();
+    let products = summary["products"].as_array().unwrap();
+    assert!(
+        products
+            .iter()
+            .any(|p| p["product"] == "H" && p["sunk"] == 3),
+        "{summary}"
+    );
+    assert!(
+        products
+            .iter()
+            .any(|p| p["product"] == "Z" && p["sunk"] == 2),
+        "{summary}"
+    );
 }

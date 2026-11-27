@@ -1237,6 +1237,19 @@ fn action_ops(
         Action::While(c) => vec![Op::While(cond(c)?)],
         Action::Else => vec![Op::Else],
         Action::End => vec![Op::End],
+        // PLC signals belong to the cell PLC, not robot controller I/O:
+        // silently turning interlock waits into comments would let the robot
+        // enter machines without waiting on real hardware.
+        Action::WaitSignal { name, .. } => {
+            return Err(format!(
+                "PLC 신호 대기 '{name}'은 로봇 컨트롤러 I/O로 매핑되지 않아 내보낼 수 없습니다: 장비 신호 대기나 컨트롤러 I/O로 바꿔 주세요"
+            ));
+        }
+        Action::SetSignal { name, .. } => {
+            return Err(format!(
+                "PLC 신호 쓰기 '{name}'은 로봇 컨트롤러 I/O로 매핑되지 않아 내보낼 수 없습니다: 장비 명령이나 컨트롤러 I/O로 바꿔 주세요"
+            ));
+        }
         _ => action_ops_plain(a, cell, pallets, name),
     })
 }
@@ -1309,11 +1322,13 @@ fn action_ops_plain(
         }],
         // Calls are gone by the time a program is exported (see `flatten`).
         Action::Call { routine, times } => note(format!("call {routine} {times} times")),
-        // A PLC's signals are the cell's, not the robot controller's: to be
-        // wired to the controller's I/O there.
-        Action::SetSignal { name, value } => note(format!("set PLC signal {name} to {value}")),
-        Action::WaitSignal { name, value } => note(format!("wait for PLC signal {name} = {value}")),
-        Action::SetVar { .. } | Action::If(_) | Action::While(_) | Action::Else | Action::End => {
+        Action::SetSignal { .. }
+        | Action::WaitSignal { .. }
+        | Action::SetVar { .. }
+        | Action::If(_)
+        | Action::While(_)
+        | Action::Else
+        | Action::End => {
             unreachable!("action_ops's own")
         }
     }

@@ -34,8 +34,9 @@
   <div class="bar-right">
     <span class="pulse" id="pulse" title="마지막 갱신"></span>
     <span class="updated" id="updated">—</span>
-    <button class="icon-btn only-narrow" id="toggle-robots" aria-label="로봇" title="로봇">
-      <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2v3M10 15v3M2 10h3M15 10h3"/></svg>
+    <button class="icon-btn panel-toggle-btn" id="toggle-robots" aria-label="로봇·AI 패널" aria-pressed="false" title="로봇·AI 패널 열기/닫기">
+      <svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M12.5 3v14"/></svg>
+      <span class="count" id="toggle-robots-count" hidden>0</span>
     </button>
   </div>
 </header>
@@ -319,6 +320,7 @@
     <div class="panel-head tabs" role="tablist">
       <button class="tab on" data-tab="robots" role="tab">로봇 <span class="count" id="robot-count">0</span></button>
       <button class="tab" data-tab="chat" role="tab" title="Claude·GPT·Gemini에게 말로 시뮬레이션을 시킵니다">AI 채팅</button>
+      <button class="icon-btn small panel-collapse" id="close-robots" aria-label="패널 닫기" title="패널 닫기"><svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
     </div>
     <div class="tab-page" data-page="robots">
       <div class="robots" id="robots">
@@ -334,6 +336,7 @@
         <summary>모델과 API 키</summary>
         <label>모델 회사<select data-chat="provider"><option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option><option value="gemini">Gemini (Google)</option></select></label>
         <label>모델<input data-chat="model" type="text" spellcheck="false" autocomplete="off"></label>
+        <label>API 주소 (선택)<input data-chat="url" type="url" spellcheck="false" autocomplete="off" placeholder="비우면 기본 주소 (사내·로컬 LLM 주소 입력 가능)"></label>
         <p class="chat-key-state"></p>
         <label>API 키<input data-chat="key" type="password" spellcheck="false" autocomplete="off" placeholder="키를 붙여 넣으세요"><button class="text-btn quiet" data-chat="show-key" type="button" title="키를 보이거나 가립니다">보기</button></label>
         <div class="chat-key-actions"><button class="text-btn on" data-chat="save-key" type="button">저장</button><a data-chat="keys" target="_blank" rel="noopener"></a></div>

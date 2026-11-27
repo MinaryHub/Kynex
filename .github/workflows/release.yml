@@ -93,8 +93,64 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
 
+  android:
+    name: build (android-arm64)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: android-arm64
+
+      - name: Build & Package (Android arm64)
+        shell: bash
+        env:
+          KYNEX_KEYSTORE_BASE64: ${{ secrets.KYNEX_KEYSTORE_BASE64 }}
+          KYNEX_KEYSTORE_PASSWORD: ${{ secrets.KYNEX_KEYSTORE_PASSWORD }}
+          KYNEX_KEY_ALIAS: ${{ secrets.KYNEX_KEY_ALIAS }}
+          KYNEX_KEY_PASSWORD: ${{ secrets.KYNEX_KEY_PASSWORD }}
+        run: |
+          if [ -n "${JAVA_HOME_17_X64:-}" ] && [ -d "$JAVA_HOME_17_X64" ]; then
+            export JAVA_HOME="$JAVA_HOME_17_X64"
+          fi
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            if [ -z "${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}" ] && [ ! -d "$ANDROID_HOME/ndk" ]; then
+              "$SDKMANAGER" "ndk;28.2.13676358"
+            fi
+          fi
+          if [ -n "${KYNEX_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KYNEX_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/kynex.keystore"
+            export KYNEX_KEYSTORE="$RUNNER_TEMP/kynex.keystore"
+          fi
+          ./tools/android.sh
+          major_minor=$(sed -nE 's/^version = "([0-9]+\.[0-9]+)\..*/\1/p' Cargo.toml | head -1)
+          since=$(git log -1 --format=%H -G '^version = ' -- ':(top)Cargo.toml')
+          build=$(git rev-list --count "${since:+${since}..}HEAD")
+          v="${major_minor}.${build}"
+          mkdir -p target/dist
+          cp android/app/build/outputs/apk/release/app-release.apk "target/dist/KYNEX-$v-android-arm64.apk"
+          ls -lh "target/dist/KYNEX-$v-android-arm64.apk"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kynex-android-arm64
+          path: target/dist/*.apk
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,4 +170,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$SHA" \
             --title "KYNEX $V" \
-            --notes "KYNEX $V ($SHA) — Windows (설치 파일·MSI·zip), Linux x64, macOS arm64."
+            --notes "KYNEX $V ($SHA) — Windows (설치 파일·MSI·zip), Linux x64, macOS arm64, Android arm64 (APK)."

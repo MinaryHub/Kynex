@@ -42,3 +42,32 @@ jobs:
       - name: Demo KPIs
         if: runner.os == 'Linux'
         run: cargo test -p kynex --lib demo_kpis -- --ignored
+
+  android:
+    name: android (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64
+
+      - name: Build Android APK
+        shell: bash
+        run: |
+          if [ -n "${JAVA_HOME_17_X64:-}" ] && [ -d "$JAVA_HOME_17_X64" ]; then
+            export JAVA_HOME="$JAVA_HOME_17_X64"
+          fi
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            if [ -z "${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}" ] && [ ! -d "$ANDROID_HOME/ndk" ]; then
+              "$SDKMANAGER" "ndk;28.2.13676358"
+            fi
+          fi
+          ./tools/android.sh

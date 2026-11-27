@@ -19,11 +19,15 @@ for d in "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
   [ -z "$SDK" ] && [ -d "$d" ] && SDK="$d"
 done
 [ -d "$SDK" ] || { echo "no Android SDK: set ANDROID_HOME" >&2; exit 1; }
-NDK="${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/* 2>/dev/null | sort | tail -1)}"
+NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1)}}"
 [ -d "$NDK" ] || { echo "no NDK in $SDK/ndk: install one (sdkmanager 'ndk;28.2.13676358')" >&2; exit 1; }
 BIN="$(ls -d "$NDK"/toolchains/llvm/prebuilt/*/bin | head -1)"
-if [ -z "$JAVA_HOME" ] && [ -d /opt/homebrew/opt/openjdk@17 ]; then
-  export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+if [ -z "${JAVA_HOME:-}" ]; then
+  if [ -n "${JAVA_HOME_17_X64:-}" ] && [ -d "$JAVA_HOME_17_X64" ]; then
+    export JAVA_HOME="$JAVA_HOME_17_X64"
+  elif [ -d /opt/homebrew/opt/openjdk@17 ]; then
+    export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+  fi
 fi
 
 # KYNEX itself, for Android 8 (API 26) and on. Its mesh code is C++: the
@@ -33,7 +37,9 @@ export CC_aarch64_linux_android="$BIN/aarch64-linux-android26-clang"
 export CXX_aarch64_linux_android="$BIN/aarch64-linux-android26-clang++"
 export AR_aarch64_linux_android="$BIN/llvm-ar"
 export CXXSTDLIB_aarch64_linux_android=c++_static
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-lc++abi"
+EXTRA_RUSTFLAGS="${RUSTFLAGS:-}"
+unset RUSTFLAGS
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="$EXTRA_RUSTFLAGS -C link-arg=-lc++abi"
 cargo build --release -p kynex --bin kynex --target aarch64-linux-android
 
 # A program, carried as a native library is: the one way an app may bring

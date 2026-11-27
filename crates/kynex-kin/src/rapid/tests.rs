@@ -310,3 +310,55 @@ fn every_target_moved_to_is_declared() {
         );
     }
 }
+
+#[test]
+fn velset_does_not_leak_across_if_else_branches() {
+    let doc = load(UR5E);
+    let (_, root) = find(&doc, "base_link");
+    let (_, base) = find(&doc, "base");
+    let (_, flange) = find(&doc, "tool0");
+    let kin = Kinematics::of(&doc, root).unwrap();
+    let tool = kin.tool(flange, DAffine3::IDENTITY).unwrap();
+    let a = wp(MoveKind::Joint, [0.0; 6], 0.4, 0.0);
+    let b = wp(MoveKind::Linear, [0.2, 0.0, 0.0, 0.0, 0.0, 0.0], 0.25, 0.0);
+    let c = wp(MoveKind::Joint, [0.4, 0.0, 0.0, 0.0, 0.0, 0.0], 0.4, 0.0);
+    let module = rapid(
+        &kin,
+        &tool,
+        &Export {
+            name: "branch_velset",
+            moves: vec![
+                Move {
+                    name: "Start",
+                    waypoint: &a,
+                    before: vec![],
+                    place: None,
+                },
+                Move {
+                    name: "ThenLinear",
+                    waypoint: &b,
+                    before: vec![Op::If(crate::post::Cond::Input { port: 1, on: true })],
+                    place: None,
+                },
+                Move {
+                    name: "AfterEndif",
+                    waypoint: &c,
+                    before: vec![Op::End],
+                    place: None,
+                },
+            ],
+            close: false,
+            base,
+            flange,
+            trailing: vec![],
+            pallets: vec![],
+            markers: false,
+        },
+    )
+    .unwrap();
+    let after = module.split("ENDIF").nth(1).unwrap();
+    assert!(
+        after.contains("VelSet 40, 5000;"),
+        "VelSet must be re-emitted after ENDIF:\n{module}"
+    );
+}

@@ -1241,3 +1241,53 @@ fn a_reset_sends_the_amrs_back_where_they_were_placed() {
         .changed
         .contains(&(DatablockKind::Object, Uid::from_raw(amr))));
 }
+
+#[test]
+fn operator_walk_routes_around_blocking_equipment() {
+    // 1) Pure geometric check on plan_walk: obstacle blocking straight line.
+    let rect = [-1.0, -1.0, 1.0, 1.0];
+    let path = plan_walk((-3.0, 0.0), (3.0, 0.0), &[rect]);
+    assert!(path.len() >= 2, "must detour around obstacle: {path:?}");
+    assert_eq!(*path.last().unwrap(), (3.0, 0.0));
+    let mut prev = (-3.0, 0.0);
+    for wp in &path {
+        assert!(
+            !seg_hits_rect(prev, *wp, rect),
+            "segment {prev:?} -> {wp:?} clips obstacle"
+        );
+        prev = *wp;
+    }
+    // 2) Full cell check: operator walks around a central blocking station to
+    // reach a destination station on the opposite side.
+    let (doc, mut cell, u) = floor(&[
+        ("operator", -3.5, 0.0, Value::Null),
+        ("flow_station", 0.0, 0.0, json!({"cycle": 5.0})),
+        ("flow_station", 3.5, 0.0, json!({"cycle": 5.0})),
+    ]);
+    let (who, mid, dest) = (u[0], u[1], u[2]);
+    let _ = mid;
+    cell.walk(
+        &doc,
+        who,
+        DVec3::new(3.5, 0.0, 0.0),
+        DVec3::new(4.5, 0.0, 0.0),
+    )
+    .unwrap();
+    let walk_legs: Vec<DVec3> = cell.rovers[&who]
+        .legs
+        .iter()
+        .filter_map(|l| match *l {
+            Leg::Walk(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        walk_legs.len() >= 2,
+        "operator should detour around middle station: {walk_legs:?}"
+    );
+    assert!(
+        walk_legs.iter().any(|p| p.y.abs() > 0.5),
+        "detour must go laterally around middle station: {walk_legs:?}"
+    );
+    let _ = dest;
+}

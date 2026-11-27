@@ -289,7 +289,7 @@ pub fn tp(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, Stri
     for (k, m) in export.moves.iter().enumerate() {
         let w = m.waypoint;
         let form = |q: &[f64]| -> Result<Pos, String> {
-            Ok(if m.place.is_some() && k > 0 {
+            Ok(if m.place.is_some() {
                 Pos::Cartesian {
                     pose: in_base(q),
                     config: config(kin, &arm, q)?,
@@ -366,7 +366,7 @@ pub fn tp(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, Stri
         // On a pallet: the place counted to, less the one it was taught
         // over.
         let offset = match m.place {
-            Some(Place { pallet, from }) if k > 0 => {
+            Some(Place { pallet, from }) => {
                 let first = first_pr[pallet];
                 lines.say(format!(
                     "R[{SCRATCH_R}]=R[{}]+{first}",

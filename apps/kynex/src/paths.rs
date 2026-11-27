@@ -113,10 +113,9 @@ pub fn keep_ai_settings(settings: &serde_json::Value) -> Result<(), String> {
 }
 
 /// Project `file` held for this KYNEX: two writing one file would undo each
-/// other's work. A file beside it (`<project>.lock`) kept open with no
-/// sharing while the project is: another KYNEX cannot open it, and the
-/// system lets it go when this one ends, however it ends. Where files are
-/// not locked so (not Windows), nothing is held.
+/// other's work. A file beside it (`<project>.lock`) is held exclusively while
+/// the project is open: another KYNEX cannot open it, and the OS releases the
+/// lock automatically when this process exits, however it exits.
 pub fn hold(file: &Path) -> Result<Option<std::fs::File>, String> {
     let lock = {
         let mut name = file.as_os_str().to_owned();
@@ -124,16 +123,33 @@ pub fn hold(file: &Path) -> Result<Option<std::fs::File>, String> {
         PathBuf::from(name)
     };
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true);
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        options.share_mode(0);
+        options.truncate(true).share_mode(0);
     }
     match options.open(&lock) {
         Ok(mut f) => {
+            #[cfg(not(windows))]
+            {
+                match f.try_lock() {
+                    Ok(()) => {
+                        let _ = f.set_len(0);
+                    }
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        return Err(format!(
+                            "{}: 다른 KYNEX가 이 프로젝트를 열고 있습니다",
+                            file.display()
+                        ));
+                    }
+                    Err(std::fs::TryLockError::Error(e)) => {
+                        return Err(format!("{}: {e}", lock.display()));
+                    }
+                }
+            }
             let _ = std::io::Write::write_all(&mut f, std::process::id().to_string().as_bytes());
-            Ok(cfg!(windows).then_some(f))
+            Ok(Some(f))
         }
         Err(e) if e.raw_os_error() == Some(32) => Err(format!(
             "{}: 다른 KYNEX가 이 프로젝트를 열고 있습니다",
@@ -186,13 +202,12 @@ pub fn open_default() -> Result<(PathBuf, Option<std::fs::File>), String> {
     Err(last)
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     /// A project held by one KYNEX is not opened by another, until let go.
     #[test]
-    #[cfg(windows)]
     fn a_project_open_here_is_not_opened_again() {
         let dir = std::env::temp_dir().join(format!("kynex-hold-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

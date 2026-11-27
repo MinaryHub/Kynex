@@ -306,22 +306,29 @@ fn crossing(a: &[DVec3; 3], b: &[DVec3; 3]) -> bool {
         na.cross(nb).length_squared() <= 1e-12 * na.length_squared() * nb.length_squared();
     let unit = na.normalize_or_zero();
     let coplanar = parallel && b.iter().all(|p| (*p - a[0]).dot(unit).abs() <= PENETRATION);
-    let axes: Vec<DVec3> = if coplanar {
+    let mut axes = [DVec3::ZERO; 11];
+    let count = if coplanar {
         if na.dot(nb) < 0.0 {
             return false;
         }
         // In the plane, the edges' own normals part them.
-        ea.iter().chain(&eb).map(|e| na.cross(*e)).collect()
+        for (i, e) in ea.iter().chain(&eb).enumerate() {
+            axes[i] = na.cross(*e);
+        }
+        6
     } else {
-        let mut axes = vec![na, nb];
+        axes[0] = na;
+        axes[1] = nb;
+        let mut n = 2;
         for x in &ea {
             for y in &eb {
-                axes.push(x.cross(*y));
+                axes[n] = x.cross(*y);
+                n += 1;
             }
         }
-        axes
+        n
     };
-    for axis in axes {
+    for &axis in &axes[..count] {
         let len = axis.length();
         if len < 1e-12 {
             continue;

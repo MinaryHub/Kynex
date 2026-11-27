@@ -1243,3 +1243,60 @@ fn equipment_let_go_is_set_down_on_the_floor_or_on_what_is_below() {
     );
     assert!((z(&library, up) - 1.5).abs() < 1e-9);
 }
+
+#[test]
+fn custom_meshes_save_as_binary_base64_and_read_legacy_arrays() {
+    let custom = Custom {
+        key: "custom_bin".into(),
+        name: "Bracket".into(),
+        nodes: vec![Node {
+            name: "body".into(),
+            parent: None,
+            at: DAffine3::IDENTITY,
+            shape: Some(Shape {
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                triangles: vec![[0, 1, 2]],
+                colour: [0.5, 0.6, 0.7],
+            }),
+            role: None,
+        }],
+    };
+    let encoded = custom.to_json();
+    // Written in compact binary base64, not legacy pretty-printed float arrays.
+    assert!(encoded["nodes"][0]["shape"]["pb"].is_string());
+    assert!(encoded["nodes"][0]["shape"]["tb"].is_string());
+    assert!(encoded["nodes"][0]["shape"].get("p").is_none());
+    assert_eq!(Custom::of_json(&encoded).unwrap(), custom);
+
+    // Legacy JSON float/int arrays still load cleanly.
+    let legacy = json!({
+        "key": "custom_bin",
+        "name": "Bracket",
+        "nodes": [{
+            "name": "body",
+            "parent": null,
+            "at": DAffine3::IDENTITY.to_cols_array(),
+            "shape": {
+                "p": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                "t": [0, 1, 2],
+                "c": [0.5, 0.6, 0.7],
+            },
+            "role": null,
+        }]
+    });
+    assert_eq!(Custom::of_json(&legacy).unwrap(), custom);
+
+    // items_saved omits heavy assets, and restore_items preserves them.
+    let mut lib = Library::default();
+    lib.customs.push(custom);
+    ask(
+        &mut lib,
+        json!({"op": "place", "template": "custom_bin", "at": [1.0, 2.0, 0.0]}),
+    );
+    let light = lib.items_saved();
+    assert!(light.iter().all(|v| v.get("custom").is_none()));
+    assert_eq!(light.len(), 1);
+    lib.restore_items(&light);
+    assert_eq!(lib.customs.len(), 1);
+    assert_eq!(lib.items.len(), 1);
+}

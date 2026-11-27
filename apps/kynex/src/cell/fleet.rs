@@ -693,86 +693,107 @@ impl Cell {
                 }
             }
         }
-        // Two waiting on each other.
+        // Two or more AMRs waiting on each other in a cycle (A→B→…→A).
         let waits: Vec<(u64, u64)> = self.blocked.iter().map(|(a, s)| (*a, *s)).collect();
-        let mut stuck: Vec<(u64, u64)> = Vec::new();
-        for (a, s) in waits {
-            let Some(&b) = self.holds.get(&s) else {
-                continue;
-            };
-            let Some(&t) = self.blocked.get(&b) else {
-                continue;
-            };
-            if self.holds.get(&t) != Some(&a) || !self.blocked.contains_key(&a) {
+        let mut seen_in_cycle: HashSet<u64> = HashSet::new();
+        for (start, _) in waits {
+            if seen_in_cycle.contains(&start) || !self.blocked.contains_key(&start) {
                 continue;
             }
-            // Either of the two goes round, or aside, whichever can; said
-            // only if neither can.
-            let Some(c) = self.components.iter().find(|c| c.object == a).cloned() else {
+            // Walk the wait graph: amr -> blocked stop -> holding amr.
+            let mut chain: Vec<(u64, u64)> = Vec::new();
+            let mut cur = start;
+            let cycle = loop {
+                let Some(&stop) = self.blocked.get(&cur) else {
+                    break None;
+                };
+                if let Some(pos) = chain.iter().position(|(who, _)| *who == cur) {
+                    break Some(chain[pos..].to_vec());
+                }
+                chain.push((cur, stop));
+                let Some(&holder) = self.holds.get(&stop) else {
+                    break None;
+                };
+                if holder == cur {
+                    break None;
+                }
+                cur = holder;
+            };
+            let Some(cycle) = cycle else {
                 continue;
             };
-            let Some(mut r) = self.rover(doc, &c) else {
+            if cycle.len() < 2 {
                 continue;
-            };
-            let Some(dest) = r.legs.iter().rev().find_map(|l| match l {
-                Leg::Via(n) => Some(*n),
-                _ => None,
-            }) else {
-                continue;
-            };
-            // Round another way; or, if it is going to that very stop, aside
-            // to a free stop next to it first, to let the other by.
-            let round = if dest != s {
-                self.route_avoiding(doc, r.at, dest, Some(s)).ok()
-            } else {
-                let here = self
-                    .holds
-                    .iter()
-                    .find(|(stop, who)| **who == a && **stop != s)
-                    .map(|(stop, _)| *stop);
-                let aside = here.and_then(|h| {
-                    self.lanes
-                        .get(&h)?
+            }
+            for &(who, _) in &cycle {
+                seen_in_cycle.insert(who);
+            }
+            // Try each AMR in the cycle: go round another way, or aside to
+            // a free neighbour stop to break the loop.
+            let mut broken = false;
+            for &(a, s) in &cycle {
+                let Some(c) = self.components.iter().find(|c| c.object == a).cloned() else {
+                    continue;
+                };
+                let Some(mut r) = self.rover(doc, &c) else {
+                    continue;
+                };
+                let Some(dest) = r.legs.iter().rev().find_map(|l| match l {
+                    Leg::Via(n) => Some(*n),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                let round = if dest != s {
+                    self.route_avoiding(doc, r.at, dest, Some(s)).ok()
+                } else {
+                    let here = self
+                        .holds
                         .iter()
-                        .copied()
-                        .find(|n| *n != s && !self.holds.contains_key(n))
-                });
-                aside.and_then(|n| {
-                    let mut legs = self.route(doc, r.at, n).ok()?;
-                    let there = places.get(&n)?.0;
-                    legs.extend(
-                        self.route(doc, DVec3::new(there.x, there.y, r.at.z), dest)
-                            .ok()?,
-                    );
-                    Some(legs)
-                })
-            };
-            match round {
-                Some(legs) => {
+                        .find(|(stop, who)| **who == a && **stop != s)
+                        .map(|(stop, _)| *stop);
+                    let aside = here.and_then(|h| {
+                        self.lanes
+                            .get(&h)?
+                            .iter()
+                            .copied()
+                            .find(|n| *n != s && !self.holds.contains_key(n))
+                    });
+                    aside.and_then(|n| {
+                        let mut legs = self.route(doc, r.at, n).ok()?;
+                        let there = places.get(&n)?.0;
+                        legs.extend(
+                            self.route(doc, DVec3::new(there.x, there.y, r.at.z), dest)
+                                .ok()?,
+                        );
+                        Some(legs)
+                    })
+                };
+                if let Some(legs) = round {
                     r.legs = legs;
                     self.rovers.insert(a, r);
-                    self.blocked.remove(&a);
-                    self.blocked.remove(&b);
-                    stuck.retain(|(x, y)| (*x, *y) != (b, a));
+                    for &(member, _) in &cycle {
+                        self.blocked.remove(&member);
+                    }
                     changed = true;
+                    broken = true;
+                    break;
                 }
-                None if !stuck.contains(&(b, a)) && self.blocked.contains_key(&b) => {
-                    // The other may yet get out of the way.
-                    stuck.push((a, b));
-                }
-                None => {
-                    let name = |u: u64| {
+            }
+            if !broken {
+                let names: Vec<String> = cycle
+                    .iter()
+                    .map(|(u, _)| {
                         self.components
                             .iter()
-                            .find(|c| c.object == u)
+                            .find(|c| c.object == *u)
                             .map_or(String::new(), |c| c.name.clone())
-                    };
-                    self.flow_problem = Some(format!(
-                        "AMR 교착: {}와 {}가 서로의 정지 위치를 기다립니다 (비켜설 길이 없음)",
-                        name(a),
-                        name(b)
-                    ));
-                }
+                    })
+                    .collect();
+                self.flow_problem = Some(format!(
+                    "AMR 교착: {}가 서로의 정지 위치를 기다립니다 (비켜설 길이 없음)",
+                    names.join(", ")
+                ));
             }
         }
         changed
@@ -844,15 +865,76 @@ impl Cell {
         }
     }
 
-    /// Person `who` walks to `to`, then faces `toward`.
+    /// Stationary floor equipment footprints (inflated by operator half-width)
+    /// that walking operators should route around instead of clipping through.
+    fn operator_obstacles(
+        &self,
+        doc: &Document,
+        from: (f64, f64),
+        to: (f64, f64),
+    ) -> Vec<[f64; 4]> {
+        const PAD: f64 = 0.25;
+        let mut rects = Vec::new();
+        for c in &self.components {
+            if matches!(
+                c.kind,
+                Kind::Operator
+                    | Kind::Amr
+                    | Kind::Stop
+                    | Kind::Sensor
+                    | Kind::Gripper
+                    | Kind::Door
+                    | Kind::Connector
+            ) {
+                continue;
+            }
+            let Some(id) = id_of(doc, c.object) else {
+                continue;
+            };
+            let mut lo = DVec3::splat(f64::INFINITY);
+            let mut hi = DVec3::splat(f64::NEG_INFINITY);
+            for (o, _) in doc
+                .objects()
+                .filter(|(o, _)| *o == id || is_below(doc, *o, id))
+            {
+                if let Some((a, b)) = bounds(doc, o) {
+                    lo = lo.min(a);
+                    hi = hi.max(b);
+                }
+            }
+            if !lo.is_finite() || lo.z > 1.9 || hi.z < 0.15 {
+                continue;
+            }
+            let r = [lo.x - PAD, lo.y - PAD, hi.x + PAD, hi.y + PAD];
+            if pt_in_rect(from, r) || pt_in_rect(to, r) {
+                continue;
+            }
+            rects.push(r);
+        }
+        rects
+    }
+
+    /// Person `who` walks to `to` (routing around stationary floor equipment),
+    /// then faces `toward`.
     fn walk(&mut self, doc: &Document, who: u64, to: DVec3, toward: DVec3) -> Option<()> {
         let c = self.components.iter().find(|c| c.object == who)?.clone();
         let mut r = self.rover(doc, &c)?;
-        let way = to - r.at;
         r.legs.clear();
-        if way.truncate().length() > 1e-3 {
-            r.legs.push(Leg::Turn(way.y.atan2(way.x)));
-            r.legs.push(Leg::Walk(to));
+        let start = (r.at.x, r.at.y);
+        let goal = (to.x, to.y);
+        if (to - r.at).truncate().length() > 1e-3 {
+            let rects = self.operator_obstacles(doc, start, goal);
+            let waypoints = plan_walk(start, goal, &rects);
+            let mut prev = r.at;
+            for (wx, wy) in waypoints {
+                let wp = DVec3::new(wx, wy, to.z);
+                let seg = wp - prev;
+                if seg.truncate().length() > 1e-3 {
+                    r.legs.push(Leg::Turn(seg.y.atan2(seg.x)));
+                    r.legs.push(Leg::Walk(wp));
+                    prev = wp;
+                }
+            }
         }
         let face = toward - to;
         if face.truncate().length() > 1e-3 {
@@ -1384,6 +1466,184 @@ impl Cell {
             }
         }
     }
+}
+
+fn pt_in_rect(p: (f64, f64), r: [f64; 4]) -> bool {
+    p.0 >= r[0] && p.0 <= r[2] && p.1 >= r[1] && p.1 <= r[3]
+}
+
+fn seg_hits_rect(a: (f64, f64), b: (f64, f64), r: [f64; 4]) -> bool {
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    for (p, q) in [
+        (-dx, a.0 - r[0]),
+        (dx, r[2] - a.0),
+        (-dy, a.1 - r[1]),
+        (dy, r[3] - a.1),
+    ] {
+        if p.abs() < 1e-12 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                if t > t1 {
+                    return false;
+                }
+                if t > t0 {
+                    t0 = t;
+                }
+            } else {
+                if t < t0 {
+                    return false;
+                }
+                if t < t1 {
+                    t1 = t;
+                }
+            }
+        }
+    }
+    t0 <= t1
+}
+
+/// Plans a 2D walking path from `from` to `to` avoiding axis-aligned `rects`,
+/// using a direct fast path when unobstructed and bounded 8-connected A* +
+/// line-of-sight smoothing when blocked. Falls back to `[to]` if unreachable.
+pub(super) fn plan_walk(from: (f64, f64), to: (f64, f64), rects: &[[f64; 4]]) -> Vec<(f64, f64)> {
+    let seg_clear = |a: (f64, f64), b: (f64, f64)| rects.iter().all(|r| !seg_hits_rect(a, b, *r));
+    if rects.is_empty() || seg_clear(from, to) {
+        return vec![to];
+    }
+    const STEP: f64 = 0.35;
+    const MAX_EXPAND: usize = 8000;
+    let mut min_x = from.0.min(to.0);
+    let mut max_x = from.0.max(to.0);
+    let mut min_y = from.1.min(to.1);
+    let mut max_y = from.1.max(to.1);
+    for r in rects {
+        min_x = min_x.min(r[0]);
+        min_y = min_y.min(r[1]);
+        max_x = max_x.max(r[2]);
+        max_y = max_y.max(r[3]);
+    }
+    min_x -= 2.0;
+    min_y -= 2.0;
+    max_x += 2.0;
+    max_y += 2.0;
+    let nx = ((max_x - min_x) / STEP).ceil().max(1.0) as i32;
+    let ny = ((max_y - min_y) / STEP).ceil().max(1.0) as i32;
+    if (nx as i64) * (ny as i64) > 100_000 {
+        return vec![to];
+    }
+    let to_grid = |p: (f64, f64)| -> (i32, i32) {
+        (
+            ((p.0 - min_x) / STEP).round().clamp(0.0, nx as f64) as i32,
+            ((p.1 - min_y) / STEP).round().clamp(0.0, ny as f64) as i32,
+        )
+    };
+    let to_world =
+        |g: (i32, i32)| -> (f64, f64) { (min_x + g.0 as f64 * STEP, min_y + g.1 as f64 * STEP) };
+    let start = to_grid(from);
+    let goal = to_grid(to);
+    if start == goal {
+        return vec![to];
+    }
+    let blocked = |g: (i32, i32)| -> bool {
+        if g == start || g == goal {
+            return false;
+        }
+        let p = to_world(g);
+        rects.iter().any(|r| pt_in_rect(p, *r))
+    };
+    let heuristic = |a: (i32, i32), b: (i32, i32)| -> u32 {
+        let dx = (a.0 - b.0).unsigned_abs();
+        let dy = (a.1 - b.1).unsigned_abs();
+        let (lo, hi) = if dx < dy { (dx, dy) } else { (dy, dx) };
+        hi * 1000 + lo * 414
+    };
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap};
+    let mut open: BinaryHeap<(Reverse<u32>, u32, (i32, i32))> = BinaryHeap::new();
+    let mut g_score: HashMap<(i32, i32), u32> = HashMap::new();
+    let mut came_from: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
+    g_score.insert(start, 0);
+    open.push((Reverse(heuristic(start, goal)), 0, start));
+    let mut expanded = 0;
+    let mut found = false;
+    const DIRS: [(i32, i32, u32); 8] = [
+        (1, 0, 1000),
+        (-1, 0, 1000),
+        (0, 1, 1000),
+        (0, -1, 1000),
+        (1, 1, 1414),
+        (1, -1, 1414),
+        (-1, 1, 1414),
+        (-1, -1, 1414),
+    ];
+    while let Some((_, g, cur)) = open.pop() {
+        if cur == goal {
+            found = true;
+            break;
+        }
+        if g > *g_score.get(&cur).unwrap_or(&u32::MAX) {
+            continue;
+        }
+        expanded += 1;
+        if expanded > MAX_EXPAND {
+            break;
+        }
+        for (dx, dy, cost) in DIRS {
+            let nxt = (cur.0 + dx, cur.1 + dy);
+            if nxt.0 < 0 || nxt.0 > nx || nxt.1 < 0 || nxt.1 > ny || blocked(nxt) {
+                continue;
+            }
+            if dx != 0 && dy != 0 && (blocked((cur.0 + dx, cur.1)) || blocked((cur.0, cur.1 + dy)))
+            {
+                continue;
+            }
+            let ng = g.saturating_add(cost);
+            if ng < *g_score.get(&nxt).unwrap_or(&u32::MAX) {
+                g_score.insert(nxt, ng);
+                came_from.insert(nxt, cur);
+                open.push((Reverse(ng.saturating_add(heuristic(nxt, goal))), ng, nxt));
+            }
+        }
+    }
+    if !found {
+        return vec![to];
+    }
+    let mut raw = Vec::new();
+    let mut cur = goal;
+    while cur != start {
+        raw.push(cur);
+        cur = came_from[&cur];
+    }
+    raw.reverse();
+    let mut pts = Vec::with_capacity(raw.len() + 2);
+    pts.push(from);
+    for g in raw {
+        if g != goal {
+            pts.push(to_world(g));
+        }
+    }
+    pts.push(to);
+    // Greedy line-of-sight string-pulling to eliminate grid stair-stepping.
+    let mut smooth = Vec::new();
+    let mut i = 0;
+    while i + 1 < pts.len() {
+        let mut best = i + 1;
+        for j in (i + 2..pts.len()).rev() {
+            if seg_clear(pts[i], pts[j]) {
+                best = j;
+                break;
+            }
+        }
+        smooth.push(pts[best]);
+        i = best;
+    }
+    smooth
 }
 
 #[cfg(test)]

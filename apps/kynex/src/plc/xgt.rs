@@ -135,10 +135,58 @@ impl Client {
         if u16::from_le_bytes([head[14], head[15]]) != self.invoke {
             return Err("XGT: 다른 요청의 응답입니다".into());
         }
-        if body.len() < 10 || u16::from_le_bytes([body[0], body[1]]) != command + 1 {
+        if body.len() < 9 || u16::from_le_bytes([body[0], body[1]]) != command + 1 {
             return Err("XGT: 응답 명령이 맞지 않습니다".into());
         }
         Ok(body)
+    }
+
+    /// Reads `vars` in one FEnet individual-read request; `Ok(Err(code))` when
+    /// the PLC refused the request, `Err` when the link or framing failed.
+    fn read_chunk(
+        &mut self,
+        vars: &[&Variable],
+        size: Size,
+    ) -> Result<Result<Vec<i64>, u16>, String> {
+        let mut ins = Vec::new();
+        ins.extend_from_slice(&READ.to_le_bytes());
+        ins.extend_from_slice(&size.code().to_le_bytes());
+        ins.extend_from_slice(&[0, 0]);
+        ins.extend_from_slice(&(vars.len() as u16).to_le_bytes());
+        for v in vars {
+            let name = v.name.as_bytes();
+            ins.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            ins.extend_from_slice(name);
+        }
+        let body = self.ask(&ins, READ)?;
+        let status = u16::from_le_bytes([body[6], body[7]]);
+        if status != 0 {
+            let code = error_code(&body);
+            return Ok(Err(code));
+        }
+        if body.len() < 10 {
+            return Err("XGT: 읽기 응답이 짧습니다".into());
+        }
+        let mut d = &body[10..];
+        let mut values = Vec::with_capacity(vars.len());
+        for _ in vars {
+            if d.len() < 2 {
+                return Err("XGT: 읽기 응답이 짧습니다".into());
+            }
+            let n = u16::from_le_bytes([d[0], d[1]]) as usize;
+            let v = d.get(2..2 + n).ok_or("XGT: 읽기 응답이 짧습니다")?;
+            if n < size.bytes() {
+                return Err("XGT: 읽기 응답이 짧습니다".into());
+            }
+            values.push(match size {
+                Size::Bit => i64::from(v[0] & 1),
+                Size::Byte => i64::from(v[0]),
+                Size::Word => i64::from(i16::from_le_bytes([v[0], v[1]])),
+                Size::Dword => i64::from(i32::from_le_bytes([v[0], v[1], v[2], v[3]])),
+            });
+            d = &d[2 + n..];
+        }
+        Ok(Ok(values))
     }
 
     /// The values of `vars`, each a signed number (a bit 0 or 1), or why
@@ -149,43 +197,26 @@ impl Client {
         for size in [Size::Bit, Size::Byte, Size::Word, Size::Dword] {
             let these: Vec<usize> = (0..vars.len()).filter(|i| vars[*i].size == size).collect();
             for chunk in these.chunks(16) {
-                let mut ins = Vec::new();
-                ins.extend_from_slice(&READ.to_le_bytes());
-                ins.extend_from_slice(&size.code().to_le_bytes());
-                ins.extend_from_slice(&[0, 0]);
-                ins.extend_from_slice(&(chunk.len() as u16).to_le_bytes());
-                for i in chunk {
-                    let name = vars[*i].name.as_bytes();
-                    ins.extend_from_slice(&(name.len() as u16).to_le_bytes());
-                    ins.extend_from_slice(name);
-                }
-                let body = self.ask(&ins, READ)?;
-                let status = u16::from_le_bytes([body[6], body[7]]);
-                if status != 0 {
-                    // The whole request refused: each of its variables.
-                    let code = u16::from_le_bytes([body[8], body[9]]);
-                    for i in chunk {
-                        out[*i] = Err(refused(code));
+                let batch: Vec<&Variable> = chunk.iter().map(|i| &vars[*i]).collect();
+                match self.read_chunk(&batch, size)? {
+                    Ok(values) => {
+                        for (&i, v) in chunk.iter().zip(values) {
+                            out[i] = Ok(v);
+                        }
                     }
-                    continue;
-                }
-                let mut d = &body[10..];
-                for i in chunk {
-                    if d.len() < 2 {
-                        return Err("XGT: 읽기 응답이 짧습니다".into());
+                    Err(code) if chunk.len() == 1 => {
+                        out[chunk[0]] = Err(refused(code));
                     }
-                    let n = u16::from_le_bytes([d[0], d[1]]) as usize;
-                    let v = d.get(2..2 + n).ok_or("XGT: 읽기 응답이 짧습니다")?;
-                    if n < size.bytes() {
-                        return Err("XGT: 읽기 응답이 짧습니다".into());
+                    // One bad address refuses the whole batch: isolate each
+                    // variable so the rest keep updating.
+                    Err(_) => {
+                        for &i in chunk {
+                            match self.read_chunk(&[&vars[i]], size)? {
+                                Ok(values) => out[i] = Ok(values[0]),
+                                Err(code) => out[i] = Err(refused(code)),
+                            }
+                        }
                     }
-                    out[*i] = Ok(match size {
-                        Size::Bit => i64::from(v[0] & 1),
-                        Size::Byte => i64::from(v[0]),
-                        Size::Word => i64::from(i16::from_le_bytes([v[0], v[1]])),
-                        Size::Dword => i64::from(i32::from_le_bytes([v[0], v[1], v[2], v[3]])),
-                    });
-                    d = &d[2 + n..];
                 }
             }
         }
@@ -216,8 +247,18 @@ impl Client {
         if status == 0 {
             Ok(Ok(()))
         } else {
-            Ok(Err(refused(u16::from_le_bytes([body[8], body[9]]))))
+            Ok(Err(refused(error_code(&body))))
         }
+    }
+}
+
+/// FEnet error code after a non-zero status: 1 byte on some PLC firmware,
+/// 2 bytes on others.
+fn error_code(body: &[u8]) -> u16 {
+    if body.len() >= 10 {
+        u16::from_le_bytes([body[8], body[9]])
+    } else {
+        u16::from(body[8])
     }
 }
 

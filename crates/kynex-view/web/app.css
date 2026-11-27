@@ -98,6 +98,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr) 312px;
 }
+.layout.right-closed { grid-template-columns: 264px minmax(0, 1fr); }
+.layout.right-closed .panel.right { display: none; }
+.panel-toggle-btn { width: auto; padding: 0 7px; gap: 5px; display: inline-flex; }
+.panel-toggle-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.panel-toggle-btn .count { padding: 0 5px; font-size: 10px; line-height: 16px; }
+.panel-toggle-btn .count[hidden] { display: none; }
+.panel-collapse { margin-left: auto; }
 .panel {
   background: var(--panel);
   display: flex;
@@ -428,9 +435,43 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
 /* ---- robots ----------------------------------------------------------- */
 .robots { overflow: auto; flex: 1; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 10px; }
 .robot { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
-.robot-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px 6px; }
-.robot-name { font-weight: 600; font-size: 13px; }
-.robot-meta { margin-left: auto; color: var(--faint); font-size: 11px; font-family: var(--mono); }
+.robot-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+.robot.collapsible .robot-head { cursor: pointer; user-select: none; }
+.robot.collapsible .robot-head:hover { background: rgba(255, 255, 255, 0.03); border-radius: var(--radius) var(--radius) 0 0; }
+.robot.collapsed .robot-head { padding-bottom: 10px; }
+.robot.collapsed .robot-body { display: none; }
+.robot-chev { color: var(--faint); font-size: 11px; width: 10px; text-align: center; transition: transform 0.12s ease; }
+.robot.collapsed .robot-chev { transform: rotate(-90deg); }
+.robot-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.robot-meta { margin-left: auto; color: var(--faint); font-size: 11px; font-family: var(--mono); white-space: nowrap; }
+.robot-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); flex: none; }
+.robot-dot[hidden] { display: none; }
+.tcp-quick { padding: 4px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+.robot-manual, .robot-follow { border-top: 1px solid var(--line); }
+.robot-manual > summary, .robot-follow > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.robot-manual > summary::-webkit-details-marker,
+.robot-follow > summary::-webkit-details-marker { display: none; }
+.robot-manual > summary::before,
+.robot-follow > summary::before { content: '▸'; font-size: 10px; color: var(--faint); width: 10px; }
+.robot-manual[open] > summary::before,
+.robot-follow[open] > summary::before { content: '▾'; }
+.robot-manual > summary:hover, .robot-follow > summary:hover { color: var(--text); }
+.robot-manual .limit-badge { margin-left: auto; color: var(--bad); font-size: 10.5px; font-weight: 600; }
+.robot-manual .limit-badge[hidden] { display: none; }
+.robot-follow > summary .follow-state { margin-left: auto; font-weight: 400; }
+.robot-follow .follow { border-top: 0; padding-top: 2px; }
+.tcp-manual { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .joints { list-style: none; margin: 0; padding: 0 0 6px; }
 .joint {
   display: grid;
@@ -967,7 +1008,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round
   .only-narrow { display: inline-grid; }
   .brand-sub, .hint { display: none; }
   .bar { gap: 8px; padding: 0 8px; }
-  .layout { grid-template-columns: minmax(0, 1fr); position: relative; overflow: hidden; }
+  .layout, .layout.right-closed { grid-template-columns: minmax(0, 1fr); position: relative; overflow: hidden; }
+  .layout.right-closed .panel.right { display: flex; }
   .panel {
     position: absolute;
     top: 0;

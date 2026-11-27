@@ -126,6 +126,10 @@ fn bits_words_and_double_words_go_to_a_plc_and_come_back() {
     // A device the PLC has not: said, the link going on.
     let got = c.read(&[v("%ZW0")]).unwrap();
     assert!(got[0].as_ref().unwrap_err().contains("0x0003"));
+    // One bad address in a batch does not poison the valid ones beside it.
+    let mixed = c.read(&[v("%DW100"), v("%ZW0")]).unwrap();
+    assert_eq!(mixed[0], Ok(-300));
+    assert!(mixed[1].as_ref().unwrap_err().contains("0x0003"));
     assert!(c.write(&v("%ZX0"), 1).unwrap().is_err());
     assert_eq!(c.read(&[v("%MX100")]).unwrap(), [Ok(1)]);
 }

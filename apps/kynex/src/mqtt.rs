@@ -129,10 +129,14 @@ fn address(broker: &str) -> String {
     }
 }
 
+/// Unique suffix per MQTT client so simultaneous AMR feeds never collide.
+static NEXT_CLIENT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// A link to a broker, subscribed.
 pub struct Client {
     stream: TcpStream,
     pinged: Instant,
+    awaiting_pong: bool,
 }
 
 impl Client {
@@ -151,6 +155,9 @@ impl Client {
         stream
             .set_read_timeout(Some(Duration::from_millis(500)))
             .map_err(|e| e.to_string())?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .map_err(|e| e.to_string())?;
         let mut body = Vec::new();
         string(&mut body, "MQTT");
         body.push(4);
@@ -163,9 +170,10 @@ impl Client {
         }
         body.push(flags);
         body.extend_from_slice(&(KEEP_ALIVE * 2).to_be_bytes());
-        // A name of its own: two KYNEX on one broker each get theirs.
+        // A name of its own: two KYNEX or two AMRs on one broker each get theirs.
+        let seq = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
         let id = format!(
-            "kynex-{:x}",
+            "kynex-{:x}-{seq}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos() as u64 & 0xffff_ffff)
@@ -195,6 +203,7 @@ impl Client {
         stream
             .write_all(&packet(0x82, &body))
             .map_err(|e| format!("MQTT: {e}"))?;
+        let sub_deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let (first, rest) = wait(&mut stream).map_err(|e| format!("MQTT: {e}"))?;
             if first == 0x90 {
@@ -203,20 +212,28 @@ impl Client {
                 }
                 break;
             }
+            if Instant::now() >= sub_deadline {
+                return Err("MQTT: 구독 응답 시간이 지났습니다".into());
+            }
         }
         Ok(Self {
             stream,
             pinged: Instant::now(),
+            awaiting_pong: false,
         })
     }
 
     /// The next message published, `None` if none came for a moment.
     pub fn next(&mut self) -> Result<Option<(String, Vec<u8>)>, String> {
         if self.pinged.elapsed() >= Duration::from_secs(KEEP_ALIVE as u64) {
+            if self.awaiting_pong {
+                return Err("MQTT: 브로커 응답이 없습니다".into());
+            }
             self.stream
                 .write_all(&[0xc0, 0])
                 .map_err(|e| format!("MQTT: {e}"))?;
             self.pinged = Instant::now();
+            self.awaiting_pong = true;
         }
         match poll(&mut self.stream, 1 << 20) {
             Ok(Some((first, rest))) if first & 0xf0 == 0x30 => {
@@ -230,6 +247,10 @@ impl Client {
                 let skip = if first & 0x06 != 0 { 2 } else { 0 };
                 let payload = rest.get(2 + n + skip..).unwrap_or_default().to_vec();
                 Ok(Some((topic, payload)))
+            }
+            Ok(Some((0xd0, _))) => {
+                self.awaiting_pong = false;
+                Ok(None)
             }
             Ok(_) => Ok(None),
             Err(e) => Err(format!("MQTT: {e}")),

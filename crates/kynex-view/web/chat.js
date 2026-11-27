@@ -186,7 +186,7 @@ function merge(kept, set) {
     if (k === 'provider' && typeof v === 'string' && PROVIDERS[v]) kept.provider = v;
     else if (PROVIDERS[k] && v && typeof v === 'object') {
       kept[k] = { ...(kept[k] ?? {}) };
-      for (const f of ['key', 'model']) {
+      for (const f of ['key', 'model', 'url']) {
         if (typeof v[f] !== 'string') continue;
         if (v[f].trim()) kept[k][f] = v[f].trim();
         else delete kept[k][f];
@@ -299,13 +299,16 @@ export class ChatPanel {
     });
   }
 
-  // The provider, its model and key: what the settings show.
+  // The provider, its model, custom URL and key: what the settings show.
   renderSettings() {
     const p = PROVIDERS[this.provider];
     const box = this.el.querySelector('.chat-settings');
     const key = store.get(`${this.provider}.key`, '');
+    const url = store.get(`${this.provider}.url`, '');
     box.querySelector('[data-chat="provider"]').value = this.provider;
     box.querySelector('[data-chat="model"]').value = store.get(`${this.provider}.model`, p.model);
+    const urlEl = box.querySelector('[data-chat="url"]');
+    if (urlEl) urlEl.value = url;
     box.querySelector('[data-chat="key"]').value = key;
     const link = box.querySelector('[data-chat="keys"]');
     link.href = p.keys;
@@ -313,20 +316,26 @@ export class ChatPanel {
     this.el.querySelector('.chat-who').textContent = `${p.name} · ${store.get(`${this.provider}.model`, p.model)}`;
     // Whether a key is kept, by its last four: not the key itself.
     const state = box.querySelector('.chat-key-state');
-    state.textContent = key ? t('저장된 키: …{tail}', { tail: key.slice(-4) }) : t('아직 키가 없습니다. 아래에 넣고 저장을 누르세요');
-    state.classList.toggle('missing', !key);
-    if (!key) box.open = true;
+    const ready = Boolean(key || url);
+    state.textContent = key
+      ? t('저장된 키: …{tail}', { tail: key.slice(-4) })
+      : url
+        ? t('사용자 API 주소 사용 중')
+        : t('아직 키가 없습니다. 아래에 넣고 저장을 누르세요');
+    state.classList.toggle('missing', !ready);
+    if (!ready) box.open = true;
   }
 
-  // The key and model typed, kept by KYNEX.
+  // The key, model and optional endpoint URL typed, kept by KYNEX.
   async saveKey() {
     const box = this.el.querySelector('.chat-settings');
     const key = box.querySelector('[data-chat="key"]').value.trim();
     const model = box.querySelector('[data-chat="model"]').value.trim() || PROVIDERS[this.provider].model;
-    const a = await store.set({ provider: this.provider, [this.provider]: { key, model } });
+    const url = box.querySelector('[data-chat="url"]')?.value.trim() ?? '';
+    const a = await store.set({ provider: this.provider, [this.provider]: { key, model, url } });
     this.renderSettings();
-    this.ctx.toast(a.ok ? (key ? t('API 키를 저장했습니다') : t('API 키를 지웠습니다')) : t('저장하지 못했습니다: {error}', { error: a.error ?? '' }));
-    if (a.ok && key) {
+    this.ctx.toast(a.ok ? (key || url ? t('API 키를 저장했습니다') : t('API 키를 지웠습니다')) : t('저장하지 못했습니다: {error}', { error: a.error ?? '' }));
+    if (a.ok && (key || url)) {
       box.open = false;
       this.input.focus();
     }
@@ -342,6 +351,8 @@ export class ChatPanel {
       this.renderSettings();
     } else if (what === 'model') {
       store.set({ [this.provider]: { model: e.target.value.trim() || PROVIDERS[this.provider].model } }).then(() => this.renderSettings());
+    } else if (what === 'url') {
+      store.set({ [this.provider]: { url: e.target.value.trim() } }).then(() => this.renderSettings());
     }
   }
 
@@ -382,7 +393,8 @@ export class ChatPanel {
     const text = this.input.value.trim();
     if (!text || this.busy) return;
     const key = store.get(`${this.provider}.key`, '');
-    if (!key) {
+    const url = store.get(`${this.provider}.url`, '');
+    if (!key && !url) {
       const box = this.el.querySelector('.chat-settings');
       box.open = true;
       box.querySelector('[data-chat="key"]').focus();
@@ -394,7 +406,7 @@ export class ChatPanel {
     this.setBusy(true);
     const thinking = this.add('note', t('생각하는 중…'));
     try {
-      await this.converse(key, thinking);
+      await this.converse(key, url, thinking);
     } catch (err) {
       this.add('error', String(err.message ?? err));
     } finally {
@@ -405,12 +417,12 @@ export class ChatPanel {
 
   // Asks the provider, runs the tools it calls, and asks again, until it
   // answers without a tool, is stopped, or has taken too many rounds.
-  async converse(key, thinking) {
+  async converse(key, baseUrl, thinking) {
     const model = store.get(`${this.provider}.model`, PROVIDERS[this.provider].model);
     const ask = { claude: askClaude, openai: askOpenAI, gemini: askGemini }[this.provider];
     for (let round = 0; round < MAX_ROUNDS; round++) {
       if (this.stopped) return this.add('note', t('중지했습니다'));
-      const reply = await ask(key, model, this.history);
+      const reply = await ask(key, model, this.history, baseUrl);
       this.history.push(reply.turn);
       if (reply.text) this.add('assistant', reply.text);
       if (reply.notice) this.add('note', reply.notice);
@@ -585,8 +597,17 @@ export class ChatPanel {
         for (let k = 0; k < s * 4 && !this.stopped; k++) await sleep(250);
         return { ok: true, waited: s };
       }
-      case 'kynex_request':
-        return post(objectOf(a.request));
+      case 'kynex_request': {
+        const req = objectOf(a.request);
+        const blocked = new Set([
+          'ai_settings', 'plc_link', 'plc', 'signals', 'mirror', 'follow',
+          'share', 'update', 'project',
+        ]);
+        if (blocked.has(String(req.op ?? ''))) {
+          return { ok: false, error: `op '${req.op}' is not allowed from AI chat` };
+        }
+        return post(req);
+      }
       default:
         return { ok: false, error: `no tool ${name}` };
     }
@@ -683,7 +704,7 @@ async function failed(response, who) {
 // (kept whole, to send back unchanged — Claude's thinking blocks with
 // them), and tool results.
 
-async function askClaude(key, model, history) {
+async function askClaude(key, model, history, baseUrl = '') {
   const messages = [];
   for (const h of history) {
     if (h.role === 'user') messages.push({ role: 'user', content: h.text });
@@ -701,13 +722,13 @@ async function askClaude(key, model, history) {
   }
   // A model declined by its safeguards is answered by another, where the
   // model takes it.
-  const fallback = /^claude-(opus-5-5|opus-5|fable-5-1|sonnet-5-5)$/.test(model);
+  const fallback = !baseUrl && /^claude-(opus-5-5|opus-5|fable-5-1|sonnet-5-5)$/.test(model);
   const headers = {
     'content-type': 'application/json',
-    'x-api-key': key,
     'anthropic-version': '2026-10-21',
     'anthropic-dangerous-direct-browser-access': 'true',
   };
+  if (key) headers['x-api-key'] = key;
   if (fallback) headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
   const body = {
     model,
@@ -720,7 +741,8 @@ async function askClaude(key, model, history) {
     cache_control: { type: 'ephemeral' },
   };
   if (fallback) body.fallbacks = 'default';
-  const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
+  const endpoint = baseUrl ? `${baseUrl.replace(/\/+$/, '')}/v1/messages` : 'https://api.anthropic.com/v1/messages';
+  const response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
   if (!response.ok) throw await failed(response, 'Claude');
   const m = await response.json();
   const content = m.content ?? [];
@@ -735,9 +757,9 @@ async function askClaude(key, model, history) {
   return { turn: { role: 'assistant', claude: content }, text, calls, notice };
 }
 
-// --- GPT (Chat Completions) ---------------------------------------------
+// --- GPT / OpenAI-compatible (Chat Completions, Ollama, vLLM) -----------
 
-async function askOpenAI(key, model, history) {
+async function askOpenAI(key, model, history, baseUrl = '') {
   const messages = [{ role: 'system', content: SYSTEM }];
   for (const h of history) {
     if (h.role === 'user') messages.push({ role: 'user', content: h.text });
@@ -745,9 +767,15 @@ async function askOpenAI(key, model, history) {
     else if (h.role === 'tool')
       for (const { call, result } of h.results) messages.push({ role: 'tool', tool_call_id: call.id, content: resultText(result) });
   }
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const headers = { 'content-type': 'application/json' };
+  if (key) headers.authorization = `Bearer ${key}`;
+  const clean = baseUrl.replace(/\/+$/, '');
+  const endpoint = clean
+    ? (clean.endsWith('/chat/completions') ? clean : `${clean}/chat/completions`)
+    : 'https://api.openai.com/v1/chat/completions';
+  const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    headers,
     body: JSON.stringify({
       model,
       messages,
@@ -773,7 +801,7 @@ async function askOpenAI(key, model, history) {
 
 // --- Gemini (generateContent) -------------------------------------------
 
-async function askGemini(key, model, history) {
+async function askGemini(key, model, history, baseUrl = '') {
   const contents = [];
   for (const h of history) {
     if (h.role === 'user') contents.push({ role: 'user', parts: [{ text: h.text }] });
@@ -785,9 +813,12 @@ async function askGemini(key, model, history) {
         parts: h.results.map(({ call, result }) => ({ functionResponse: { name: call.name, response: { result: resultText(result) } } })),
       });
   }
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+  const headers = { 'content-type': 'application/json' };
+  if (key) headers['x-goog-api-key'] = key;
+  const host = baseUrl ? baseUrl.replace(/\/+$/, '') : 'https://generativelanguage.googleapis.com';
+  const response = await fetch(`${host}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+    headers,
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: SYSTEM }] },
       contents,

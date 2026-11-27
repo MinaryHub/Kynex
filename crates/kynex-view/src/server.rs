@@ -455,37 +455,52 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
     let mut cookie = String::new();
     let mut json_body = false;
     let mut octet_body = false;
+    let mut head_done = false;
     {
         let mut head = (&mut reader).take(HEAD_LIMIT);
-        head.read_line(&mut request)?;
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let n = head.read_line(&mut line)?;
-            if n == 0 || line == "\r\n" || line == "\n" {
-                break;
-            }
-            if let Some((name, value)) = line.split_once(':') {
-                let name = name.trim();
-                if name.eq_ignore_ascii_case("content-length") {
-                    length = value.trim().parse().unwrap_or(0);
-                } else if name.eq_ignore_ascii_case("host") {
-                    host = Some(value.trim().to_string());
-                } else if name.eq_ignore_ascii_case("cookie") {
-                    cookie = value.trim().to_string();
-                } else if name.eq_ignore_ascii_case("content-type") {
-                    let kind = value.trim().to_ascii_lowercase();
-                    json_body = kind.starts_with("application/json");
-                    octet_body = kind == "application/octet-stream";
+        let first_n = head.read_line(&mut request)?;
+        if first_n > 0 && request.ends_with('\n') {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let n = head.read_line(&mut line)?;
+                if n == 0 {
+                    break;
+                }
+                if line == "\r\n" || line == "\n" {
+                    head_done = true;
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    let name = name.trim();
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap_or(0);
+                    } else if name.eq_ignore_ascii_case("host") {
+                        host = Some(value.trim().to_string());
+                    } else if name.eq_ignore_ascii_case("cookie") {
+                        cookie = value.trim().to_string();
+                    } else if name.eq_ignore_ascii_case("content-type") {
+                        let kind = value.trim().to_ascii_lowercase();
+                        json_body = kind.starts_with("application/json");
+                        octet_body = kind == "application/octet-stream";
+                    }
                 }
             }
         }
+    }
+    let mut out = stream;
+    if !head_done {
+        return respond(
+            &mut out,
+            "431 Request Header Fields Too Large",
+            "text/plain",
+            b"header too large",
+        );
     }
     let mut parts = request.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/");
     let (path, query) = path.split_once('?').unwrap_or((path, ""));
-    let mut out = stream;
     if !host_allowed(host.as_deref()) {
         return respond(&mut out, "403 Forbidden", "text/plain", b"unknown host");
     }
@@ -530,7 +545,7 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
         let _ = bench.send(String::from_utf8_lossy(&body).into_owned());
         return respond(&mut out, "204 No Content", "text/plain", b"");
     }
-    if method == "POST" && path == "/robot" {
+    if method == "POST" && (path == "/robot" || path == "/api/v1/op") {
         // Only JSON: a page elsewhere can post a form here without asking,
         // but not JSON, which the browser first asks this server about —
         // and this server never says yes.
@@ -600,8 +615,18 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             return respond(&mut out, "404 Not Found", "text/plain", b"no robots here");
         };
         reader.get_mut().until = Instant::now() + UPLOAD_DEADLINE;
-        let mut file = vec![0u8; length];
-        reader.read_exact(&mut file)?;
+        // Grow incrementally as bytes arrive instead of pre-allocating up to
+        // IMPORT_LIMIT before reading anything from the peer.
+        let mut file = Vec::with_capacity(length.min(1 << 20));
+        (&mut reader).take(length as u64).read_to_end(&mut file)?;
+        if file.len() != length {
+            return respond(
+                &mut out,
+                "400 Bad Request",
+                "text/plain",
+                b"incomplete upload",
+            );
+        }
         let query = |key: &str| query_value(query, key);
         let body = json!({
             "op": "import",
@@ -653,6 +678,72 @@ fn serve(stream: TcpStream, hub: &Mutex<Hub>) -> io::Result<()> {
             hub.bin.clone().unwrap()
         };
         return respond(&mut out, "200 OK", "application/octet-stream", &bin);
+    }
+    if path == "/api/v1/health" {
+        let body = {
+            let hub = hub.lock().expect("viewer hub");
+            let status: serde_json::Value =
+                serde_json::from_str(&hub.status).unwrap_or(serde_json::Value::Null);
+            json!({
+                "ok": true,
+                "api": "v1",
+                "version": env!("CARGO_PKG_VERSION"),
+                "has_scene": hub.has_scene,
+                "status": status,
+            })
+            .to_string()
+        };
+        return respond(&mut out, "200 OK", "application/json", body.as_bytes());
+    }
+    if path == "/api/v1/state" {
+        let body = {
+            let hub = hub.lock().expect("viewer hub");
+            let mut map = serde_json::Map::new();
+            for (name, told) in &hub.states {
+                let raw = if local {
+                    Some(told.local.as_str())
+                } else {
+                    told.remote.as_deref()
+                };
+                if let Some(raw) = raw {
+                    let parsed = serde_json::from_str(raw)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
+                    map.insert(name.clone(), parsed);
+                }
+            }
+            let status: serde_json::Value =
+                serde_json::from_str(&hub.status).unwrap_or(serde_json::Value::Null);
+            json!({
+                "ok": true,
+                "api": "v1",
+                "has_scene": hub.has_scene,
+                "status": status,
+                "states": map,
+            })
+            .to_string()
+        };
+        return respond(&mut out, "200 OK", "application/json", body.as_bytes());
+    }
+    if let Some(channel) = path.strip_prefix("/api/v1/state/") {
+        let raw = {
+            let hub = hub.lock().expect("viewer hub");
+            hub.states.get(channel).and_then(|told| {
+                if local {
+                    Some(told.local.clone())
+                } else {
+                    told.remote.clone()
+                }
+            })
+        };
+        return match raw {
+            Some(body) => respond(&mut out, "200 OK", "application/json", body.as_bytes()),
+            None => respond(
+                &mut out,
+                "404 Not Found",
+                "application/json",
+                br#"{"ok":false,"error":"unknown state channel"}"#,
+            ),
+        };
     }
     if path == "/events" {
         return stream_events(out, hub, local, admitted_with);
@@ -1206,5 +1297,45 @@ mod tests {
         assert!(remote(Some("old")).starts_with("HTTP/1.1 403"));
         server.set_lan_key(None);
         assert!(remote(None).starts_with("HTTP/1.1 403"));
+    }
+
+    #[test]
+    fn api_v1_health_state_and_op_endpoints() {
+        let server = Server::start("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        server.state("cell", "{\"sunk\":12}");
+        server.state_for("share", "{\"code\":\"secret\"}", None);
+
+        let health = get(addr, "/api/v1/health");
+        assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+        assert!(health.contains("\"api\":\"v1\""), "{health}");
+        assert!(health.contains("\"ok\":true"), "{health}");
+
+        let state = get(addr, "/api/v1/state");
+        assert!(state.starts_with("HTTP/1.1 200"), "{state}");
+        assert!(state.contains("\"sunk\":12"), "{state}");
+
+        let cell = get(addr, "/api/v1/state/cell");
+        assert!(cell.starts_with("HTTP/1.1 200"), "{cell}");
+        assert!(cell.ends_with("{\"sunk\":12}"), "{cell}");
+
+        let missing = get(addr, "/api/v1/state/does_not_exist");
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+        let rx = server.robot_requests();
+        let handle = thread::spawn(move || {
+            let req = rx.recv().unwrap();
+            assert_eq!(req.body, "{\"op\":\"flow_summary\"}");
+            let _ = req.reply.send("{\"ok\":true,\"sunk\":12}".into());
+        });
+        let resp = post(
+            addr,
+            "/api/v1/op",
+            "application/json",
+            "{\"op\":\"flow_summary\"}",
+        );
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(resp.contains("\"sunk\":12"), "{resp}");
+        handle.join().unwrap();
     }
 }

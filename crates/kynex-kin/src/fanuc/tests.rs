@@ -286,3 +286,53 @@ fn an_axis_outside_the_arm_is_refused() {
     .unwrap_err();
     assert!(error.contains("외부축"), "{error}");
 }
+
+#[test]
+fn first_move_on_pallet_applies_offset_and_cartesian_pos() {
+    let (_, kin, base, flange) = lrmate();
+    let tool = kin.tool(flange, DAffine3::IDENTITY).unwrap();
+    let h = std::f64::consts::FRAC_PI_2;
+    let a = wp(MoveKind::Joint, [0.2, 0.3, 0.1, 0.0, -h, 0.0], 0.5, 0.0);
+    let b = wp(MoveKind::Linear, [0.3, 0.4, 0.2, 0.1, -1.4, 0.2], 0.25, 0.0);
+    let pallet = Places {
+        name: "infeed".into(),
+        at: vec![DVec3::new(0.4, 0.0, -0.2), DVec3::new(0.5, 0.0, -0.2)],
+    };
+    let ls = tp(
+        &kin,
+        &tool,
+        &Export {
+            name: "pallet_first",
+            moves: vec![
+                Move {
+                    name: "pick",
+                    waypoint: &a,
+                    before: Vec::new(),
+                    place: Some(Place { pallet: 0, from: 0 }),
+                },
+                Move {
+                    name: "drop",
+                    waypoint: &b,
+                    before: Vec::new(),
+                    place: None,
+                },
+            ],
+            close: true,
+            base,
+            flange,
+            trailing: vec![Op::Next { pallet: 0 }],
+            pallets: vec![pallet],
+            markers: false,
+        },
+    )
+    .unwrap();
+    // P[1] must be Cartesian and both moves to P[1] must apply Offset,PR[50].
+    assert!(
+        ls.contains("J P[1] 50% FINE Offset,PR[50]"),
+        "expected Offset,PR[50] on P[1]:\n{ls}"
+    );
+    assert!(
+        ls.contains("P[1]{\n   GP1:\n\tUF : 0, UT : 1,\t\tCONFIG"),
+        "expected P[1] in Cartesian form:\n{ls}"
+    );
+}

@@ -282,10 +282,13 @@ pub fn latest(kind: Kind) -> Result<Release, String> {
     parse_release(&v, kind)
 }
 
-/// Whether the file at `path` is `asset`: its size, and its SHA-256 when
-/// known.
+/// Whether the file at `path` is `asset`: its size and SHA-256 must match
+/// what the release states.
 fn verify(path: &Path, size: u64, sha256: Option<&str>) -> Result<(), String> {
     use sha2::{Digest, Sha256};
+    let want = sha256
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or("릴리스에 파일의 SHA-256 해시가 없어 검증할 수 없습니다")?;
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if size != 0 && bytes.len() as u64 != size {
         return Err(format!(
@@ -293,14 +296,12 @@ fn verify(path: &Path, size: u64, sha256: Option<&str>) -> Result<(), String> {
             bytes.len()
         ));
     }
-    if let Some(want) = sha256 {
-        let got: String = Sha256::digest(&bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        if got != want {
-            return Err("내려받은 파일의 SHA-256이 릴리스와 다릅니다".into());
-        }
+    let got: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if !got.eq_ignore_ascii_case(want) {
+        return Err("내려받은 파일의 SHA-256이 릴리스와 다릅니다".into());
     }
     Ok(())
 }
@@ -312,6 +313,9 @@ pub fn download(release: &Release, kind: Kind) -> Result<PathBuf, String> {
         .asset
         .as_ref()
         .ok_or("이 컴퓨터에 맞는 릴리스 파일이 없습니다")?;
+    if !asset.url.starts_with("https://") {
+        return Err("릴리스 파일 주소가 HTTPS가 아닙니다".into());
+    }
     let dir = updates_dir();
     let path = dir.join(&asset.name);
     if verify(&path, asset.size, asset.sha256.as_deref()).is_err() {
@@ -987,7 +991,9 @@ mod tests {
         std::fs::write(&file, b"abc").unwrap();
         let sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert!(verify(&file, 3, Some(sha)).is_ok());
-        assert!(verify(&file, 0, None).is_ok());
+        assert!(verify(&file, 0, Some(sha)).is_ok());
+        assert!(verify(&file, 0, None).is_err());
+        assert!(verify(&file, 3, Some("not-a-sha")).is_err());
         assert!(verify(&file, 4, Some(sha)).is_err());
         assert!(verify(&file, 3, Some(&sha.replace('b', "c"))).is_err());
         let _ = std::fs::remove_dir_all(&dir);

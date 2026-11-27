@@ -103,6 +103,12 @@ impl Posing {
                 // Programs from an older layout, and those in scenarios,
                 // brought up to this one.
                 let version = all["version"].as_u64().unwrap_or(1);
+                if version > program::FILE_VERSION {
+                    return Err(format!(
+                        "{}: 이 프로젝트는 더 새 버전의 KYNEX(형식 v{version})에서 저장되었습니다. KYNEX를 업데이트한 뒤 열어 주세요",
+                        from.display()
+                    ));
+                }
                 let mut programs = list("programs");
                 for p in &mut programs {
                     program::migrate(p, version);
@@ -303,9 +309,14 @@ impl Posing {
         }))
         .expect("programs serialise");
         let next = file.with_extension("json.new");
-        std::fs::write(&next, text)
-            .and_then(|_| std::fs::rename(&next, file))
-            .map_err(|e| format!("{}: {e}", file.display()))
+        (|| -> std::io::Result<()> {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&next)?;
+            f.write_all(text.as_bytes())?;
+            f.sync_all()?;
+            std::fs::rename(&next, file)
+        })()
+        .map_err(|e| format!("{}: {e}", file.display()))
     }
 
     /// `doc` with the held robots posed, or `None` when none are and `doc`
@@ -1610,5 +1621,16 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn future_project_schema_version_is_refused() {
+        let dir = std::env::temp_dir().join(format!("kynex-future-v-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("future.json");
+        std::fs::write(&file, r#"{"version": 999, "programs": []}"#).unwrap();
+        let err = Posing::with_file(&file, &file).unwrap_err();
+        assert!(err.contains("999"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

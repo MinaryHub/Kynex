@@ -163,14 +163,54 @@ export class RobotPanel {
       if (this.dragging) this.pulled();
     });
 
+    this.activeRoot = null;
     this.host.addEventListener('pointerdown', (e) => this.pointerDown(e));
     this.host.addEventListener('click', (e) => this.clicked(e));
     this.host.addEventListener('change', (e) => this.optionChanged(e));
+    // Remember each robot's collapsible manual/RTDE section state across redraws.
+    this.host.addEventListener(
+      'toggle',
+      (e) => {
+        const details = e.target;
+        if (!(details instanceof HTMLDetailsElement)) return;
+        const r = this.robotOf(details);
+        if (!r) return;
+        const ui = this.uiOf(r);
+        if (details.classList.contains('robot-manual')) ui.manualOpen = details.open;
+        else if (details.classList.contains('robot-follow')) ui.followOpen = details.open;
+      },
+      true,
+    );
     // Anywhere else clicked: the keys are not the program's.
     document.addEventListener('pointerdown', (e) => {
       if (!this.host.contains(e.target)) this.keysFor = null;
     });
     this.wireDrag();
+  }
+
+  // Expands the robot containing `uid` (if any) when multiple robots exist,
+  // returning its root UID or null.
+  focusByObject(uid) {
+    if (uid == null || !this.robots.length) return null;
+    const records = this.ctx.records;
+    for (let at = uid, n = 0; at != null && n < 64; at = records.get(at)?.parent, n++) {
+      const r = this.robots.find((x) => x.root === at);
+      if (r) {
+        this.activeRoot = r.root;
+        this.applyActive();
+        return r.root;
+      }
+    }
+    return null;
+  }
+
+  // Applies single-open accordion state across robot cards when > 1 robot.
+  applyActive() {
+    const multi = this.robots.length > 1;
+    for (const section of this.host.querySelectorAll('.robot')) {
+      section.classList.toggle('collapsible', multi);
+      section.classList.toggle('collapsed', multi && section.dataset.root !== this.activeRoot);
+    }
   }
 
   // Whether the pointer is the handle's: a click on it picks nothing.
@@ -206,7 +246,17 @@ export class RobotPanel {
       const dof = r.joints.filter((j) => j.moves).length;
       // An arm that cannot hold an orientation everywhere is asked only for
       // the point.
-      ui = { step: 1, frame: 'world', lock: dof >= 6, offset: 0, mode: 'translate', status: '', bad: false };
+      ui = {
+        step: 1,
+        frame: 'world',
+        lock: dof >= 6,
+        offset: 0,
+        mode: 'translate',
+        status: '',
+        bad: false,
+        manualOpen: false,
+        followOpen: false,
+      };
       this.ui.set(r.root, ui);
     }
     return ui;
@@ -351,6 +401,8 @@ export class RobotPanel {
       const box = section.querySelector('.robot-contacts');
       box.hidden = !mine.length;
       section.classList.toggle('in-contact', mine.length > 0);
+      const dot = section.querySelector('.robot-dot');
+      if (dot) dot.hidden = !mine.length;
       if (!mine.length) continue;
       // Each pair once, however many places they meet.
       const pairs = [...new Set(mine.map((c) => `${tr(c.part_name)} ↔ ${tr(c.other_name)}`))];
@@ -387,6 +439,7 @@ export class RobotPanel {
   setRobots(list) {
     this.robots = list;
     for (const root of [...this.ui.keys()]) if (!list.some((r) => r.root === root)) this.ui.delete(root);
+    if (!list.some((r) => r.root === this.activeRoot)) this.activeRoot = list[0]?.root ?? null;
     if (this.handleRoot && !list.some((r) => r.root === this.handleRoot && r.tool)) this.showHandle(null);
     this.render();
     // A robot gone: its paths with it (drawn again only when which robots
@@ -402,6 +455,11 @@ export class RobotPanel {
     const { escapeHtml } = this.ctx;
     const host = this.host;
     document.getElementById('robot-count').textContent = this.robots.length;
+    const topBadge = document.getElementById('toggle-robots-count');
+    if (topBadge) {
+      topBadge.textContent = this.robots.length;
+      topBadge.hidden = this.robots.length === 0;
+    }
     if (!this.robots.length) {
       host.dataset.shape = '';
       host.innerHTML = `<p class="muted pad">${t('장면에 로봇이 없습니다. 라이브러리에서 로봇을 놓으면 관절과 프로그램이 여기에 나타납니다.')}</p>`;
@@ -409,9 +467,12 @@ export class RobotPanel {
     }
     // Same robots and joints as drawn: update the numbers in place, so a pose
     // streaming in does not rebuild the panel under the pointer.
-    const shape = this.robots
-      .map((r) => [r.root, r.tool, this.toolOf(r), ...this.grippersOf(r).map((g) => g.object), ...r.joints.map((j) => j.uid + j.kind)].join(','))
-      .join('|');
+    const multi = this.robots.length > 1;
+    const shape =
+      (multi ? 'M:' : 'S:') +
+      this.robots
+        .map((r) => [r.root, r.tool, this.toolOf(r), ...this.grippersOf(r).map((g) => g.object), ...r.joints.map((j) => j.uid + j.kind)].join(','))
+        .join('|');
     if (host.dataset.shape !== shape) {
       host.dataset.shape = shape;
       host.innerHTML = this.robots.map((r) => this.markup(r, escapeHtml)).join('');
@@ -419,6 +480,7 @@ export class RobotPanel {
       this.renderPrograms();
       this.renderContacts();
     }
+    this.applyActive();
     this.refresh();
   }
 
@@ -450,133 +512,156 @@ export class RobotPanel {
         <span>${label}</span>
         <button class="jog-btn" data-jog="${axis}" data-dir="1" aria-label="${label} +">+</button>
       </div>`;
+    const multi = this.robots.length > 1;
+    const collapsed = multi && r.root !== this.activeRoot;
+    const followOpen = ui.followOpen || !!this.following?.[r.root];
     return `
-      <section class="robot" data-root="${escapeHtml(r.root)}">
+      <section class="robot${multi ? ' collapsible' : ''}${collapsed ? ' collapsed' : ''}" data-root="${escapeHtml(r.root)}">
         <div class="robot-head">
+          ${multi ? '<span class="robot-chev" aria-hidden="true">▾</span>' : ''}
+          <span class="robot-dot" hidden aria-hidden="true"></span>
           <span class="robot-name">${escapeHtml(tr(r.name))}</span>
           <span class="robot-meta">${r.joints.filter((j) => j.moves).length} DOF${r.mass ? ` · ${r.mass.toFixed(1)} kg` : ''}</span>
         </div>
-        <div class="robot-contacts" hidden></div>
-        <div class="robot-local" hidden>
-          <span class="local-badge">${t('움직인 자세')}</span>
-          <span class="local-note">${t('배치(장면)의 자세와 다릅니다. 지점으로 남기려면 + MoveJ·MoveL')}</span>
-          <button class="text-btn" data-act="session">${t('원래 자세로')}</button>
-        </div>
-        <ul class="joints">
-          ${r.joints
-            .map(
-              (j) => `
-            <li class="joint${j.moves ? ' movable' : ''}" data-uid="${escapeHtml(j.uid)}">
-              <span class="kind ${j.kind === 'fixed' ? 'fixed' : ''}" title="${j.kind}">${KIND_CHIP[j.kind] || '?'}</span>
-              <span class="jname">${escapeHtml(tr(j.name))}</span>
-              <span class="jval"></span>
-              ${j.moves ? `<span class="track" title="${t('끌어서 관절 이동')}"><span class="fill"></span><span class="mark"></span></span><span class="limits"><span class="lo"></span><span class="hi"></span></span>` : ''}
-            </li>`,
-            )
-            .join('')}
-        </ul>
-        ${
-          r.tool
-            ? `
-        <div class="tcp">
-          <div class="tcp-head">
-            <span class="tcp-title">TCP</span>
-            ${toolPick}
-            <button class="chip-btn" data-act="handle" aria-pressed="false" title="${t('장면에서 끌어서 TCP 이동')}">${t('핸들')}</button>
-            <button class="chip-btn" data-act="reach" aria-pressed="false" title="${t('관절 한계 안에서 플랜지가 닿는 범위 (자기 충돌은 보지 않음)')}">${t('범위')}</button>
+        <div class="robot-body">
+          <div class="robot-contacts" hidden></div>
+          <div class="robot-local" hidden>
+            <span class="local-badge">${t('움직인 자세')}</span>
+            <span class="local-note">${t('배치(장면)의 자세와 다릅니다. 지점으로 남기려면 + MoveJ·MoveL')}</span>
+            <button class="text-btn" data-act="session">${t('원래 자세로')}</button>
           </div>
-          ${gripRows ? `<div class="grippers">${gripRows}</div>` : ''}
-          <dl class="tcp-pose num">
-            <dt>X</dt><dd data-v="x"></dd><dt>Y</dt><dd data-v="y"></dd><dt>Z</dt><dd data-v="z"></dd>
-            <dt>Rx</dt><dd data-v="rx"></dd><dt>Ry</dt><dd data-v="ry"></dd><dt>Rz</dt><dd data-v="rz"></dd>
-          </dl>
-          <div class="jog">
-            ${jog('x', 'X')}${jog('rx', 'Rx')}
-            ${jog('y', 'Y')}${jog('ry', 'Ry')}
-            ${jog('z', 'Z')}${jog('rz', 'Rz')}
-          </div>
-          <div class="tcp-opts">
-            <div class="seg" role="group" aria-label="${t('좌표계')}">
-              <button data-frame="world" class="${ui.frame === 'world' ? 'on' : ''}">${t('월드')}</button>
-              <button data-frame="tool" class="${ui.frame === 'tool' ? 'on' : ''}">${t('툴')}</button>
+          ${
+            r.tool
+              ? `
+          <div class="tcp-quick">
+            <div class="tcp-head">
+              <span class="tcp-title">TCP</span>
+              ${toolPick}
+              <button class="chip-btn" data-act="handle" aria-pressed="false" title="${t('장면에서 끌어서 TCP 이동')}">${t('핸들')}</button>
+              <button class="chip-btn" data-act="reach" aria-pressed="false" title="${t('관절 한계 안에서 플랜지가 닿는 범위 (자기 충돌은 보지 않음)')}">${t('범위')}</button>
             </div>
-            <select data-opt="step" aria-label="${t('간격')}">
-              ${STEPS.map((s, i) => `<option value="${i}"${i === ui.step ? ' selected' : ''}>${s.label}</option>`).join('')}
-            </select>
+            <div class="handle-modes seg" role="group" aria-label="${t('핸들')}" hidden>
+              <button data-mode="translate" class="${ui.mode === 'translate' ? 'on' : ''}">${t('이동')}</button>
+              <button data-mode="rotate" class="${ui.mode === 'rotate' ? 'on' : ''}">${t('회전')}</button>
+            </div>
+            ${gripRows ? `<div class="grippers">${gripRows}</div>` : ''}
+            <div class="tcp-status"></div>
+            <div class="tcp-sing" hidden></div>
           </div>
-          <div class="tcp-opts">
-            <label class="check"><input type="checkbox" data-opt="lock"${ui.lock ? ' checked' : ''}> ${t('이동할 때 자세 유지')}</label>
-            <label class="offset">${t('오프셋 Z')} <input type="number" data-opt="offset" value="${ui.offset}" step="1"> mm</label>
-          </div>
-          <div class="handle-modes seg" role="group" aria-label="${t('핸들')}" hidden>
-            <button data-mode="translate" class="${ui.mode === 'translate' ? 'on' : ''}">${t('이동')}</button>
-            <button data-mode="rotate" class="${ui.mode === 'rotate' ? 'on' : ''}">${t('회전')}</button>
-          </div>
-          <div class="tcp-status"></div>
-          <div class="tcp-sing" hidden></div>
+          <div class="program">
+            <div class="prog-head">
+              <span class="section-title">${t('프로그램')}</span>
+              <select class="routine-pick" data-opt="routine" aria-label="${t('프로그램 고르기')}" title="${t('이 로봇의 프로그램: 메인과 서브루틴')}"></select>
+              <button class="icon-mini" data-act="routine-new" title="${t('새 서브루틴')}">+</button>
+              <button class="icon-mini" data-act="routine-rename" title="${t('이름 바꾸기')}">✎</button>
+              <button class="icon-mini" data-act="routine-delete" title="${t('이 서브루틴 지우기')}">✕</button>
+              <span class="prog-cycle num"></span>
+            </div>
+            <div class="prog-actions">
+              <button class="chip-btn" data-act="teach" data-kind="joint" title="${t('현재 자세를 관절 이동(MoveJ) 지점으로 추가')}">+ MoveJ</button>
+              <button class="chip-btn" data-act="teach" data-kind="linear" title="${t('현재 자세를 직선 이동(MoveL) 지점으로 추가')}">+ MoveL</button>
+              <button class="chip-btn" data-act="teach" data-kind="circular" title="${t('원호 이동(MoveC): 경유점 자세에서 한 번, 끝 자세에서 한 번 누릅니다')}">+ MoveC</button>
+              <button class="chip-btn" data-act="edge" aria-pressed="false" title="${t('장면에서 부품의 모서리 가까이를 눌러, 그 모서리를 따라가는 경로(디버링·실링·용접)를 만듭니다')}">${t('모서리')}</button>
+              <select class="step-pick" data-opt="newstep" aria-label="${t('동작 추가')}" title="${t('고른 단계 다음에 동작을 넣습니다')}">
+                <option value="">${t('+ 동작')}</option>
+                <option value="grip">${t('그리퍼 잡기')}</option>
+                <option value="release">${t('그리퍼 놓기')}</option>
+                <option value="command">${t('장비 명령')}</option>
+                <option value="wait">${t('신호 대기')}</option>
+                <option value="delay">${t('시간 대기')}</option>
+                <option value="next">${t('팔레트 다음 칸')}</option>
+                <option value="drive">${t('AMR 주행')}</option>
+                <option value="turn">${t('포지셔너 회전')}</option>
+                <option value="call">${t('서브루틴 호출')}</option>
+                <option value="signal_set">${t('PLC 신호 쓰기')}</option>
+                <option value="signal_wait">${t('PLC 신호 대기')}</option>
+                <optgroup label="${t('흐름')}">
+                  <option value="if">${t('만약 (조건)')}</option>
+                  <option value="else">${t('아니면')}</option>
+                  <option value="while">${t('반복 (조건)')}</option>
+                  <option value="var_set">${t('변수 정하기')}</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="copy-bar" hidden></div>
+            <div class="edge-bar" hidden></div>
+            <ol class="points"></ol>
+            <div class="run-bar">
+              <button class="chip-btn play" data-act="play" aria-pressed="false">${t('▶ 실행')}</button>
+              <select data-opt="clock" aria-label="${t('배속')}" title="${t('시뮬레이션 배속')}">
+                ${SPEEDS.map((v) => `<option value="${v}">${t('{v}배속', { v })}</option>`).join('')}
+              </select>
+              <span class="run-state"></span>
+            </div>
+            <div class="prog-foot">
+              <label class="check" title="${t('마지막 지점에서 첫 지점으로 돌아와 반복합니다')}"><input type="checkbox" data-opt="close"> ${t('순환 재생')}</label>
+              <button class="text-btn quiet" data-act="export" data-vendor="ur" title="${t('UR 컨트롤러용 URScript 파일로 내려받기')}">URScript</button>
+              <button class="text-btn quiet" data-act="export" data-vendor="abb" title="${t('ABB 컨트롤러용 RAPID 모듈로 내려받기')}">RAPID</button>
+              <button class="text-btn quiet" data-act="export" data-vendor="doosan" title="${t('두산 로보틱스 컨트롤러용 DRL 프로그램으로 내려받기')}">DRL</button>
+              <button class="text-btn quiet" data-act="export" data-vendor="fanuc" title="${t('FANUC 컨트롤러용 TP 프로그램(LS)으로 내려받기')}">TP</button>
+              <button class="text-btn quiet danger" data-act="clear">${t('모두 지우기')}</button>
+            </div>
+          </div>`
+              : ''
+          }
+          <details class="robot-manual"${ui.manualOpen ? ' open' : ''}>
+            <summary>${t('수동 조작 · 관절 / TCP 조그')}<span class="limit-badge" hidden>${t('⚠ 한계 초과')}</span></summary>
+            <ul class="joints">
+              ${r.joints
+                .map(
+                  (j) => `
+                <li class="joint${j.moves ? ' movable' : ''}" data-uid="${escapeHtml(j.uid)}">
+                  <span class="kind ${j.kind === 'fixed' ? 'fixed' : ''}" title="${j.kind}">${KIND_CHIP[j.kind] || '?'}</span>
+                  <span class="jname">${escapeHtml(tr(j.name))}</span>
+                  <span class="jval"></span>
+                  ${j.moves ? `<span class="track" title="${t('끌어서 관절 이동')}"><span class="fill"></span><span class="mark"></span></span><span class="limits"><span class="lo"></span><span class="hi"></span></span>` : ''}
+                </li>`,
+                )
+                .join('')}
+            </ul>
+            ${
+              r.tool
+                ? `
+            <div class="tcp-manual">
+              <dl class="tcp-pose num">
+                <dt>X</dt><dd data-v="x"></dd><dt>Y</dt><dd data-v="y"></dd><dt>Z</dt><dd data-v="z"></dd>
+                <dt>Rx</dt><dd data-v="rx"></dd><dt>Ry</dt><dd data-v="ry"></dd><dt>Rz</dt><dd data-v="rz"></dd>
+              </dl>
+              <div class="jog">
+                ${jog('x', 'X')}${jog('rx', 'Rx')}
+                ${jog('y', 'Y')}${jog('ry', 'Ry')}
+                ${jog('z', 'Z')}${jog('rz', 'Rz')}
+              </div>
+              <div class="tcp-opts">
+                <div class="seg" role="group" aria-label="${t('좌표계')}">
+                  <button data-frame="world" class="${ui.frame === 'world' ? 'on' : ''}">${t('월드')}</button>
+                  <button data-frame="tool" class="${ui.frame === 'tool' ? 'on' : ''}">${t('툴')}</button>
+                </div>
+                <select data-opt="step" aria-label="${t('간격')}">
+                  ${STEPS.map((s, i) => `<option value="${i}"${i === ui.step ? ' selected' : ''}>${s.label}</option>`).join('')}
+                </select>
+              </div>
+              <div class="tcp-opts">
+                <label class="check"><input type="checkbox" data-opt="lock"${ui.lock ? ' checked' : ''}> ${t('이동할 때 자세 유지')}</label>
+                <label class="offset">${t('오프셋 Z')} <input type="number" data-opt="offset" value="${ui.offset}" step="1"> mm</label>
+              </div>
+            </div>`
+                : ''
+            }
+          </details>
+          ${
+            r.tool
+              ? `
+          <details class="robot-follow"${followOpen ? ' open' : ''}>
+            <summary>${t('실제 로봇 연결 (RTDE)')}<span class="follow-state"></span></summary>
+            <div class="follow" title="${t('실제 UR 로봇의 관절과 그리퍼 출력을 RTDE(포트 30004)로 받아 이 로봇을 똑같이 움직입니다. 로봇에는 아무것도 보내지 않습니다')}">
+              <input class="follow-host" type="text" data-opt="follow-host" maxlength="100" spellcheck="false" placeholder="${t('UR 로봇 IP (예: 192.168.0.10)')}" aria-label="${t('실제 로봇 주소')}" value="${escapeHtml(this.followHost(r.root))}">
+              <button class="chip-btn" data-act="follow">${t('따라가기')}</button>
+            </div>
+          </details>`
+              : ''
+          }
         </div>
-        <div class="follow" title="${t('실제 UR 로봇의 관절과 그리퍼 출력을 RTDE(포트 30004)로 받아 이 로봇을 똑같이 움직입니다. 로봇에는 아무것도 보내지 않습니다')}">
-          <span class="section-title">${t('실제 로봇')}</span>
-          <input class="follow-host" type="text" data-opt="follow-host" maxlength="100" spellcheck="false" placeholder="${t('UR 로봇 IP (예: 192.168.0.10)')}" aria-label="${t('실제 로봇 주소')}" value="${escapeHtml(this.followHost(r.root))}">
-          <button class="chip-btn" data-act="follow">${t('따라가기')}</button>
-          <span class="follow-state"></span>
-        </div>
-        <div class="program">
-          <div class="prog-head">
-            <span class="section-title">${t('프로그램')}</span>
-            <select class="routine-pick" data-opt="routine" aria-label="${t('프로그램 고르기')}" title="${t('이 로봇의 프로그램: 메인과 서브루틴')}"></select>
-            <button class="icon-mini" data-act="routine-new" title="${t('새 서브루틴')}">+</button>
-            <button class="icon-mini" data-act="routine-rename" title="${t('이름 바꾸기')}">✎</button>
-            <button class="icon-mini" data-act="routine-delete" title="${t('이 서브루틴 지우기')}">✕</button>
-            <span class="prog-cycle num"></span>
-          </div>
-          <div class="prog-actions">
-            <button class="chip-btn" data-act="teach" data-kind="joint" title="${t('현재 자세를 관절 이동(MoveJ) 지점으로 추가')}">+ MoveJ</button>
-            <button class="chip-btn" data-act="teach" data-kind="linear" title="${t('현재 자세를 직선 이동(MoveL) 지점으로 추가')}">+ MoveL</button>
-            <button class="chip-btn" data-act="teach" data-kind="circular" title="${t('원호 이동(MoveC): 경유점 자세에서 한 번, 끝 자세에서 한 번 누릅니다')}">+ MoveC</button>
-            <button class="chip-btn" data-act="edge" aria-pressed="false" title="${t('장면에서 부품의 모서리 가까이를 눌러, 그 모서리를 따라가는 경로(디버링·실링·용접)를 만듭니다')}">${t('모서리')}</button>
-            <select class="step-pick" data-opt="newstep" aria-label="${t('동작 추가')}" title="${t('고른 단계 다음에 동작을 넣습니다')}">
-              <option value="">${t('+ 동작')}</option>
-              <option value="grip">${t('그리퍼 잡기')}</option>
-              <option value="release">${t('그리퍼 놓기')}</option>
-              <option value="command">${t('장비 명령')}</option>
-              <option value="wait">${t('신호 대기')}</option>
-              <option value="delay">${t('시간 대기')}</option>
-              <option value="next">${t('팔레트 다음 칸')}</option>
-              <option value="drive">${t('AMR 주행')}</option>
-              <option value="turn">${t('포지셔너 회전')}</option>
-              <option value="call">${t('서브루틴 호출')}</option>
-              <option value="signal_set">${t('PLC 신호 쓰기')}</option>
-              <option value="signal_wait">${t('PLC 신호 대기')}</option>
-              <optgroup label="${t('흐름')}">
-                <option value="if">${t('만약 (조건)')}</option>
-                <option value="else">${t('아니면')}</option>
-                <option value="while">${t('반복 (조건)')}</option>
-                <option value="var_set">${t('변수 정하기')}</option>
-              </optgroup>
-            </select>
-          </div>
-          <div class="copy-bar" hidden></div>
-          <div class="edge-bar" hidden></div>
-          <ol class="points"></ol>
-          <div class="run-bar">
-            <button class="chip-btn play" data-act="play" aria-pressed="false">${t('▶ 실행')}</button>
-            <select data-opt="clock" aria-label="${t('배속')}" title="${t('시뮬레이션 배속')}">
-              ${SPEEDS.map((v) => `<option value="${v}">${t('{v}배속', { v })}</option>`).join('')}
-            </select>
-            <span class="run-state"></span>
-          </div>
-          <div class="prog-foot">
-            <label class="check" title="${t('마지막 지점에서 첫 지점으로 돌아와 반복합니다')}"><input type="checkbox" data-opt="close"> ${t('순환 재생')}</label>
-            <button class="text-btn quiet" data-act="export" data-vendor="ur" title="${t('UR 컨트롤러용 URScript 파일로 내려받기')}">URScript</button>
-            <button class="text-btn quiet" data-act="export" data-vendor="abb" title="${t('ABB 컨트롤러용 RAPID 모듈로 내려받기')}">RAPID</button>
-            <button class="text-btn quiet" data-act="export" data-vendor="doosan" title="${t('두산 로보틱스 컨트롤러용 DRL 프로그램으로 내려받기')}">DRL</button>
-            <button class="text-btn quiet" data-act="export" data-vendor="fanuc" title="${t('FANUC 컨트롤러용 TP 프로그램(LS)으로 내려받기')}">TP</button>
-            <button class="text-btn quiet danger" data-act="clear">${t('모두 지우기')}</button>
-          </div>
-        </div>`
-            : ''
-        }
       </section>`;
   }
 
@@ -1132,23 +1217,27 @@ export class RobotPanel {
         row.querySelector('.lo').textContent = limited ? limitText(j, j.lower) : '';
         row.querySelector('.hi').textContent = limited ? limitText(j, j.upper) : '';
       }
+      const limitBadge = section.querySelector('.robot-manual .limit-badge');
+      if (limitBadge) limitBadge.hidden = !r.joints.some((j) => j.out_of_limits);
       const tcp = this.tcpOf(r);
-      const box = section.querySelector('.tcp');
-      if (!tcp || !box) continue;
+      const status = section.querySelector('.tcp-status');
+      if (!tcp || !status) continue;
       const e = new THREE.Euler().setFromQuaternion(tcp.quaternion, 'ZYX');
       const v = { x: mm(tcp.position.x), y: mm(tcp.position.y), z: mm(tcp.position.z), rx: deg(e.x), ry: deg(e.y), rz: deg(e.z) };
-      for (const [k, text] of Object.entries(v)) box.querySelector(`[data-v="${k}"]`).textContent = text;
-      for (const row of box.querySelectorAll('.grip-row')) {
+      for (const [k, text] of Object.entries(v)) {
+        const el = section.querySelector(`[data-v="${k}"]`);
+        if (el) el.textContent = text;
+      }
+      for (const row of section.querySelectorAll('.grip-row')) {
         const g = this.cell.components.find((c) => c.object === row.dataset.gripper);
         row.querySelector('.grip-state').textContent = g?.holding ? t('부품 잡음') : t('비어 있음');
         row.classList.toggle('holding', !!g?.holding);
       }
       const ui = this.uiOf(r);
-      const status = box.querySelector('.tcp-status');
       status.textContent = ui.status;
       status.classList.toggle('bad', ui.bad);
       // Near a singularity, as posed: the joints that would race there.
-      const sing = box.querySelector('.tcp-sing');
+      const sing = section.querySelector('.tcp-sing');
       const d = r.dexterity;
       sing.hidden = !d?.near;
       if (d?.near) {
@@ -1552,6 +1641,11 @@ export class RobotPanel {
   clicked(e) {
     const r = this.robotOf(e.target);
     if (!r) return;
+    if (e.target.closest('.robot-head') && this.robots.length > 1) {
+      this.activeRoot = this.activeRoot === r.root ? null : r.root;
+      this.applyActive();
+      return;
+    }
     const ui = this.uiOf(r);
     const act = e.target.closest('[data-act]')?.dataset.act;
     const row = e.target.closest('.point[data-index]');

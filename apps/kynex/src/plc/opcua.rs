@@ -55,11 +55,14 @@ const MAX_CHUNKS: u32 = 128;
 /// How deep diagnostic information may nest.
 const MAX_DIAGNOSTIC_DEPTH: usize = 16;
 
-/// A node's identity: its namespace, and a number or a name in it.
+/// A node's identity: its namespace, and a number, name, GUID or opaque
+/// byte string in it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeId {
     Numeric(u16, u32),
     String(u16, String),
+    Guid(u16, [u8; 16]),
+    Opaque(u16, Vec<u8>),
 }
 
 impl NodeId {
@@ -102,6 +105,21 @@ impl std::fmt::Display for NodeId {
         match self {
             NodeId::Numeric(ns, i) => write!(f, "ns={ns};i={i}"),
             NodeId::String(ns, s) => write!(f, "ns={ns};s={s}"),
+            NodeId::Guid(ns, g) => {
+                let d1 = u32::from_le_bytes([g[0], g[1], g[2], g[3]]);
+                let d2 = u16::from_le_bytes([g[4], g[5]]);
+                let d3 = u16::from_le_bytes([g[6], g[7]]);
+                write!(
+                    f,
+                    "ns={ns};g={d1:08x}-{d2:04x}-{d3:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]
+                )
+            }
+            NodeId::Opaque(ns, b) => {
+                use base64::Engine;
+                let encoded = base64::engine::general_purpose::STANDARD.encode(b);
+                write!(f, "ns={ns};b={encoded}")
+            }
         }
     }
 }
@@ -157,6 +175,16 @@ impl Out {
             }
             NodeId::Numeric(ns, i) => self.u8(0x02).u16(*ns).u32(*i),
             NodeId::String(ns, s) => self.u8(0x03).u16(*ns).string(Some(s)),
+            NodeId::Guid(ns, g) => {
+                self.u8(0x04).u16(*ns);
+                self.0.extend_from_slice(g);
+                self
+            }
+            NodeId::Opaque(ns, b) => {
+                self.u8(0x05).u16(*ns).i32(b.len() as i32);
+                self.0.extend_from_slice(b);
+                self
+            }
         }
     }
     /// The node id of a type's binary encoding, before a request's body.
@@ -246,16 +274,15 @@ impl<'a> In<'a> {
                 let ns = self.u16()?;
                 NodeId::String(ns, self.string()?.unwrap_or_default())
             }
-            // A GUID or opaque bytes: kept as a name nobody gave.
             4 => {
                 let ns = self.u16()?;
-                self.skip(16)?;
-                NodeId::String(ns, "<guid>".into())
+                let raw: [u8; 16] = self.take(16)?.try_into().unwrap();
+                NodeId::Guid(ns, raw)
             }
             5 => {
                 let ns = self.u16()?;
-                self.bytes()?;
-                NodeId::String(ns, "<opaque>".into())
+                let raw = self.bytes()?.unwrap_or_default().to_vec();
+                NodeId::Opaque(ns, raw)
             }
             k => return Err(format!("OPC UA: 모르는 노드 ID 형식 {k}")),
         };
@@ -541,6 +568,8 @@ pub struct Session {
     server_sequence: Option<u32>,
     /// Each node's value type, as last read (OPC 10000-6 built-in type ids).
     types: std::collections::HashMap<NodeId, u8>,
+    /// When the active SecureChannel token should be renewed (75% of revised lifetime).
+    token_renew_at: Option<std::time::Instant>,
 }
 
 /// A session created: the server's endpoints, its nonce and its certificate.
@@ -557,6 +586,7 @@ impl Session {
             secure: None,
             server_sequence: None,
             types: Default::default(),
+            token_renew_at: None,
         }
     }
 
@@ -565,7 +595,7 @@ impl Session {
     pub fn endpoints(stream: TcpStream, url: &str) -> Result<Vec<Endpoint>, String> {
         let mut s = Self::new(stream);
         s.hello(url)?;
-        s.open_channel()?;
+        s.open_channel(false)?;
         let mut body = Out::default();
         body.type_id(id::GET_ENDPOINTS_REQUEST);
         let handle = s.next_request();
@@ -602,7 +632,7 @@ impl Session {
             });
         }
         s.hello(url)?;
-        s.open_channel()?;
+        s.open_channel(false)?;
         let (endpoints, server_nonce, server_cert) = s.create_session(url)?;
         // The user token the server takes, on an endpoint kept as this
         // channel is.
@@ -656,13 +686,18 @@ impl Session {
         }
     }
 
-    fn open_channel(&mut self) -> Result<(), String> {
+    fn open_channel(&mut self, renew: bool) -> Result<(), String> {
         let handle = self.next_request();
         let mut body = Out::default();
         body.type_id(id::OPEN_REQUEST);
         body.header(&NodeId::Numeric(0, 0), handle)
             .u32(0) // client protocol version
-            .u32(0); // issue
+            .u32(u32::from(renew)); // 0 = issue, 1 = renew
+        if renew {
+            if let Some(c) = self.secure.as_mut() {
+                c.client_nonce = super::secure::nonce();
+            }
+        }
         match &self.secure {
             Some(c) => {
                 body.u32(c.mode.code());
@@ -674,7 +709,7 @@ impl Session {
             }
         }
         body.u32(3_600_000); // lifetime, ms
-        self.sequence += 1;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
         let (sequence, request) = (self.sequence, self.request);
         let message = self.seal_asymmetric(&body.0, sequence, request)?;
         self.stream.write_all(&message).map_err(|e| e.to_string())?;
@@ -690,7 +725,10 @@ impl Session {
         r.u32()?; // the token's channel
         self.token_id = r.u32()?;
         r.skip(8)?; // created at
-        r.u32()?; // revised lifetime
+        let revised_lifetime = r.u32()?;
+        let renew_ms = ((revised_lifetime as f64) * 0.75).max(10_000.0) as u64;
+        self.token_renew_at =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(renew_ms));
         let server_nonce = r.bytes()?.unwrap_or_default().to_vec();
         if let Some(c) = self.secure.as_mut() {
             if server_nonce.len() != 32 {
@@ -962,47 +1000,89 @@ impl Session {
     /// in the node's own type — read once to learn it (an Int32 when it
     /// holds nothing yet).
     pub fn write(&mut self, node: &NodeId, value: i64, number: bool) -> Result<(), String> {
-        let t = if number {
-            match self.types.get(node) {
-                Some(t) => *t,
-                None => {
-                    let _ = self.read(std::slice::from_ref(node))?;
-                    *self.types.get(node).unwrap_or(&6)
-                }
-            }
-        } else {
-            1
-        };
+        let mut results = self.write_batch(&[(node.clone(), value, number)])?;
+        results
+            .pop()
+            .unwrap_or_else(|| Err("OPC UA: 쓰기 결과가 없습니다".into()))
+    }
+
+    /// Writes multiple `(node, value, is_number)` pairs in a single OPC UA
+    /// `WriteRequest` (learning any unknown numeric node types in one prior
+    /// batched `ReadRequest`). Returns per-node status results, or `Err` on
+    /// transport/session failure.
+    pub fn write_batch(
+        &mut self,
+        items: &[(NodeId, i64, bool)],
+    ) -> Result<Vec<Result<(), String>>, String> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Learn types of any numeric nodes not seen before in a single ReadRequest.
+        let unknown: Vec<NodeId> = items
+            .iter()
+            .filter(|(n, _, number)| *number && !self.types.contains_key(n))
+            .map(|(n, _, _)| n.clone())
+            .collect();
+        if !unknown.is_empty() {
+            let _ = self.read(&unknown)?;
+        }
+        let mut out: Vec<Result<(), String>> = (0..items.len()).map(|_| Ok(())).collect();
+        let mut send_indices: Vec<usize> = Vec::with_capacity(items.len());
         let mut body = Out::default();
         body.type_id(id::WRITE_REQUEST);
         let handle = self.next_request();
         let auth = self.auth.clone();
-        body.header(&auth, handle).i32(1);
-        body.node(node)
-            .u32(VALUE)
-            .string(None)
-            .u8(0x01) // a data value with a value only
-            .u8(t);
-        match t {
-            1 => body.u8(u8::from(value != 0)),
-            2 | 3 => body.u8(value as u8),
-            4 | 5 => body.u16(value as u16),
-            6 | 7 => body.u32(value as u32),
-            8 | 9 => body.i64(value),
-            10 => body.u32((value as f32).to_bits()),
-            11 => body.f64(value as f64),
-            _ => return Err(format!("{node}: 숫자로 쓸 수 없는 형식입니다")),
-        };
+        // Reserve count slot after request header; patched once we know how
+        // many items had a valid numeric type.
+        body.header(&auth, handle);
+        let count_at = body.0.len();
+        body.i32(0);
+        for (idx, (node, value, number)) in items.iter().enumerate() {
+            let t = if *number {
+                *self.types.get(node).unwrap_or(&6)
+            } else {
+                1
+            };
+            if !matches!(t, 1..=11) {
+                out[idx] = Err(format!("{node}: 숫자로 쓸 수 없는 형식입니다"));
+                continue;
+            }
+            send_indices.push(idx);
+            body.node(node)
+                .u32(VALUE)
+                .string(None)
+                .u8(0x01) // a data value with a value only
+                .u8(t);
+            match t {
+                1 => body.u8(u8::from(*value != 0)),
+                2 | 3 => body.u8(*value as u8),
+                4 | 5 => body.u16(*value as u16),
+                6 | 7 => body.u32(*value as u32),
+                8 | 9 => body.i64(*value),
+                10 => body.u32((*value as f32).to_bits()),
+                11 => body.f64(*value as f64),
+                _ => unreachable!(),
+            };
+        }
+        if send_indices.is_empty() {
+            return Ok(out);
+        }
+        let count_bytes = (send_indices.len() as i32).to_le_bytes();
+        body.0[count_at..count_at + 4].copy_from_slice(&count_bytes);
         let reply = self.call(&body.0, id::WRITE_RESPONSE)?;
         let mut r = In::new(&reply);
         r.header()?;
-        if r.count()? < 1 {
-            return Err("OPC UA: 쓰기 결과가 없습니다".into());
+        let n = r.count()?;
+        if n < send_indices.len() {
+            return Err("OPC UA: 쓰기 결과의 수가 맞지 않습니다".into());
         }
-        match r.u32()? {
-            code if code & 0x8000_0000 != 0 => Err(format!("{node}: {}", status(code))),
-            _ => Ok(()),
+        for idx in send_indices {
+            let code = r.u32()?;
+            if code & 0x8000_0000 != 0 {
+                out[idx] = Err(format!("{}: {}", items[idx].0, status(code)));
+            }
         }
+        Ok(out)
     }
 
     /// Closes the session, and the channel with it.
@@ -1029,13 +1109,19 @@ impl Session {
     // --- messages ---
 
     fn next_request(&mut self) -> u32 {
-        self.request += 1;
+        self.request = self.request.wrapping_add(1).max(1);
         self.request
     }
 
     /// A service request on the channel; its response's body after the
     /// response type, which must be `want` (or anything, for 0).
     fn call(&mut self, request: &[u8], want: u32) -> Result<Vec<u8>, String> {
+        if self
+            .token_renew_at
+            .is_some_and(|at| std::time::Instant::now() >= at)
+        {
+            self.open_channel(true)?;
+        }
         let message = self.seal_symmetric(b"MSG", request)?;
         self.stream.write_all(&message).map_err(|e| e.to_string())?;
         let reply = self.read_service()?;
@@ -1269,7 +1355,7 @@ impl Session {
     /// A message of type `kind` on the channel, `body` its service: signed,
     /// and encrypted, with KYNEX's keys as the channel keeps it.
     fn seal_symmetric(&mut self, kind: &[u8; 3], body: &[u8]) -> Result<Vec<u8>, String> {
-        self.sequence += 1;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
         let mut plain = Out::default();
         plain.u32(self.sequence).u32(self.request);
         plain.0.extend(body);
@@ -1485,6 +1571,23 @@ mod tests {
             (
                 NodeId::String(2, "Ab".into()),
                 vec![0x03, 2, 0, 2, 0, 0, 0, b'A', b'b'],
+            ),
+            (
+                NodeId::Guid(
+                    1,
+                    [
+                        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+                        0x0d, 0x0e, 0x0f, 0x10,
+                    ],
+                ),
+                vec![
+                    0x04, 1, 0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+                    0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+                ],
+            ),
+            (
+                NodeId::Opaque(3, vec![0xde, 0xad, 0xbe, 0xef]),
+                vec![0x05, 3, 0, 4, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef],
             ),
         ] {
             let mut out = Out::default();

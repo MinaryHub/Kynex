@@ -40,6 +40,7 @@ const ACTIVITIES = {
   pause: [t('시간 대기'), '#8a93a1'],
   alarm: [t('알람'), '#ff5f5f'],
   cut: [t('가공'), '#3fcf8e'],
+  setup: [t('품종 교체'), '#e8833a'],
   door: [t('문 개폐'), '#7d8fa6'],
   blocked: [t('언로드 대기'), '#e0a43a'],
   drive: [t('주행'), '#9b7bff'],

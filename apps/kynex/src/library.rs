@@ -947,6 +947,8 @@ struct Shape {
 
 impl Custom {
     fn to_json(&self) -> Value {
+        use base64::Engine;
+        let b64 = &base64::engine::general_purpose::STANDARD;
         json!({
             "key": self.key,
             "name": self.name,
@@ -954,17 +956,33 @@ impl Custom {
                 "name": n.name,
                 "parent": n.parent,
                 "at": n.at.to_cols_array(),
-                "shape": n.shape.as_ref().map(|s| json!({
-                    "p": s.positions.iter().flatten().collect::<Vec<_>>(),
-                    "t": s.triangles.iter().flatten().collect::<Vec<_>>(),
-                    "c": s.colour,
-                })),
+                "shape": n.shape.as_ref().map(|s| {
+                    let mut p_bytes = Vec::with_capacity(s.positions.len() * 12);
+                    for p in &s.positions {
+                        for f in p {
+                            p_bytes.extend_from_slice(&f.to_le_bytes());
+                        }
+                    }
+                    let mut t_bytes = Vec::with_capacity(s.triangles.len() * 12);
+                    for t in &s.triangles {
+                        for idx in t {
+                            t_bytes.extend_from_slice(&idx.to_le_bytes());
+                        }
+                    }
+                    json!({
+                        "pb": b64.encode(p_bytes),
+                        "tb": b64.encode(t_bytes),
+                        "c": s.colour,
+                    })
+                }),
                 "role": n.role.as_ref().map(|(k, props)| json!({"kind": k.tag(), "props": props})),
             })).collect::<Vec<_>>(),
         })
     }
 
     fn of_json(v: &Value) -> Option<Self> {
+        use base64::Engine;
+        let b64 = &base64::engine::general_purpose::STANDARD;
         let nodes = v["nodes"]
             .as_array()?
             .iter()
@@ -977,24 +995,62 @@ impl Custom {
                 let shape = match &n["shape"] {
                     Value::Null => None,
                     s => {
-                        let floats: Vec<f32> = s["p"]
-                            .as_array()?
-                            .iter()
-                            .filter_map(|x| Some(x.as_f64()? as f32))
-                            .collect();
-                        let ints: Vec<u32> = s["t"]
-                            .as_array()?
-                            .iter()
-                            .filter_map(|x| Some(x.as_u64()? as u32))
-                            .collect();
+                        let positions: Vec<[f32; 3]> = if let Some(pb) = s["pb"].as_str() {
+                            let raw = b64.decode(pb).ok()?;
+                            let (chunks, rem) = raw.as_chunks::<12>();
+                            if !rem.is_empty() {
+                                return None;
+                            }
+                            chunks
+                                .iter()
+                                .map(|c| {
+                                    [
+                                        f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                                        f32::from_le_bytes([c[4], c[5], c[6], c[7]]),
+                                        f32::from_le_bytes([c[8], c[9], c[10], c[11]]),
+                                    ]
+                                })
+                                .collect()
+                        } else {
+                            let floats: Vec<f32> = s["p"]
+                                .as_array()?
+                                .iter()
+                                .filter_map(|x| Some(x.as_f64()? as f32))
+                                .collect();
+                            floats.as_chunks::<3>().0.to_vec()
+                        };
+                        let triangles: Vec<[u32; 3]> = if let Some(tb) = s["tb"].as_str() {
+                            let raw = b64.decode(tb).ok()?;
+                            let (chunks, rem) = raw.as_chunks::<12>();
+                            if !rem.is_empty() {
+                                return None;
+                            }
+                            chunks
+                                .iter()
+                                .map(|c| {
+                                    [
+                                        u32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                                        u32::from_le_bytes([c[4], c[5], c[6], c[7]]),
+                                        u32::from_le_bytes([c[8], c[9], c[10], c[11]]),
+                                    ]
+                                })
+                                .collect()
+                        } else {
+                            let ints: Vec<u32> = s["t"]
+                                .as_array()?
+                                .iter()
+                                .filter_map(|x| Some(x.as_u64()? as u32))
+                                .collect();
+                            ints.as_chunks::<3>().0.to_vec()
+                        };
                         let c: Vec<f32> = s["c"]
                             .as_array()?
                             .iter()
                             .filter_map(|x| Some(x.as_f64()? as f32))
                             .collect();
                         Some(Shape {
-                            positions: floats.as_chunks::<3>().0.to_vec(),
-                            triangles: ints.as_chunks::<3>().0.to_vec(),
+                            positions,
+                            triangles,
                             colour: [*c.first()?, *c.get(1)?, *c.get(2)?],
                         })
                     }
@@ -1456,7 +1512,33 @@ impl Library {
         self.items_changed = true;
     }
 
-    pub fn to_saved(&self) -> Vec<Value> {
+    /// Restores placed items from `saved` while preserving this library's
+    /// custom CAD equipment and imported URDF robot models (unless `saved`
+    /// supplies its own definitions for the same keys). Avoids duplicating
+    /// heavy mesh/zip payloads in every scenario and undo snapshot.
+    pub fn restore_items(&mut self, saved: &[Value]) {
+        let mut combined = self.assets_saved();
+        let has_custom = |key: &str, list: &[Value]| list.iter().any(|v| v["custom"]["key"] == key);
+        let has_model =
+            |key: &str, list: &[Value]| list.iter().any(|v| v["robot_model"]["key"] == key);
+        // If `saved` brings its own asset definitions (legacy scenarios),
+        // let them take precedence.
+        combined.retain(|a| {
+            if let Some(k) = a["custom"]["key"].as_str() {
+                !has_custom(k, saved)
+            } else if let Some(k) = a["robot_model"]["key"].as_str() {
+                !has_model(k, saved)
+            } else {
+                false
+            }
+        });
+        combined.extend(saved.iter().cloned());
+        self.restore(&combined);
+    }
+
+    /// Only the heavy reusable asset definitions (custom CAD meshes and
+    /// imported URDF robots), without item placements.
+    pub fn assets_saved(&self) -> Vec<Value> {
         self.customs
             .iter()
             .map(|c| json!({ "custom": c.to_json() }))
@@ -1465,7 +1547,14 @@ impl Library {
                     .iter()
                     .map(|m| json!({ "robot_model": m.to_json() })),
             )
-            .chain(self.items.iter().map(|i| {
+            .collect()
+    }
+
+    /// Only the placed equipment items (lightweight: no CAD meshes or URDF zips).
+    pub fn items_saved(&self) -> Vec<Value> {
+        self.items
+            .iter()
+            .map(|i| {
                 json!({
                     "id": i.id,
                     "template": i.template,
@@ -1478,8 +1567,14 @@ impl Library {
                     "locked": i.locked,
                     "price": i.price,
                 })
-            }))
+            })
             .collect()
+    }
+
+    pub fn to_saved(&self) -> Vec<Value> {
+        let mut out = self.assets_saved();
+        out.extend(self.items_saved());
+        out
     }
 
     /// What all the equipment placed costs, ten thousand won.

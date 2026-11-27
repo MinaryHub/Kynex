@@ -576,6 +576,7 @@ function setRobots(list) {
     if (rec) setGizmo(rec);
   }
   robotPanel.setRobots(list);
+  syncRightPanel();
 }
 
 // ---- the stream -------------------------------------------------------------
@@ -1443,6 +1444,7 @@ function select(uid, { frame: andFrame = false, keep = [] } = {}) {
   if (selected != null) {
     revealInTree(selected);
     document.querySelector(`.joint[data-uid="${selected}"]`)?.classList.add('selected');
+    if (robotPanel.focusByObject(selected) != null && rightPanelPref !== false) setRightPanel(true);
     showInspector(selected);
     if (andFrame) frame(selected);
   } else {
@@ -2752,20 +2754,65 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
 });
 
-// Narrow screens: the panels are drawers.
+// Narrow screens: the panels are drawers. Desktop: the right panel collapses
+// automatically when there are no robots in the scene and can be toggled on
+// demand from the header or closed from its own header.
+const layoutEl = document.querySelector('.layout');
 const treePanel = document.getElementById('tree-panel');
 const robotDrawer = document.getElementById('robot-panel');
+const toggleRobotsBtn = document.getElementById('toggle-robots');
+const narrowScreen = window.matchMedia('(max-width: 960px), (pointer: coarse) and (max-width: 1400px)');
+// null = automatic (open when robots exist, closed for robot-less flows),
+// true/false = explicitly chosen by the user.
+let rightPanelPref = null;
+
+function setRightPanel(open, user = false) {
+  if (user) rightPanelPref = open;
+  if (narrowScreen.matches) {
+    treePanel.classList.remove('open');
+    robotDrawer.classList.toggle('open', open);
+    toggleRobotsBtn.setAttribute('aria-pressed', String(open));
+  } else {
+    layoutEl.classList.toggle('right-closed', !open);
+    toggleRobotsBtn.setAttribute('aria-pressed', String(open));
+  }
+}
+
+function syncRightPanel() {
+  if (narrowScreen.matches) return;
+  const onChat = robotDrawer.querySelector('[data-tab="chat"]')?.classList.contains('on');
+  const open = rightPanelPref != null ? rightPanelPref : robotPanel.robots.length > 0 || onChat;
+  setRightPanel(open);
+}
+
+syncRightPanel();
+
 document.getElementById('toggle-tree').addEventListener('click', () => {
   robotDrawer.classList.remove('open');
   treePanel.classList.toggle('open');
 });
-document.getElementById('toggle-robots').addEventListener('click', () => {
-  treePanel.classList.remove('open');
-  robotDrawer.classList.toggle('open');
+toggleRobotsBtn.addEventListener('click', () => {
+  if (narrowScreen.matches) {
+    treePanel.classList.remove('open');
+    const open = robotDrawer.classList.toggle('open');
+    toggleRobotsBtn.setAttribute('aria-pressed', String(open));
+  } else {
+    const open = layoutEl.classList.contains('right-closed');
+    setRightPanel(open, true);
+  }
+});
+document.getElementById('close-robots')?.addEventListener('click', () => {
+  if (narrowScreen.matches) {
+    robotDrawer.classList.remove('open');
+    toggleRobotsBtn.setAttribute('aria-pressed', 'false');
+  } else {
+    setRightPanel(false, true);
+  }
 });
 canvas.addEventListener('pointerdown', () => {
   treePanel.classList.remove('open');
   robotDrawer.classList.remove('open');
+  if (narrowScreen.matches) toggleRobotsBtn.setAttribute('aria-pressed', 'false');
 });
 
 // ---- small things -----------------------------------------------------------

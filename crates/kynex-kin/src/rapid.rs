@@ -351,6 +351,9 @@ pub fn rapid(kin: &Kinematics, tool: &Tool, export: &Export) -> Result<String, S
     let mut body = |out: &mut String, indent: &str, k: usize, m: &Move, kind: MoveKind| {
         let e = ext(before(k));
         for op in &m.before {
+            if matches!(op, Op::If(_) | Op::While(_) | Op::Else | Op::End) {
+                velset = None;
+            }
             blocks.op(out, indent, op, export, &e);
         }
         let indent = &blocks.pad(indent);

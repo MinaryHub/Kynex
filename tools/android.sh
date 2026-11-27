@@ -49,7 +49,7 @@ mkdir -p "$LIBS"
 cp target/aarch64-linux-android/release/kynex "$LIBS/libkynex.so"
 
 export ANDROID_HOME="$SDK"
-(cd android && ./gradlew --quiet assembleRelease)
+(cd android && ./gradlew --no-daemon --quiet assembleRelease)
 APK=android/app/build/outputs/apk/release/app-release.apk
 ls -l "$APK"
 if [ "$1" = install ]; then
